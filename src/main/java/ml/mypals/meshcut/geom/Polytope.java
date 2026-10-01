@@ -35,6 +35,20 @@ public final class Polytope {
 
     /** Classifies how {@code cut} divides the block already restricted by {@code existing}. */
     public static Side classify(List<CutPlane> existing, CutPlane cut) {
+        return classify(existing, cut, MIN_VOLUME);
+    }
+
+    /** As {@link #classify(List, CutPlane)}, but a piece smaller than {@code minVolume} counts as nothing. */
+    public static Side classify(List<CutPlane> existing, CutPlane cut, double minVolume) {
+        return classify(existing, cut, minVolume, 0);
+    }
+
+    /**
+     * As {@link #classify(List, CutPlane, double)}, and a side that reaches less than {@code minExtent} away from
+     * the plane (at its furthest point) counts as nothing too. Volume alone lets a thin layer over a whole face pass
+     * as a real cut, though it is only the blade grazing the surface; extent does not.
+     */
+    public static Side classify(List<CutPlane> existing, CutPlane cut, double minVolume, double minExtent) {
         if (existing.isEmpty()) { // untouched cube: its corners decide, exactly
             double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
             for (int i = 0; i < 8; i++) {
@@ -53,11 +67,28 @@ public final class Polytope {
         keep.add(cut);
         List<CutPlane> remove = new ArrayList<>(existing);
         remove.add(cut.flipped());
-        if (volume(keep) < MIN_VOLUME) {
+        if (volume(keep) < minVolume) {
             return Side.ALL_REMOVED;
         }
-        if (volume(remove) < MIN_VOLUME) {
+        if (volume(remove) < minVolume) {
             return Side.ALL_KEPT;
+        }
+        if (minExtent > 0) {
+            double keptReach = 0, removedReach = 0;
+            for (MeshPoly face : MeshClipper.clip(CUBE, existing)) {
+                float[] v = face.verts();
+                for (int o = 0; o < v.length; o += MeshPoly.STRIDE) {
+                    double dist = cut.signedDistance(v[o], v[o + 1], v[o + 2]);
+                    keptReach = Math.max(keptReach, dist);
+                    removedReach = Math.max(removedReach, -dist);
+                }
+            }
+            if (keptReach < minExtent) {
+                return Side.ALL_REMOVED;
+            }
+            if (removedReach < minExtent) {
+                return Side.ALL_KEPT;
+            }
         }
         return Side.SPLIT;
     }

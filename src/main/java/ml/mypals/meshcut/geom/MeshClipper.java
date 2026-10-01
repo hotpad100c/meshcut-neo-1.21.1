@@ -31,6 +31,29 @@ public final class MeshClipper {
         return out;
     }
 
+    /**
+     * What is left of the polygons after removing the convex region (the part satisfying every half-space). Each
+     * polygon is cut by the region's planes in turn: the part outside the plane is kept, the part inside goes on to
+     * the next plane, and what is inside them all is dropped.
+     */
+    public static List<MeshPoly> subtract(List<MeshPoly> polys, List<CutPlane> region) {
+        if (region.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<MeshPoly> out = new ArrayList<>();
+        for (MeshPoly poly : polys) {
+            List<MeshPoly> remaining = List.of(poly);
+            for (CutPlane plane : region) {
+                out.addAll(clip(remaining, List.of(plane.flipped())));
+                remaining = clip(remaining, List.of(plane));
+                if (remaining.isEmpty()) {
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     private static float[] clipOnce(float[] in, CutPlane plane) {
         int n = in.length / S;
         float[] out = new float[(n + 2) * S];

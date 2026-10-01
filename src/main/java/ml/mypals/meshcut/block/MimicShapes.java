@@ -27,13 +27,25 @@ public final class MimicShapes {
     private static final double QUANT = 1000.0;
 
     /** Imitated block plus its cuts, quantised so near-identical cuts share one cache entry. */
-    public record Key(BlockState target, List<CutPlane> planes) {
+    public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         public static Key of(BlockState target, List<CutPlane> planes) {
+            return of(target, planes, List.of());
+        }
+
+        public static Key of(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+            List<List<CutPlane>> regions = new ArrayList<>(excluded.size());
+            for (List<CutPlane> region : excluded) {
+                regions.add(quantised(region));
+            }
+            return new Key(target, quantised(planes), regions);
+        }
+
+        private static List<CutPlane> quantised(List<CutPlane> planes) {
             List<CutPlane> q = new ArrayList<>(planes.size());
             for (CutPlane p : planes) {
                 q.add(new CutPlane(round(p.nx()), round(p.ny()), round(p.nz()), round(p.d())));
             }
-            return new Key(target, q);
+            return q;
         }
 
         private static double round(double v) {
@@ -50,7 +62,7 @@ public final class MimicShapes {
             if (BOXES.size() >= MAX_CACHED) {
                 BOXES.clear();
             }
-            boxes = VoxelBoxes.cut(targetBoxes(key.target()), key.planes());
+            boxes = VoxelBoxes.cut(targetBoxes(key.target()), key.planes(), key.excluded());
             BOXES.put(key, boxes);
         }
         return boxes;

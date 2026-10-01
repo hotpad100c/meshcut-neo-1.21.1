@@ -16,7 +16,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.joml.Matrix4f;
 
-/** Draws the blade of every active lightsaber held in a main hand: a bright core inside two softer glows. */
+/** Draws the active blade at the same world-space positions used by the cutting logic. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberRenderer {
     private static final float[] CORE = {1f, 1f, 1f, 1f};
@@ -35,16 +35,17 @@ public final class LightsaberRenderer {
         float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         Vec3 camera = event.getCamera().getPosition();
         PoseStack poseStack = event.getPoseStack();
+        Matrix4f matrix = poseStack.last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
-        VertexConsumer consumer = buffers.getBuffer(RenderType.lightning());
+        // Draw into the main target, using terrain depth rather than the lightning weather target.
+        RenderType beamType = RenderType.debugStructureQuads();
+        VertexConsumer consumer = buffers.getBuffer(beamType);
         boolean drew = false;
         for (Player player : minecraft.level.players()) {
-            var stack = player.getMainHandItem();
-            if (!(stack.getItem() instanceof LightsaberItem) || !LightsaberItem.isActive(stack)) {
+            if (!LightsaberItem.isActive(player)) {
                 continue;
             }
             Blade blade = Blade.of(player, partialTick);
-            Matrix4f matrix = poseStack.last().pose();
             Vec3 base = blade.base().subtract(camera);
             Vec3 tip = blade.tip().subtract(camera);
             prism(consumer, matrix, base, tip, 0.16, HALO);
@@ -53,7 +54,7 @@ public final class LightsaberRenderer {
             drew = true;
         }
         if (drew) {
-            buffers.endBatch(RenderType.lightning());
+            buffers.endBatch(beamType);
         }
     }
 

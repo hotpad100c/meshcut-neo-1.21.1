@@ -8,10 +8,13 @@ import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
+import ml.mypals.meshcut.cut.SlashService;
+import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
@@ -36,6 +39,12 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
      */
     public static final BooleanProperty REFRESH = BooleanProperty.create("refresh");
 
+    /**
+     * Flags for replacing a block: tell clients, but don't let neighbours react. A door whose upper half is replaced
+     * would otherwise see that the other half is gone and break itself before it could be cut as well.
+     */
+    private static final int QUIET = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
+
     public MimicBlock(Properties properties) {
         super(properties);
         registerDefaultState(stateDefinition.any().setValue(REFRESH, false));
@@ -49,24 +58,24 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     /** Places a mimic of {@code target} cut by {@code planes} (block-local half-spaces). */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes, CapMode mode,
                              @Nullable CompoundTag beTag) {
-        place(level, pos, target, planes, List.of(), mode, beTag);
+        place(level, pos, target, planes, List.of(), List.of(), mode, beTag);
     }
 
     /**
-     * @param pending cuts that went through the block without severing anything; see
-     *                {@link MimicBlockEntity#getPending()}
+     * @param excluded convex parts of the block that were cut out and went elsewhere
+     * @param patches  cuts that took nothing out of the block; see {@link MimicBlockEntity#getPatches()}
      */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
-                             List<CutPlane> pending, CapMode mode, @Nullable CompoundTag beTag) {
+                             List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag) {
         // A block Sable saw being placed had no block entity yet, so it weighed what a default mimic weighs.
         boolean fresh = !(level.getBlockState(pos).getBlock() instanceof MimicBlock);
         if (fresh) {
-            level.setBlock(pos, MeshCut.MIMIC_BLOCK.get().defaultBlockState(), 3);
+            level.setBlock(pos, MeshCut.MIMIC_BLOCK.get().defaultBlockState(), QUIET);
         }
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             boolean slot = level.getBlockState(pos).getValue(REFRESH);
             be.beginMassTransition(fresh, slot);
-            be.configure(target, planes, pending, mode, beTag);
+            be.configure(target, planes, excluded, patches, mode, beTag);
             refreshPhysics(level, pos); // flips REFRESH: Sable re-reads collider and mass, old slot -> new slot
             be.endMassTransition();
         }
@@ -100,7 +109,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     public static void refreshPhysics(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.getBlock() instanceof MimicBlock) {
-            level.setBlock(pos, state.setValue(REFRESH, !state.getValue(REFRESH)), 3);
+            level.setBlock(pos, state.setValue(REFRESH, !state.getValue(REFRESH)), QUIET);
         }
     }
 
@@ -117,6 +126,20 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     @Override
     protected MapCodec<? extends BaseEntityBlock> codec() {
         return CODEC;
+    }
+
+    /**
+     * A block that has been cut but stayed whole is only held by its surroundings. When one of them changes, check
+     * whether it still holds.
+     */
+    @Override
+    protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos,
+                                   boolean movedByPiston) {
+        super.neighborChanged(state, level, pos, neighborBlock, neighborPos, movedByPiston);
+        if (level instanceof ServerLevel server && server.getBlockEntity(pos) instanceof MimicBlockEntity be
+                && !be.getPatches().isEmpty()) {
+            SlashService.queueRecheck(server, pos);
+        }
     }
 
     @Override

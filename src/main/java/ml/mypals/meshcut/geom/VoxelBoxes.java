@@ -15,20 +15,78 @@ public final class VoxelBoxes {
     private static final double TIE = 1e-9;
 
     public static List<double[]> cut(List<double[]> shape, List<CutPlane> planes) {
-        if (planes.isEmpty()) {
+        return cut(shape, planes, List.of());
+    }
+
+    /**
+     * @param excluded convex regions (each a list of half-spaces) that were cut out of the block: whatever lies
+     *                 strictly inside one of them is gone
+     */
+    public static List<double[]> cut(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+        if (planes.isEmpty() && excluded.isEmpty()) {
             return shape;
         }
         final int n = RES;
         boolean[] filled = new boolean[n * n * n];
+        boolean any = false;
         for (int x = 0; x < n; x++) {
             for (int y = 0; y < n; y++) {
                 for (int z = 0; z < n; z++) {
                     double cx = (x + 0.5) / n, cy = (y + 0.5) / n, cz = (z + 0.5) / n;
-                    filled[index(x, y, z)] = insideAny(shape, cx, cy, cz) && insideAll(planes, cx, cy, cz);
+                    boolean in = insideAny(shape, cx, cy, cz) && insideAll(planes, cx, cy, cz)
+                            && !insideAnyRegion(excluded, cx, cy, cz);
+                    filled[index(x, y, z)] = in;
+                    any |= in;
+                }
+            }
+        }
+        if (!any) {
+            // A piece thinner than one cell has no cell centre inside it. It still needs a collider, or it would
+            // fall through the floor: take every cell that has any corner inside instead.
+            for (int x = 0; x < n; x++) {
+                for (int y = 0; y < n; y++) {
+                    for (int z = 0; z < n; z++) {
+                        filled[index(x, y, z)] = anyCornerInside(shape, planes, x, y, z, n) && !insideAnyRegion(excluded,
+                                (x + 0.5) / n, (y + 0.5) / n, (z + 0.5) / n);
+                    }
                 }
             }
         }
         return merge(filled, n);
+    }
+
+    /** Strictly inside: a cell on the boundary of a cut-out region still belongs to what is left around it. */
+    private static boolean insideAnyRegion(List<List<CutPlane>> regions, double x, double y, double z) {
+        for (List<CutPlane> region : regions) {
+            boolean inside = true;
+            for (CutPlane p : region) {
+                if (p.signedDistance(x, y, z) <= TIE) {
+                    inside = false;
+                    break;
+                }
+            }
+            if (inside) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean anyCornerInside(List<double[]> shape, List<CutPlane> planes, int x, int y, int z, int n) {
+        for (int i = 0; i < 8; i++) {
+            double px = (x + (i & 1)) / (double) n, py = (y + (i >> 1 & 1)) / (double) n, pz = (z + (i >> 2 & 1)) / (double) n;
+            boolean inside = true;
+            for (CutPlane p : planes) {
+                if (p.signedDistance(px, py, pz) < 0) {
+                    inside = false;
+                    break;
+                }
+            }
+            if (inside && insideAny(shape, px, py, pz)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean insideAny(List<double[]> boxes, double x, double y, double z) {

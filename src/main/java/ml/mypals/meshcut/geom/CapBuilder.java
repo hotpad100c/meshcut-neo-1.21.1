@@ -50,6 +50,18 @@ public final class CapBuilder {
         return caps;
     }
 
+    /**
+     * The face the plane leaves on the model, clipped to the region {@code others} (given as half-spaces to stay
+     * inside). Unlike {@link #build} this is for one plane at a time, and the plane need not be one of a block's cuts:
+     * it is used for the boundary of a part that was cut out, seen from the side of what is left around it.
+     */
+    public static List<MeshPoly> face(List<MeshPoly> original, CutPlane plane, List<CutPlane> others, float[] uv, Object sprite) {
+        if (!removesSomething(original, plane)) {
+            return List.of();
+        }
+        return MeshClipper.clip(capFor(original, plane, uv, sprite), others);
+    }
+
     private static boolean removesSomething(List<MeshPoly> original, CutPlane plane) {
         for (MeshPoly poly : original) {
             float[] v = poly.verts();

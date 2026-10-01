@@ -151,8 +151,12 @@ public final class ModelCapturer {
                 return;
             }
             var level = Minecraft.getInstance().level;
-            if (beTag != null && level != null) {
-                be.loadWithComponents(beTag, level.registryAccess());
+            if (level != null) {
+                // many renderers read the level (game time for the beacon's beam, neighbours for chests, ...)
+                be.setLevel(level);
+                if (beTag != null) {
+                    be.loadWithComponents(beTag, level.registryAccess());
+                }
             }
             BlockEntityRenderer<BlockEntity> renderer = Minecraft.getInstance().getBlockEntityRenderDispatcher().getRenderer(be);
             if (renderer == null) {

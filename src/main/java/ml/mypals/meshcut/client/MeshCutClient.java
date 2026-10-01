@@ -5,12 +5,14 @@ import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.client.render.MimicBakedModel;
 import ml.mypals.meshcut.client.render.MimicMesh;
 import ml.mypals.meshcut.client.render.MimicTint;
+import ml.mypals.meshcut.item.LightsaberItem;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.event.ModelEvent;
+import net.neoforged.neoforge.client.event.MovementInputUpdateEvent;
 import net.neoforged.neoforge.client.event.RegisterColorHandlersEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 
@@ -42,6 +44,18 @@ public final class MeshCutClient {
             ModelCapturer.clearCache();
             MimicMesh.clearCache();
         });
+    }
+
+    /**
+     * Holding the saber lit counts as using an item, which vanilla slows the player to a fifth for. Swinging a blade
+     * should not feel like drawing a bow, so the slowdown (applied right after this event) is cancelled out.
+     */
+    @SubscribeEvent
+    public static void keepSpeedWhileLit(MovementInputUpdateEvent event) {
+        if (LightsaberItem.isActive(event.getEntity()) && !event.getEntity().isPassenger()) {
+            event.getInput().leftImpulse *= 5f;
+            event.getInput().forwardImpulse *= 5f;
+        }
     }
 
     private MeshCutClient() {}

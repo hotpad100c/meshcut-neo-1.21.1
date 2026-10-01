@@ -6,6 +6,8 @@ import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
 import ml.mypals.meshcut.geom.Polytope;
 import ml.mypals.meshcut.geom.CapBuilder;
+import ml.mypals.meshcut.geom.Grooves;
+import ml.mypals.meshcut.geom.Patch;
 import ml.mypals.meshcut.geom.MeshClipper;
 import ml.mypals.meshcut.geom.MeshPoly;
 import net.minecraft.client.Minecraft;
@@ -36,14 +38,17 @@ public final class MimicMesh {
     /** Lifts the lava layer off the base cap to avoid z-fighting. */
     private static final float GLOW_LIFT = 0.002f;
     private static final int GLOW_ARGB = 0x99FFFFFF;
+    /** The charred colour of a scratch's mark on the block face. */
+    private static final int SCRATCH_ARGB = 0xFF2A1A12;
     private static final int MAX_CACHED = 4096;
     /** Width, in blocks, of the slit that marks a cut that has not separated anything yet. */
     private static final double SLIT_WIDTH = 0.08;
-    /** At most this many pending cuts are drawn (each doubles the number of regions). */
-    private static final int MAX_SLITS = 3;
+    /** At most this many pending cuts are drawn (a block cannot hold more). */
+    private static final int MAX_SLITS = 6;
     private static final double MIN_REGION_VOLUME = 0.002;
 
     private static final Map<MimicRenderData, MimicMesh> CACHE = new ConcurrentHashMap<>();
+    private static final Map<MimicRenderData, List<MeshPoly>> GLOW = new ConcurrentHashMap<>();
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -84,6 +89,7 @@ public final class MimicMesh {
 
     public static void clearCache() {
         CACHE.clear();
+        GLOW.clear();
     }
 
     /**
@@ -115,22 +121,14 @@ public final class MimicMesh {
         ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
 
         Map<RenderType, List<MeshPoly>> clipped = new LinkedHashMap<>();
-        List<CutPlane> pending = data.pending().size() > MAX_SLITS ? data.pending().subList(0, MAX_SLITS) : data.pending();
-        if (pending.isEmpty()) {
-            addPiece(clipped, model, data.planes(), data.capMode());
-        } else {
-            // The pending cuts divide the block into regions, one per combination of sides. Each is drawn on its own,
-            // pulled back from every pending cut by half a slit, so a glowing gap shows where the block was cut.
-            for (int mask = 0; mask < 1 << pending.size(); mask++) {
-                List<CutPlane> region = new ArrayList<>(data.planes());
-                for (int i = 0; i < pending.size(); i++) {
-                    CutPlane side = (mask >> i & 1) == 1 ? pending.get(i).flipped() : pending.get(i);
-                    region.add(new CutPlane(side.nx(), side.ny(), side.nz(), side.d() - SLIT_WIDTH / 2));
-                }
-                if (Polytope.volume(region) >= MIN_REGION_VOLUME) {
-                    addPiece(clipped, model, region, data.capMode());
-                }
-            }
+        for (List<CutPlane> region : regionPlanes(data)) {
+            addPiece(clipped, model, region, data.excluded());
+        }
+        // scratches that stop midway show where they reach the outside of the block
+        float[] uv = model.particleUv();
+        for (Patch patch : data.patches()) {
+            clipped.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>())
+                    .addAll(Grooves.of(patch, uv, model.particle(), SCRATCH_ARGB, 0));
         }
 
         Map<RenderType, List<BakedQuad>[]> byLayer = new LinkedHashMap<>();
@@ -152,24 +150,116 @@ public final class MimicMesh {
         return new MimicMesh(byLayer, model.particle());
     }
 
-    /** The model clipped by {@code planes}, with the cut faces added (and, for lava caps, the glowing layer). */
-    private static void addPiece(Map<RenderType, List<MeshPoly>> into, ModelCapturer.ModelMesh model,
-                                 List<CutPlane> planes, CapMode mode) {
-        model.byChunkType().forEach((type, polys) ->
-                into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(MeshClipper.clip(polys, planes)));
-        if (planes.isEmpty()) {
-            return;
-        }
-        into.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>())
-                .addAll(CapBuilder.build(model.opaque(), planes, model.particleUv(), model.particle()));
-        if (mode == CapMode.LAVA) {
-            TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
-            float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
-            List<MeshPoly> glow = into.computeIfAbsent(RenderType.translucent(), k -> new ArrayList<>());
-            for (MeshPoly cap : CapBuilder.build(model.opaque(), planes, uv, lava)) {
-                glow.add(glowOf(cap));
+    /**
+     * The pieces a block is drawn as: just its real cuts, or, if it has pending cuts, one piece per region those
+     * divide it into. Each region is pulled back from every pending cut by half a slit, so a gap shows where the
+     * block was cut.
+     */
+    private static List<List<CutPlane>> regionPlanes(MimicRenderData data) {
+        List<CutPlane> pending = new ArrayList<>();
+        for (Patch patch : data.patches()) {
+            if (patch.through() && pending.size() < MAX_SLITS) {
+                pending.add(patch.plane());
             }
         }
+        if (pending.isEmpty()) {
+            return List.of(data.planes());
+        }
+        // one cut at a time, dropping empty combinations of sides as they appear
+        List<List<CutPlane>> regions = new ArrayList<>();
+        regions.add(new ArrayList<>(data.planes()));
+        for (CutPlane cut : pending) {
+            List<List<CutPlane>> next = new ArrayList<>();
+            for (List<CutPlane> region : regions) {
+                for (int side = 0; side < 2; side++) {
+                    CutPlane half = side == 1 ? cut.flipped() : cut;
+                    List<CutPlane> split = new ArrayList<>(region);
+                    split.add(new CutPlane(half.nx(), half.ny(), half.nz(), half.d() - SLIT_WIDTH / 2));
+                    if (Polytope.volume(split) >= MIN_REGION_VOLUME) {
+                        next.add(split);
+                    }
+                }
+            }
+            regions = next;
+        }
+        return regions;
+    }
+
+    /** The model clipped by {@code planes}, with the plain cut faces added. */
+    private static void addPiece(Map<RenderType, List<MeshPoly>> into, ModelCapturer.ModelMesh model, List<CutPlane> planes,
+                                 List<List<CutPlane>> excluded) {
+        model.byChunkType().forEach((type, polys) -> {
+            List<MeshPoly> clipped = MeshClipper.clip(polys, planes);
+            for (List<CutPlane> region : excluded) {
+                clipped = MeshClipper.subtract(clipped, region);
+            }
+            into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
+        });
+        List<MeshPoly> caps = capsOf(model.opaque(), planes, excluded, model.particleUv(), model.particle());
+        if (!caps.isEmpty()) {
+            into.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>()).addAll(caps);
+        }
+    }
+
+    /**
+     * The cut faces of a piece: those its own cuts leave (minus whatever was cut out of them) and, for each part cut
+     * out of it, the faces around the hole, turned to face into it.
+     */
+    private static List<MeshPoly> capsOf(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
+                                         float[] uv, Object sprite) {
+        List<MeshPoly> caps = new ArrayList<>();
+        if (!planes.isEmpty()) {
+            caps.addAll(CapBuilder.build(opaque, planes, uv, sprite));
+            for (List<CutPlane> region : excluded) {
+                caps = MeshClipper.subtract(caps, region);
+            }
+        }
+        for (List<CutPlane> region : excluded) {
+            for (int j = 0; j < region.size(); j++) {
+                List<CutPlane> others = new ArrayList<>(planes);
+                for (int k = 0; k < region.size(); k++) {
+                    if (k != j) {
+                        others.add(region.get(k));
+                    }
+                }
+                caps.addAll(CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite));
+            }
+        }
+        return caps;
+    }
+
+    /**
+     * The glowing lava layer over the cut faces, as polygons in block-local coordinates. It is not part of the chunk
+     * mesh: {@code MimicRenderer} draws it for a while after the cut and lets it fade. Render thread only.
+     */
+    public static List<MeshPoly> glowPolys(MimicRenderData data) {
+        List<MeshPoly> cached = GLOW.get(data);
+        if (cached != null) {
+            return cached;
+        }
+        List<MeshPoly> out = new ArrayList<>();
+        if (data.capMode() == CapMode.LAVA) {
+            List<MeshPoly> opaque = ModelCapturer.hasBlockEntityRenderer(data.target())
+                    ? ModelCapturer.capture(data.target(), data.beTag()).opaque()
+                    : ModelCapturer.captureModel(data.target()).opaque();
+            TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
+            float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
+            for (List<CutPlane> region : regionPlanes(data)) {
+                if (!region.isEmpty() || !data.excluded().isEmpty()) {
+                    for (MeshPoly cap : capsOf(opaque, region, data.excluded(), uv, lava)) {
+                        out.add(glowOf(cap));
+                    }
+                }
+            }
+            for (Patch patch : data.patches()) {
+                out.addAll(Grooves.of(patch, uv, lava, GLOW_ARGB, 15));
+            }
+        }
+        if (GLOW.size() >= MAX_CACHED) {
+            GLOW.clear();
+        }
+        GLOW.put(data, out);
+        return out;
     }
 
     /** The lava layer: same face, nudged outwards, full-bright and semi-transparent. */

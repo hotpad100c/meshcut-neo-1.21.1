@@ -3,11 +3,13 @@ package ml.mypals.meshcut.block;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
+import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.DoubleTag;
+import net.minecraft.nbt.FloatTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
@@ -15,6 +17,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -27,17 +30,24 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Holds the block this mimic imitates and the half-spaces it has been cut by. */
+/** Holds the block this mimic imitates and the cuts that have been made in it. */
 public class MimicBlockEntity extends BlockEntity {
+    public static final long NEVER = Long.MIN_VALUE;
+
     private BlockState targetState = Blocks.STONE.defaultBlockState();
     /** Cuts that have really separated this piece from the rest of its block: they shape its collision and mass. */
     private final List<CutPlane> planes = new ArrayList<>();
+    /** Convex parts of the block that were cut out and went elsewhere; this piece is what is left around them. */
+    private final List<List<CutPlane>> excluded = new ArrayList<>();
     /**
-     * Cuts that went through this block without severing the structure it belongs to. The block is still whole, but
-     * remembers the cut (drawn as a glowing slit); a later cut that does sever the structure splits it along them.
+     * Cuts that have been made in this block without taking anything out of it. Where one goes right through, the
+     * block is still whole but shows a glowing slit; one that stops midway is a scratch. A later cut that finishes
+     * the job (a loop closing, a structure being severed) separates the block along them.
      */
-    private final List<CutPlane> pending = new ArrayList<>();
+    private final List<Patch> patches = new ArrayList<>();
     private CapMode capMode = CapMode.LAVA;
+    /** Game time at which the block was last cut; the glow on its cut faces fades from then on. */
+    private long glowStart = NEVER;
     /** Saved data of the original block entity (sign text, banner patterns, ...), used to look like it. */
     @Nullable
     private CompoundTag targetBeTag;
@@ -76,8 +86,17 @@ public class MimicBlockEntity extends BlockEntity {
         return Collections.unmodifiableList(planes);
     }
 
-    public List<CutPlane> getPending() {
-        return Collections.unmodifiableList(pending);
+    public List<List<CutPlane>> getExcluded() {
+        return Collections.unmodifiableList(excluded);
+    }
+
+    public List<Patch> getPatches() {
+        return Collections.unmodifiableList(patches);
+    }
+
+    /** Game time of the last cut, or {@link #NEVER}. */
+    public long getGlowStart() {
+        return glowStart;
     }
 
     public int getVersion() {
@@ -121,7 +140,7 @@ public class MimicBlockEntity extends BlockEntity {
             return transitionMass;
         }
         if (currentMass == null || massVersion != version) {
-            var key = MimicShapes.Key.of(targetState, planes);
+            var key = MimicShapes.Key.of(targetState, planes, excluded);
             currentMass = new MassSnapshot(targetState, MimicShapes.volumeFraction(key), MimicShapes.centerOfMass(key));
             massVersion = version;
         }
@@ -148,7 +167,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     private void refreshShape() {
         if (shapeVersion != version || shape == null) {
-            var key = MimicShapes.Key.of(targetState, planes);
+            var key = MimicShapes.Key.of(targetState, planes, excluded);
             shape = MimicShapes.shape(MimicShapes.boxes(key));
             volumeFraction = MimicShapes.volumeFraction(key);
             shapeVersion = version;
@@ -156,17 +175,23 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     /** Replaces the whole configuration with a single sync to clients. */
-    public void configure(BlockState target, List<CutPlane> newPlanes, List<CutPlane> newPending, CapMode mode,
-                          @Nullable CompoundTag beTag) {
+    public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
+                          List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag) {
         this.targetState = target;
         this.targetBeTag = beTag;
-        List<CutPlane> planesCopy = List.copyOf(newPlanes); // the arguments may be views of our own lists
-        List<CutPlane> pendingCopy = List.copyOf(newPending);
+        // the arguments may be views of our own lists
+        List<CutPlane> planesCopy = List.copyOf(newPlanes);
+        List<List<CutPlane>> excludedCopy = new ArrayList<>();
+        newExcluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
+        List<Patch> patchesCopy = List.copyOf(newPatches);
         this.planes.clear();
         this.planes.addAll(planesCopy);
-        this.pending.clear();
-        this.pending.addAll(pendingCopy);
+        this.excluded.clear();
+        this.excluded.addAll(excludedCopy);
+        this.patches.clear();
+        this.patches.addAll(patchesCopy);
         this.capMode = mode;
+        this.glowStart = level == null ? NEVER : level.getGameTime();
         changed();
     }
 
@@ -184,7 +209,10 @@ public class MimicBlockEntity extends BlockEntity {
     public MimicRenderData renderData() {
         MimicRenderData data = renderData;
         if (data == null) {
-            data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(pending), capMode);
+            List<List<CutPlane>> excludedCopy = new ArrayList<>();
+            excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
+            data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
+                    List.copyOf(patches), capMode);
             renderData = data;
         }
         return data;
@@ -225,8 +253,24 @@ public class MimicBlockEntity extends BlockEntity {
         super.saveAdditional(tag, registries);
         tag.put("target", NbtUtils.writeBlockState(targetState));
         tag.put("planes", writePlanes(planes));
-        tag.put("pending", writePlanes(pending));
+        ListTag excludedTag = new ListTag();
+        excluded.forEach(region -> excludedTag.add(writePlanes(region)));
+        tag.put("excluded", excludedTag);
+        ListTag patchesTag = new ListTag();
+        for (Patch patch : patches) {
+            CompoundTag p = new CompoundTag();
+            p.put("plane", writePlanes(List.of(patch.plane())));
+            ListTag poly = new ListTag();
+            for (float v : patch.polygon()) {
+                poly.add(FloatTag.valueOf(v));
+            }
+            p.put("poly", poly);
+            p.putBoolean("through", patch.through());
+            patchesTag.add(p);
+        }
+        tag.put("patches", patchesTag);
         tag.putByte("cap", (byte) capMode.ordinal());
+        tag.putLong("glowStart", glowStart);
         if (targetBeTag != null) {
             tag.put("targetBe", targetBeTag);
         }
@@ -239,11 +283,52 @@ public class MimicBlockEntity extends BlockEntity {
             targetState = NbtUtils.readBlockState(registries.lookupOrThrow(Registries.BLOCK), tag.getCompound("target"));
         }
         readPlanes(tag.getList("planes", Tag.TAG_DOUBLE), planes);
-        readPlanes(tag.getList("pending", Tag.TAG_DOUBLE), pending);
+        excluded.clear();
+        for (Tag region : tag.getList("excluded", Tag.TAG_LIST)) {
+            List<CutPlane> regionPlanes = new ArrayList<>();
+            readPlanes((ListTag) region, regionPlanes);
+            excluded.add(regionPlanes);
+        }
+        patches.clear();
+        for (Tag t : tag.getList("patches", Tag.TAG_COMPOUND)) {
+            CompoundTag p = (CompoundTag) t;
+            List<CutPlane> plane = new ArrayList<>();
+            readPlanes(p.getList("plane", Tag.TAG_DOUBLE), plane);
+            ListTag poly = p.getList("poly", Tag.TAG_FLOAT);
+            float[] polygon = new float[poly.size()];
+            for (int i = 0; i < polygon.length; i++) {
+                polygon[i] = poly.getFloat(i);
+            }
+            if (plane.size() == 1) {
+                patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
+            }
+        }
+        if (tag.contains("pending")) { // saves from before cuts could stop midway: each was a cut right through
+            List<CutPlane> old = new ArrayList<>();
+            readPlanes(tag.getList("pending", Tag.TAG_DOUBLE), old);
+            old.forEach(plane -> patches.add(Patch.full(plane)));
+        }
         targetBeTag = tag.contains("targetBe") ? tag.getCompound("targetBe") : null;
+        glowStart = tag.contains("glowStart") ? tag.getLong("glowStart") : NEVER;
         capMode = CapMode.byOrdinal(tag.contains("cap") ? tag.getByte("cap") : CapMode.LAVA.ordinal());
         renderData = null;
         version++;
+        // When a chunk arrives, the block entity is created first and filled from the chunk data afterwards, and no
+        // hook tells the model data manager about it. Without this the block's model data stays empty and it is
+        // not drawn until something else (a block update) requests a refresh.
+        if (level != null && level.isClientSide) {
+            requestModelDataUpdate();
+            // and if the section was already meshed without the data, mesh it again
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 0);
+        }
+    }
+
+    @Override
+    public void setLevel(Level level) {
+        super.setLevel(level);
+        if (level.isClientSide) {
+            requestModelDataUpdate();
+        }
     }
 
     private static ListTag writePlanes(List<CutPlane> planes) {

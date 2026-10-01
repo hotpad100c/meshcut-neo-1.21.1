@@ -10,7 +10,6 @@ import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.geom.CapBuilder;
 import ml.mypals.meshcut.geom.MeshClipper;
 import ml.mypals.meshcut.geom.MeshPoly;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
@@ -18,9 +17,6 @@ import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.texture.OverlayTexture;
-import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
@@ -30,12 +26,18 @@ import java.util.Map;
 import java.util.WeakHashMap;
 
 /**
- * Draws cut blocks whose imitated block is itself drawn by a block entity renderer (chests, beds, signs, ...):
- * their geometry uses entity textures that can't go into the chunk mesh. Every other mimic is part of the chunk
- * mesh via {@code MimicBakedModel} and this renderer does nothing for it.
+ * Two jobs, both for cut blocks only:
+ * <ul>
+ *   <li>Draws blocks whose imitated block is itself drawn by a block entity renderer (chests, beds, signs, ...):
+ *       their geometry uses entity textures that can't go into the chunk mesh. Every other mimic is part of the
+ *       chunk mesh via {@code MimicBakedModel}.</li>
+ *   <li>Draws the glowing lava over the cut faces of every mimic. That layer is temporary: it fades out over
+ *       {@link #GLOW_TICKS} ticks after the cut, after which this renderer draws nothing for the block.</li>
+ * </ul>
  */
 public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
-    private static final ResourceLocation LAVA = ResourceLocation.withDefaultNamespace("block/lava_still");
+    /** How long the glow on a fresh cut lasts. */
+    private static final double GLOW_TICKS = 160;
 
     private record CacheEntry(int version, Map<RenderType, List<MeshPoly>> byType) {}
 
@@ -47,43 +49,56 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     @Override
     public void render(MimicBlockEntity be, float partialTick, PoseStack poseStack, MultiBufferSource buffer,
                        int packedLight, int packedOverlay) {
-        CacheEntry entry = cache.get(be);
-        if (entry == null || entry.version() != be.getVersion()) {
-            entry = build(be);
-            cache.put(be, entry);
-        }
         BlockState state = be.getTargetState();
         PoseStack.Pose pose = poseStack.last();
-        for (var layer : entry.byType().entrySet()) {
-            VertexConsumer consumer = buffer.getBuffer(layer.getKey());
-            for (MeshPoly poly : layer.getValue()) {
-                emit(consumer, pose, poly, tint(be, state, poly.tintIndex()), packedLight);
+
+        if (ModelCapturer.hasBlockEntityRenderer(state)) {
+            CacheEntry entry = cache.get(be);
+            if (entry == null || entry.version() != be.getVersion()) {
+                entry = build(be);
+                cache.put(be, entry);
+            }
+            for (var layer : entry.byType().entrySet()) {
+                VertexConsumer consumer = buffer.getBuffer(layer.getKey());
+                for (MeshPoly poly : layer.getValue()) {
+                    emit(consumer, pose, poly, tint(be, state, poly.tintIndex()), packedLight, 1f);
+                }
+            }
+        }
+
+        float fade = glowFade(be, partialTick);
+        if (fade > 0f) {
+            VertexConsumer consumer = buffer.getBuffer(Sheets.translucentCullBlockSheet());
+            for (MeshPoly poly : MimicMesh.glowPolys(be.renderData())) {
+                emit(consumer, pose, poly, 0xFFFFFF, packedLight, fade);
             }
         }
     }
 
-    private static CacheEntry build(MimicBlockEntity be) {
-        if (!ModelCapturer.hasBlockEntityRenderer(be.getTargetState())) {
-            return new CacheEntry(be.getVersion(), Map.of());
+    /** 1 right after the cut, easing down to 0 over {@link #GLOW_TICKS}; 0 once it is over or if there is no glow. */
+    private static float glowFade(MimicBlockEntity be, float partialTick) {
+        if (be.getCapMode() != CapMode.LAVA || be.getGlowStart() == MimicBlockEntity.NEVER || be.getLevel() == null) {
+            return 0f;
         }
+        double age = be.getLevel().getGameTime() + partialTick - be.getGlowStart();
+        if (age < 0) {
+            return 1f; // a clock that ran backwards just means "fresh"
+        }
+        if (age >= GLOW_TICKS) {
+            return 0f;
+        }
+        double remaining = 1 - age / GLOW_TICKS;
+        return (float) (remaining * remaining);
+    }
+
+    private static CacheEntry build(MimicBlockEntity be) {
         var captured = ModelCapturer.capture(be.getTargetState(), be.getTargetBeTag());
         var planes = be.getPlanes();
         Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
         captured.byType().forEach((type, polys) -> out.put(type, new ArrayList<>(MeshClipper.clip(polys, planes))));
-
         if (!planes.isEmpty()) {
-            List<MeshPoly> caps = CapBuilder.build(captured.opaque(), planes, captured.capUv());
-            out.computeIfAbsent(Sheets.cutoutBlockSheet(), k -> new ArrayList<>()).addAll(caps);
-
-            if (be.getCapMode() == CapMode.LAVA) {
-                TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
-                float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
-                List<MeshPoly> glow = new ArrayList<>();
-                for (MeshPoly cap : CapBuilder.build(captured.opaque(), planes, uv)) {
-                    glow.add(MimicMesh.glowOf(cap));
-                }
-                out.computeIfAbsent(Sheets.translucentCullBlockSheet(), k -> new ArrayList<>()).addAll(glow);
-            }
+            out.computeIfAbsent(Sheets.cutoutBlockSheet(), k -> new ArrayList<>())
+                    .addAll(CapBuilder.build(captured.opaque(), planes, captured.capUv()));
         }
         return new CacheEntry(be.getVersion(), out);
     }
@@ -94,12 +109,12 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     }
 
     /** Fan-triangulates the convex polygon; triangles are emitted as degenerate quads. */
-    private static void emit(VertexConsumer c, PoseStack.Pose pose, MeshPoly poly, int rgb, int light) {
+    private static void emit(VertexConsumer c, PoseStack.Pose pose, MeshPoly poly, int rgb, int light, float alphaScale) {
         int argb = poly.argb();
         float r = (rgb >> 16 & 255) / 255f * (argb >> 16 & 255) / 255f;
         float g = (rgb >> 8 & 255) / 255f * (argb >> 8 & 255) / 255f;
         float b = (rgb & 255) / 255f * (argb & 255) / 255f;
-        float a = (argb >>> 24) / 255f;
+        float a = (argb >>> 24) / 255f * alphaScale;
         if (poly.lightEmission() > 0) {
             light = LightTexture.pack(Math.max(LightTexture.block(light), poly.lightEmission()),
                     Math.max(LightTexture.sky(light), poly.lightEmission()));

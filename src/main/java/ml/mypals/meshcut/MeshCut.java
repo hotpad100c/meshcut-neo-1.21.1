@@ -4,6 +4,7 @@ import com.mojang.serialization.Codec;
 import ml.mypals.meshcut.block.MimicBlock;
 import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.command.MeshCutCommand;
+import ml.mypals.meshcut.cut.SlashService;
 import ml.mypals.meshcut.item.LightsaberItem;
 import ml.mypals.meshcut.physics.MimicColliders;
 import net.minecraft.core.component.DataComponentType;
@@ -66,5 +67,6 @@ public class MeshCut {
         NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) ->
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
+        NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
     }
 }
