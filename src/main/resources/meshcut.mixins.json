@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "package": "ml.mypals.meshcut.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "MassTrackerMixin",
+    "PhysicsBlockPropertyHelperMixin",
+    "RapierPhysicsPipelineMixin",
+    "VoxelNeighborhoodStateMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

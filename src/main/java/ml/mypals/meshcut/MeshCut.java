@@ -1,0 +1,70 @@
+package ml.mypals.meshcut;
+
+import com.mojang.serialization.Codec;
+import ml.mypals.meshcut.block.MimicBlock;
+import ml.mypals.meshcut.block.MimicBlockEntity;
+import ml.mypals.meshcut.command.MeshCutCommand;
+import ml.mypals.meshcut.item.LightsaberItem;
+import ml.mypals.meshcut.physics.MimicColliders;
+import net.minecraft.core.component.DataComponentType;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.world.item.CreativeModeTabs;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.registries.DeferredBlock;
+import net.neoforged.neoforge.registries.DeferredItem;
+import net.neoforged.neoforge.registries.DeferredRegister;
+import org.slf4j.Logger;
+
+import com.mojang.logging.LogUtils;
+
+import java.util.function.Supplier;
+
+@Mod(MeshCut.MODID)
+public class MeshCut {
+    public static final String MODID = "meshcut";
+    public static final Logger LOGGER = LogUtils.getLogger();
+
+    private static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
+    private static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
+    private static final DeferredRegister.DataComponents COMPONENTS = DeferredRegister.createDataComponents(MODID);
+    private static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
+            DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, MODID);
+
+    public static final DeferredBlock<MimicBlock> MIMIC_BLOCK = BLOCKS.registerBlock("mimic",
+            MimicBlock::new, BlockBehaviour.Properties.of().strength(1.5f).noOcclusion()
+                    // the shape depends on the block entity; without this vanilla caches one shape per state
+                    .dynamicShape());
+
+    public static final Supplier<BlockEntityType<MimicBlockEntity>> MIMIC_BE = BLOCK_ENTITIES.register("mimic",
+            () -> BlockEntityType.Builder.of(MimicBlockEntity::new, MIMIC_BLOCK.get()).build(null));
+
+    /** Whether a lightsaber is switched on. */
+    public static final Supplier<DataComponentType<Boolean>> SABER_ACTIVE = COMPONENTS.registerComponentType("active",
+            builder -> builder.persistent(Codec.BOOL).networkSynchronized(ByteBufCodecs.BOOL));
+
+    public static final DeferredItem<LightsaberItem> LIGHTSABER = ITEMS.register("lightsaber",
+            () -> new LightsaberItem(new Item.Properties().stacksTo(1)));
+
+    public MeshCut(IEventBus modEventBus) {
+        BLOCKS.register(modEventBus);
+        BLOCK_ENTITIES.register(modEventBus);
+        ITEMS.register(modEventBus);
+        COMPONENTS.register(modEventBus);
+        modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
+            if (e.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
+                e.accept(LIGHTSABER);
+            }
+        });
+        NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) ->
+                MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
+        NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
+    }
+}
