@@ -101,7 +101,7 @@ public final class SlashService {
             this.pos = pos;
             this.piece = piece;
             this.patches = patches;
-            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, MimicShapes.targetBoxes(piece.target()));
+            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, MimicShapes.cutBoxes(piece.target()));
         }
 
         /** The graph node a cell group belongs to. */
@@ -412,7 +412,7 @@ public final class SlashService {
             List<CutPlane> planes = new ArrayList<>(piece.planes());
             boolean changed = false, burned = false;
             for (Patch patch : entry.getValue()) {
-                if (!straddles(MimicShapes.targetBoxes(piece.target()), patch.plane())) {
+                if (!straddles(MimicShapes.cutBoxes(piece.target()), patch.plane())) {
                     continue; // passes through where the block has nothing (a torch is only a thin stick)
                 }
                 Polytope.Side side = Polytope.classify(planes, patch.plane(), MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);

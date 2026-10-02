@@ -12,6 +12,16 @@ import ml.mypals.meshcut.cut.FragmentBreaking;
 import ml.mypals.meshcut.cut.SlashService;
 import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Explosion;
+import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.block.SimpleWaterloggedBlock;
+import net.minecraft.world.level.block.SoundType;
+import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
@@ -33,7 +43,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.List;
 
 /** Stands in for any block; its block model draws the imitated block, clipped by the cuts in the block entity. */
-public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssemblyListener {
+public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssemblyListener, SimpleWaterloggedBlock {
     public static final MapCodec<MimicBlock> CODEC = simpleCodec(MimicBlock::new);
 
     /**
@@ -41,6 +51,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
      * data (colliders are read on block changes, and a state change is the only reliable trigger).
      */
     public static final BooleanProperty REFRESH = BooleanProperty.create("refresh");
+    public static final BooleanProperty WATERLOGGED = net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED;
 
     /**
      * Flags for replacing a block: tell clients, but don't let neighbours react. A door whose upper half is replaced
@@ -50,12 +61,12 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
 
     public MimicBlock(Properties properties) {
         super(properties);
-        registerDefaultState(stateDefinition.any().setValue(REFRESH, false));
+        registerDefaultState(stateDefinition.any().setValue(REFRESH, false).setValue(WATERLOGGED, false));
     }
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(REFRESH);
+        builder.add(REFRESH, WATERLOGGED);
     }
 
     /** Places a mimic of {@code target} cut by {@code planes} (block-local half-spaces). */
@@ -73,7 +84,9 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         // A block Sable saw being placed had no block entity yet, so it weighed what a default mimic weighs.
         boolean fresh = !(level.getBlockState(pos).getBlock() instanceof MimicBlock);
         if (fresh) {
-            level.setBlock(pos, MeshCut.MIMIC_BLOCK.get().defaultBlockState(), QUIET);
+            // a block standing in water (a waterlogged stair, say) stays in water when it is cut
+            boolean wet = level.getFluidState(pos).getType() == Fluids.WATER;
+            level.setBlock(pos, MeshCut.MIMIC_BLOCK.get().defaultBlockState().setValue(WATERLOGGED, wet), QUIET);
         }
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             boolean slot = level.getBlockState(pos).getValue(REFRESH);
@@ -161,6 +174,78 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
             }
         }
         return super.onDestroyedByPlayer(state, level, pos, player, willHarvest, fluid);
+    }
+
+    // ---------------------------------------------------------------- behaving like the imitated block
+
+    /** The block imitated at the position, or {@code null} if it is not known (no block entity yet). */
+    @Nullable
+    private static BlockState targetAt(BlockGetter level, BlockPos pos) {
+        return level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.getTargetState() : null;
+    }
+
+    /** Picking the block (middle click) gives the block it imitates. */
+    @Override
+    public ItemStack getCloneItemStack(BlockState state, HitResult target, LevelReader level, BlockPos pos, Player player) {
+        BlockState imitated = targetAt(level, pos);
+        return imitated != null ? imitated.getCloneItemStack(target, level, pos, player) : ItemStack.EMPTY;
+    }
+
+    /** It is as hard to break as what it imitates, and needs the same tool. */
+    @Override
+    protected float getDestroyProgress(BlockState state, Player player, BlockGetter level, BlockPos pos) {
+        BlockState imitated = targetAt(level, pos);
+        return imitated != null ? imitated.getDestroyProgress(player, level, pos) : super.getDestroyProgress(state, player, level, pos);
+    }
+
+    @Override
+    public float getExplosionResistance(BlockState state, BlockGetter level, BlockPos pos, Explosion explosion) {
+        BlockState imitated = targetAt(level, pos);
+        return imitated != null ? imitated.getExplosionResistance(level, pos, explosion) : super.getExplosionResistance(state, level, pos, explosion);
+    }
+
+    @Override
+    public SoundType getSoundType(BlockState state, LevelReader level, BlockPos pos, @Nullable Entity entity) {
+        BlockState imitated = targetAt(level, pos);
+        return imitated != null ? imitated.getSoundType(level, pos, entity) : super.getSoundType(state, level, pos, entity);
+    }
+
+    @Override
+    public float getFriction(BlockState state, LevelReader level, BlockPos pos, @Nullable Entity entity) {
+        BlockState imitated = targetAt(level, pos);
+        return imitated != null ? imitated.getFriction(level, pos, entity) : super.getFriction(state, level, pos, entity);
+    }
+
+    /**
+     * It gives off the light of what it imitates. The light level depends on the block entity, which the lighting
+     * engine cannot read (it runs off the main thread, and before block entities are loaded), so the block entity
+     * stores it in NeoForge's auxiliary light data for the chunk, which is saved and synced with the chunk.
+     */
+    @Override
+    public boolean hasDynamicLightEmission(BlockState state) {
+        return true;
+    }
+
+    @Override
+    public int getLightEmission(BlockState state, BlockGetter level, BlockPos pos) {
+        var light = level.getAuxLightManager(pos);
+        return light == null ? 0 : light.getLightAt(pos);
+    }
+
+    // ---------------------------------------------------------------- water
+
+    @Override
+    protected FluidState getFluidState(BlockState state) {
+        return state.getValue(WATERLOGGED) ? Fluids.WATER.getSource(false) : super.getFluidState(state);
+    }
+
+    @Override
+    protected BlockState updateShape(BlockState state, Direction direction, BlockState neighbor, LevelAccessor level,
+                                     BlockPos pos, BlockPos neighborPos) {
+        if (state.getValue(WATERLOGGED)) {
+            level.scheduleTick(pos, Fluids.WATER, Fluids.WATER.getTickDelay(level));
+        }
+        return super.updateShape(state, direction, neighbor, level, pos, neighborPos);
     }
 
     @Override

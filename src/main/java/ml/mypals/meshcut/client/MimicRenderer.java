@@ -93,13 +93,9 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
 
     private static CacheEntry build(MimicBlockEntity be) {
         var captured = ModelCapturer.capture(be.getTargetState(), be.getTargetBeTag());
-        var planes = be.getPlanes();
-        Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
-        captured.byType().forEach((type, polys) -> out.put(type, new ArrayList<>(MeshClipper.clip(polys, planes))));
-        if (!planes.isEmpty()) {
-            out.computeIfAbsent(Sheets.cutoutBlockSheet(), k -> new ArrayList<>())
-                    .addAll(CapBuilder.build(captured.opaque(), planes, captured.capUv()));
-        }
+        // cut exactly as the chunk mesh cuts other blocks: pieces, slits, cut-out parts and their walls
+        Map<RenderType, List<MeshPoly>> out = MimicMesh.cutModel(captured.byType(), captured.opaque(), captured.capUv(), null,
+                be.renderData(), Sheets.cutoutBlockSheet());
         return new CacheEntry(be.getVersion(), out);
     }
 

@@ -64,6 +64,15 @@ public final class ModelCapturer {
     private static final Map<BlockState, Boolean> HAS_RENDERER = new ConcurrentHashMap<>();
     private static final Map<Key, CapturedMesh> CACHE = new HashMap<>();
     private static boolean warnedAboutRenderer;
+    private static boolean recording;
+
+    /**
+     * Whether a block entity renderer is being recorded right now (render thread only). Renderers that leave parts
+     * to Flywheel are told it is not there meanwhile, so the recording has everything.
+     */
+    public static boolean isRecording() {
+        return recording;
+    }
 
     public static ModelMesh captureModel(BlockState state) {
         return MODEL_CACHE.computeIfAbsent(state, ModelCapturer::doCaptureModel);
@@ -163,7 +172,12 @@ public final class ModelCapturer {
                 return;
             }
             RecordingBufferSource recorder = new RecordingBufferSource();
-            renderer.render(be, 0f, new PoseStack(), recorder, 0xF000F0, OverlayTexture.NO_OVERLAY);
+            recording = true; // see isRecording
+            try {
+                renderer.render(be, 0f, new PoseStack(), recorder, 0xF000F0, OverlayTexture.NO_OVERLAY);
+            } finally {
+                recording = false;
+            }
             recorder.finish().forEach((type, polys) -> into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(polys));
         } catch (Throwable t) {
             if (!warnedAboutRenderer) {

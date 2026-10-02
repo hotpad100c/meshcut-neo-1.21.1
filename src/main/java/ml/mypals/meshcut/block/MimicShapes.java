@@ -100,6 +100,30 @@ public final class MimicShapes {
         return shape.optimize();
     }
 
+    private static final Map<BlockState, List<double[]>> CUT_BOXES = new ConcurrentHashMap<>();
+
+    /**
+     * What there is of the imitated block to cut: its collision boxes, or, for a block one walks through (a
+     * flower, a torch), its outline. A block with neither counts as a whole block.
+     */
+    public static List<double[]> cutBoxes(BlockState target) {
+        return CUT_BOXES.computeIfAbsent(target, t -> {
+            List<double[]> collision = targetBoxes(t);
+            if (!collision.isEmpty()) {
+                return collision;
+            }
+            VoxelShape outline;
+            try {
+                outline = t.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+            } catch (RuntimeException e) {
+                outline = Shapes.block();
+            }
+            List<double[]> boxes = new ArrayList<>();
+            outline.forAllBoxes((x1, y1, z1, x2, y2, z2) -> boxes.add(new double[]{x1, y1, z1, x2, y2, z2}));
+            return boxes.isEmpty() ? List.of(new double[]{0, 0, 0, 1, 1, 1}) : boxes;
+        });
+    }
+
     /** Collision boxes of the imitated block on its own, without any cut. */
     public static List<double[]> targetBoxes(BlockState target) {
         return TARGET_BOXES.computeIfAbsent(target, MimicShapes::computeTargetBoxes);
@@ -125,6 +149,7 @@ public final class MimicShapes {
             BOXES.clear();
         }
         TARGET_BOXES.clear();
+        CUT_BOXES.clear();
     }
 
     private MimicShapes() {}

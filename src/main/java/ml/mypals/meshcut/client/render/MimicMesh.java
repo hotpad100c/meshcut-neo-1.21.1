@@ -186,10 +186,8 @@ public final class MimicMesh {
         }
         ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
 
-        Map<RenderType, List<MeshPoly>> clipped = new LinkedHashMap<>();
-        for (List<CutPlane> region : regionPlanes(data)) {
-            addPiece(clipped, model, capBase(model.opaque(), data.target()), region, data.excluded());
-        }
+        Map<RenderType, List<MeshPoly>> clipped = cutModel(model.byChunkType(), model.opaque(), model.particleUv(),
+                model.particle(), data, RenderType.cutout());
 
         Map<RenderType, List<BakedQuad>[]> byLayer = new LinkedHashMap<>();
         clipped.forEach((type, polys) -> {
@@ -233,21 +231,32 @@ public final class MimicMesh {
         return out;
     }
 
-    /** The model clipped by {@code planes}, with the plain cut faces added. */
-    private static void addPiece(Map<RenderType, List<MeshPoly>> into, ModelCapturer.ModelMesh model, List<MeshPoly> capBase, List<CutPlane> planes,
-                                 List<List<CutPlane>> excluded) {
-        model.byChunkType().forEach((type, polys) -> {
-            List<MeshPoly> clipped = MeshClipper.clip(polys, planes);
-            for (List<CutPlane> region : excluded) {
-                clipped = MeshClipper.subtract(clipped, region);
+    /**
+     * A model cut as the block is: divided into the pieces its cuts make (with the slit between them), without the
+     * parts that were cut out, and with the cut faces and the walls of those parts added in {@code capLayer}. Used for
+     * the chunk mesh and, for blocks drawn by a block entity renderer, by {@code MimicRenderer}, so both look the same.
+     *
+     * @param opaque the model's closed surface, to cut faces from (a whole-cube block uses an exact cube instead)
+     */
+    public static Map<RenderType, List<MeshPoly>> cutModel(Map<RenderType, List<MeshPoly>> byType, List<MeshPoly> opaque,
+                                                           float[] uv, Object sprite, MimicRenderData data, RenderType capLayer) {
+        Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
+        List<MeshPoly> capBase = capBase(opaque, data.target());
+        for (List<CutPlane> region : regionPlanes(data)) {
+            byType.forEach((type, polys) -> {
+                List<MeshPoly> clipped = MeshClipper.clip(polys, region);
+                for (List<CutPlane> hole : data.excluded()) {
+                    clipped = MeshClipper.subtract(clipped, hole);
+                }
+                out.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
+            });
+            List<MeshPoly> caps = new ArrayList<>(cutCaps(capBase, region, data.excluded(), uv, sprite));
+            caps.addAll(holeFaces(capBase, region, data.excluded(), uv, sprite));
+            if (!caps.isEmpty()) {
+                out.computeIfAbsent(capLayer, k -> new ArrayList<>()).addAll(caps);
             }
-            into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
-        });
-        List<MeshPoly> caps = new ArrayList<>(cutCaps(capBase, planes, excluded, model.particleUv(), model.particle()));
-        caps.addAll(holeFaces(capBase, planes, excluded, model.particleUv(), model.particle()));
-        if (!caps.isEmpty()) {
-            into.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>()).addAll(caps);
         }
+        return out;
     }
 
     /** The cut faces of a piece: those its own cuts leave, minus whatever was cut out of them. */
@@ -269,7 +278,7 @@ public final class MimicMesh {
      * do not close), and a cube's section is exact. Other blocks use their own model.
      */
     private static List<MeshPoly> capBase(List<MeshPoly> opaque, net.minecraft.world.level.block.state.BlockState target) {
-        for (double[] b : ml.mypals.meshcut.block.MimicShapes.targetBoxes(target)) {
+        for (double[] b : ml.mypals.meshcut.block.MimicShapes.cutBoxes(target)) {
             if (b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6) {
                 return Polytope.cube();
             }

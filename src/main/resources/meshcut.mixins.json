@@ -10,6 +10,7 @@
     "VoxelNeighborhoodStateMixin"
   ],
   "client": [
+    "FlywheelVisualizationMixin",
     "LightsaberGameRendererMixin",
     "LightsaberArmPoseMixin"
   ],

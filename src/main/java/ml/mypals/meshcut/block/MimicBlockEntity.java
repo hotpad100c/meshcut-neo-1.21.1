@@ -231,6 +231,7 @@ public class MimicBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
+        updateLight(); // e.g. moved into a sub-level: the light is set for the new place
         requestModelDataUpdate();
     }
 
@@ -254,6 +255,20 @@ public class MimicBlockEntity extends BlockEntity {
             if (level instanceof ServerLevel server) {
                 WorldGraphs.onNodesChanged(server, worldPosition);
             }
+            updateLight();
+        }
+    }
+
+    /** Gives off the light the imitated block does (see {@link MimicBlock#getLightEmission}). */
+    private void updateLight() {
+        if (level == null || level.isClientSide) {
+            return; // stored on the server, synced to clients with the chunk
+        }
+        var light = level.getAuxLightManager(worldPosition);
+        int emission = targetState.getLightEmission();
+        if (light != null && light.getLightAt(worldPosition) != emission) {
+            light.setLightAt(worldPosition, emission);
+            level.getLightEngine().checkBlock(worldPosition);
         }
     }
 
@@ -261,7 +276,7 @@ public class MimicBlockEntity extends BlockEntity {
     public CellGrid grid() {
         CellGrid g = grid;
         if (g == null) {
-            g = CellGrid.of(planes, excluded, patches, MimicShapes.targetBoxes(targetState));
+            g = CellGrid.of(planes, excluded, patches, MimicShapes.cutBoxes(targetState));
             grid = g;
         }
         return g;
