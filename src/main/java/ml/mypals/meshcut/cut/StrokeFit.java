@@ -1,5 +1,6 @@
 package ml.mypals.meshcut.cut;
 
+import ml.mypals.meshcut.geom.CellGrid;
 import ml.mypals.meshcut.geom.Patch;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3d;
@@ -15,7 +16,7 @@ import java.util.Map;
  */
 public final class StrokeFit {
     /** Cuts remembered per block; beyond this the oldest is forgotten. */
-    private static final int MAX_PATCHES = 6;
+    private static final int MAX_PATCHES = 16;
 
     /** The part of one swept quad inside one block, in that block's frame; {@code motion} is how the blade travelled. */
     public record Fragment(Vector3d n, Vector3d motion, float[] polygon) {}
@@ -196,11 +197,27 @@ public final class StrokeFit {
             }
         }
         list.add(patch);
-        if (list.size() > MAX_PATCHES) {
-            list.remove(0);
+        while (list.size() > MAX_PATCHES) {
+            list.remove(forgettable(list));
         }
     }
 
+
+    /**
+     * Which cut to forget when there are too many: one that divides nothing (the pieces are the same without it), or
+     * else the oldest.
+     */
+    private static int forgettable(List<Patch> list) {
+        int all = CellGrid.of(List.of(), List.of(), list).componentCount();
+        for (int i = 0; i < list.size(); i++) {
+            List<Patch> without = new ArrayList<>(list);
+            without.remove(i);
+            if (CellGrid.of(List.of(), List.of(), without).componentCount() >= all) {
+                return i;
+            }
+        }
+        return 0;
+    }
 
     private StrokeFit() {}
 }

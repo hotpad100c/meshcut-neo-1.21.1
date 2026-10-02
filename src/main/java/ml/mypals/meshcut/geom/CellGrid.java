@@ -42,14 +42,14 @@ public final class CellGrid {
     }
 
     private CellGrid(int[] components, int count, int[] sizes, List<CutPlane> real, List<List<CutPlane>> excluded,
-                     List<Patch> patches) {
+                     List<Patch> patches, List<double[]> shape) {
         System.arraycopy(components, 0, comp, 0, CELLS);
         this.size = sizes;
         for (int axis = 0; axis < 3; axis++) {
             for (int a = 0; a < N; a++) {
                 for (int b = 0; b < N; b++) {
-                    faces[axis * 2][a * N + b] = faceSample(axis, 1, a, b, real, excluded, patches);
-                    faces[axis * 2 + 1][a * N + b] = faceSample(axis, 0, a, b, real, excluded, patches);
+                    faces[axis * 2][a * N + b] = faceSample(axis, 1, a, b, real, excluded, patches, shape);
+                    faces[axis * 2 + 1][a * N + b] = faceSample(axis, 0, a, b, real, excluded, patches, shape);
                 }
             }
         }
@@ -62,12 +62,15 @@ public final class CellGrid {
      * would not agree where a slanted cut crosses it.
      */
     private int faceSample(int axis, int value, int a, int b, List<CutPlane> real, List<List<CutPlane>> excluded,
-                           List<Patch> patches) {
+                           List<Patch> patches, List<double[]> shape) {
         double[] q = new double[3];
         int first = axis == 0 ? 1 : 0, second = axis == 2 ? 1 : 2;
         q[axis] = value;
         q[first] = (a + 0.5) / N;
         q[second] = (b + 0.5) / N;
+        if (shape != null && !insideShape(shape, q)) {
+            return -1; // nothing of the block is there
+        }
         for (CutPlane p : real) {
             if (p.signedDistance(q[0], q[1], q[2]) < -1e-6) {
                 return -1; // cut away
@@ -125,13 +128,25 @@ public final class CellGrid {
      * scratches on it.
      */
     public static CellGrid of(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches) {
-        if (real.isEmpty() && excluded.isEmpty() && patches.isEmpty()) {
+        return of(real, excluded, patches, null);
+    }
+
+    /**
+     * @param shape the boxes {minX, minY, minZ, maxX, maxY, maxZ} the block is made of (its collision shape), or
+     *              {@code null} for a whole block. Only cells that touch the shape exist: a torch has a small part
+     *              that can be cut, not a whole block of it.
+     */
+    public static CellGrid of(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches, List<double[]> shape) {
+        if (isWhole(shape)) {
+            shape = null;
+        }
+        if (real.isEmpty() && excluded.isEmpty() && patches.isEmpty() && shape == null) {
             return FULL;
         }
         boolean[] inside = new boolean[CELLS];
         for (int i = 0; i < CELLS; i++) {
             double[] c = center(i);
-            boolean in = true;
+            boolean in = shape == null || touchesShape(shape, i);
             for (CutPlane p : real) {
                 if (p.signedDistance(c[0], c[1], c[2]) < 0) {
                     in = false;
@@ -194,7 +209,45 @@ public final class CellGrid {
             }
         }
         // slivers were dropped but may have left their cells marked "visited"; they are simply empty now
-        return new CellGrid(components, next, java.util.Arrays.copyOf(sizes, next), real, excluded, patches);
+        return new CellGrid(components, next, java.util.Arrays.copyOf(sizes, next), real, excluded, patches, shape);
+    }
+
+    private static boolean isWhole(List<double[]> shape) {
+        if (shape == null) {
+            return true;
+        }
+        for (double[] b : shape) {
+            if (b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether any box of the shape overlaps the cell. */
+    private static boolean touchesShape(List<double[]> shape, int index) {
+        int x = index / (N * N), y = index / N % N, z = index % N;
+        double[] lo = {(double) x / N, (double) y / N, (double) z / N};
+        for (double[] b : shape) {
+            boolean overlaps = true;
+            for (int axis = 0; axis < 3 && overlaps; axis++) {
+                overlaps = b[axis] < lo[axis] + 1.0 / N - 1e-9 && b[axis + 3] > lo[axis] + 1e-9;
+            }
+            if (overlaps) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean insideShape(List<double[]> shape, double[] q) {
+        for (double[] b : shape) {
+            if (q[0] >= b[0] - 1e-6 && q[0] <= b[3] + 1e-6 && q[1] >= b[1] - 1e-6 && q[1] <= b[4] + 1e-6
+                    && q[2] >= b[2] - 1e-6 && q[2] <= b[5] + 1e-6) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Whether some patch lies between the centres of two neighbouring cells. */

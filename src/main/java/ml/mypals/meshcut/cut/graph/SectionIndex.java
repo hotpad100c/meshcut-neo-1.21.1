@@ -25,8 +25,8 @@ import java.util.Set;
 public final class SectionIndex {
     public static final int SIZE = 16;
     public static final int CELLS = SIZE * SIZE * SIZE;
-    /** More live regions than this and the section is rebuilt, which merges the fragments edits have left. */
-    private static final int REGION_LIMIT = 96;
+    /** More live regions than this (or twice what the last build made) and the section is rebuilt, which merges the fragments edits have left. */
+    private static final int REGION_MIN = 12;
 
     public final int sx, sy, sz;
     private final BlockNodes[] blocks = new BlockNodes[CELLS];
@@ -38,6 +38,8 @@ public final class SectionIndex {
     private final int[] fragFirst = new int[CELLS];
     private final Set<Group> groups = new LinkedHashSet<>();
     private int liveRegions;
+    /** How many regions the last full build made; edits that leave many more than that trigger a new one. */
+    private int builtRegions;
 
     /** One region (a box, bounds inclusive and local) or one fragment of a mimic block. */
     static final class Node {
@@ -176,65 +178,80 @@ public final class SectionIndex {
         liveRegions = 0;
         java.util.Arrays.fill(regionAt, -1);
         java.util.Arrays.fill(fragFirst, -1);
-        boolean[] taken = new boolean[CELLS];
         for (int x = 0; x < SIZE; x++) {
             for (int y = 0; y < SIZE; y++) {
                 for (int z = 0; z < SIZE; z++) {
                     int c = cell(x, y, z);
-                    BlockNodes b = blocks[c];
-                    if (b == null) {
-                        continue;
-                    }
-                    if (b.isMimic()) {
+                    if (blocks[c] != null && blocks[c].isMimic()) {
                         addFragments(c, x, y, z);
-                    } else if (!taken[c]) {
-                        int z1 = z;
-                        while (z1 + 1 < SIZE && plain(cell(x, y, z1 + 1)) && !taken[cell(x, y, z1 + 1)]) {
-                            z1++;
-                        }
-                        int y1 = y;
-                        while (y1 + 1 < SIZE && rowFree(x, y1 + 1, z, z1, taken)) {
-                            y1++;
-                        }
-                        int x1 = x;
-                        while (x1 + 1 < SIZE && slabFree(x1 + 1, y, y1, z, z1, taken)) {
-                            x1++;
-                        }
-                        for (int i = x; i <= x1; i++) {
-                            for (int j = y; j <= y1; j++) {
-                                for (int k = z; k <= z1; k++) {
-                                    taken[cell(i, j, k)] = true;
-                                }
-                            }
-                        }
-                        addRegion(x, y, z, x1, y1, z1);
                     }
                 }
             }
         }
+        // greedy boxes, trying every order of growing along the axes and keeping the one with the fewest boxes
+        List<int[]> best = null;
+        int[][] orders = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+        for (int[] order : orders) {
+            List<int[]> boxes = greedyBoxes(order);
+            if (best == null || boxes.size() < best.size()) {
+                best = boxes;
+            }
+        }
+        for (int[] b : best) {
+            addRegion(b[0], b[1], b[2], b[3], b[4], b[5]);
+        }
+        builtRegions = liveRegions;
+    }
+
+    /** Boxes of ordinary blocks: from each free block, grow along the axes in the given order while whole rows are free. */
+    private List<int[]> greedyBoxes(int[] order) {
+        boolean[] taken = new boolean[CELLS];
+        List<int[]> boxes = new ArrayList<>();
+        for (int x = 0; x < SIZE; x++) {
+            for (int y = 0; y < SIZE; y++) {
+                for (int z = 0; z < SIZE; z++) {
+                    if (!plain(cell(x, y, z)) || taken[cell(x, y, z)]) {
+                        continue;
+                    }
+                    int[] lo = {x, y, z}, hi = {x, y, z};
+                    for (int axis : order) {
+                        while (hi[axis] + 1 < SIZE && slabFree(lo, hi, axis, taken)) {
+                            hi[axis]++;
+                        }
+                    }
+                    for (int i = lo[0]; i <= hi[0]; i++) {
+                        for (int j = lo[1]; j <= hi[1]; j++) {
+                            for (int k = lo[2]; k <= hi[2]; k++) {
+                                taken[cell(i, j, k)] = true;
+                            }
+                        }
+                    }
+                    boxes.add(new int[]{lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]});
+                }
+            }
+        }
+        return boxes;
+    }
+
+    /** Whether the layer just past the box on the axis is all free ordinary blocks. */
+    private boolean slabFree(int[] lo, int[] hi, int axis, boolean[] taken) {
+        int[] from = lo.clone(), to = hi.clone();
+        from[axis] = to[axis] = hi[axis] + 1;
+        for (int i = from[0]; i <= to[0]; i++) {
+            for (int j = from[1]; j <= to[1]; j++) {
+                for (int k = from[2]; k <= to[2]; k++) {
+                    int c = cell(i, j, k);
+                    if (!plain(c) || taken[c]) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     private boolean plain(int c) {
         return blocks[c] != null && !blocks[c].isMimic();
-    }
-
-    private boolean rowFree(int x, int y, int z0, int z1, boolean[] taken) {
-        for (int z = z0; z <= z1; z++) {
-            int c = cell(x, y, z);
-            if (!plain(c) || taken[c]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean slabFree(int x, int y0, int y1, int z0, int z1, boolean[] taken) {
-        for (int y = y0; y <= y1; y++) {
-            if (!rowFree(x, y, z0, z1, taken)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private Node addRegion(int x0, int y0, int z0, int x1, int y1, int z1) {
@@ -564,7 +581,7 @@ public final class SectionIndex {
         neighbours.removeAll(removed);
         neighbours.removeIf(n -> !n.alive);
 
-        if (liveRegions > REGION_LIMIT) {
+        if (liveRegions > Math.max(REGION_MIN, builtRegions * 2)) {
             rebuild(); // merges the boxes edits have cut up; what is connected does not change
             return false;
         }
@@ -585,47 +602,81 @@ public final class SectionIndex {
             return true;
         }
 
-        // Group layer: the replacements take the removed nodes' place; whatever they touch joins them
-        Set<Group> touchedGroups = new LinkedHashSet<>(oldGroups);
-        for (Node n : replacement) {
-            for (Node o : contacts(n, -1)) {
-                if (o.group != null) {
-                    touchedGroups.add(o.group);
-                }
-            }
-        }
+        // Group layer: the replacements take the removed nodes' place. Each set of replacements that touch one another
+        // (or the same groups) joins those groups; one that touches nothing starts a group of its own.
         for (Node r : removed) {
             if (r.group != null) {
                 r.group.nodes.remove(r);
             }
         }
-        Group target = touchedGroups.isEmpty() ? null : touchedGroups.iterator().next();
+        Map<Node, Group> contactOf = new IdentityHashMap<>();
+        Map<Object, Object> parent = new IdentityHashMap<>(); // union-find over replacement nodes and groups
         for (Node n : replacement) {
+            parent.put(n, n);
+        }
+        for (Node n : replacement) {
+            for (Node o : contacts(n, -1)) {
+                if (o.group != null && o.alive) {
+                    parent.putIfAbsent(o.group, o.group);
+                    unionObjects(parent, n, o.group);
+                } else if (parent.containsKey(o)) {
+                    unionObjects(parent, n, o);
+                }
+            }
+        }
+        // groups that lost a node are joined with the ones the removed nodes' neighbours are in only if tied above
+        Map<Object, List<Node>> components = new IdentityHashMap<>();
+        for (Node n : replacement) {
+            components.computeIfAbsent(findObject(parent, n), k -> new ArrayList<>()).add(n);
+        }
+        Set<Group> touched = new LinkedHashSet<>(oldGroups);
+        for (var entry : components.entrySet()) {
+            Group target = null;
+            Set<Group> joined = new LinkedHashSet<>();
+            for (Object o : parent.keySet()) {
+                if (o instanceof Group g && findObject(parent, o) == entry.getKey()) {
+                    joined.add(g);
+                }
+            }
+            for (Group g : joined) {
+                if (target == null) {
+                    target = g;
+                } else {
+                    for (Node n : g.nodes) {
+                        n.group = target;
+                        target.nodes.add(n);
+                    }
+                    g.nodes.clear();
+                    groups.remove(g);
+                }
+            }
             if (target == null) {
                 target = new Group(this);
                 groups.add(target);
             }
-            n.group = target;
-            target.nodes.add(n);
-        }
-        for (Group other : touchedGroups) {
-            if (other != target && target != null) {
-                for (Node n : other.nodes) {
-                    n.group = target;
-                    target.nodes.add(n);
-                }
-                other.nodes.clear();
-                groups.remove(other);
+            for (Node n : entry.getValue()) {
+                n.group = target;
+                target.nodes.add(n);
             }
+            touched.add(target);
         }
-        for (Group g : touchedGroups) {
+        for (Group g : touched) {
             g.touched();
-        }
-        if (target != null) {
-            target.touched();
         }
         groups.removeIf(g -> g.nodes.isEmpty());
         return false;
+    }
+
+    private static Object findObject(Map<Object, Object> parent, Object o) {
+        while (parent.get(o) != o) {
+            parent.put(o, parent.get(parent.get(o)));
+            o = parent.get(o);
+        }
+        return o;
+    }
+
+    private static void unionObjects(Map<Object, Object> parent, Object a, Object b) {
+        parent.put(findObject(parent, a), findObject(parent, b));
     }
 
     private void kill(Node node) {

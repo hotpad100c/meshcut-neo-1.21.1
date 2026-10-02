@@ -124,6 +124,10 @@ public final class MimicMesh {
         for (List<CutPlane> region : regionPlanes(data)) {
             addPiece(clipped, model, region, data.excluded());
         }
+        if (!data.excluded().isEmpty()) {
+            clipped.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>())
+                    .addAll(holeFaces(model.opaque(), data.planes(), data.excluded(), model.particleUv(), model.particle()));
+        }
         // scratches that stop midway show where they reach the outside of the block
         float[] uv = model.particleUv();
         for (Patch patch : data.patches()) {
@@ -195,18 +199,15 @@ public final class MimicMesh {
             }
             into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
         });
-        List<MeshPoly> caps = capsOf(model.opaque(), planes, excluded, model.particleUv(), model.particle());
+        List<MeshPoly> caps = cutCaps(model.opaque(), planes, excluded, model.particleUv(), model.particle());
         if (!caps.isEmpty()) {
             into.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>()).addAll(caps);
         }
     }
 
-    /**
-     * The cut faces of a piece: those its own cuts leave (minus whatever was cut out of them) and, for each part cut
-     * out of it, the faces around the hole, turned to face into it.
-     */
-    private static List<MeshPoly> capsOf(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
-                                         float[] uv, Object sprite) {
+    /** The cut faces of a piece: those its own cuts leave, minus whatever was cut out of them. */
+    private static List<MeshPoly> cutCaps(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
+                                          float[] uv, Object sprite) {
         List<MeshPoly> caps = new ArrayList<>();
         if (!planes.isEmpty()) {
             caps.addAll(CapBuilder.build(opaque, planes, uv, sprite));
@@ -214,6 +215,16 @@ public final class MimicMesh {
                 caps = MeshClipper.subtract(caps, region);
             }
         }
+        return caps;
+    }
+
+    /**
+     * The faces around the parts that were cut out of the block, turned to face into the hole. Made once for the
+     * whole block (not once for each of the regions the scratches divide it into), within the block's real cuts.
+     */
+    private static List<MeshPoly> holeFaces(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
+                                            float[] uv, Object sprite) {
+        List<MeshPoly> faces = new ArrayList<>();
         for (List<CutPlane> region : excluded) {
             for (int j = 0; j < region.size(); j++) {
                 List<CutPlane> others = new ArrayList<>(planes);
@@ -222,10 +233,10 @@ public final class MimicMesh {
                         others.add(region.get(k));
                     }
                 }
-                caps.addAll(CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite));
+                faces.addAll(CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite));
             }
         }
-        return caps;
+        return faces;
     }
 
     /**
@@ -245,11 +256,14 @@ public final class MimicMesh {
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
             for (List<CutPlane> region : regionPlanes(data)) {
-                if (!region.isEmpty() || !data.excluded().isEmpty()) {
-                    for (MeshPoly cap : capsOf(opaque, region, data.excluded(), uv, lava)) {
+                if (!region.isEmpty()) {
+                    for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
                         out.add(glowOf(cap));
                     }
                 }
+            }
+            for (MeshPoly face : holeFaces(opaque, data.planes(), data.excluded(), uv, lava)) {
+                out.add(glowOf(face));
             }
             for (Patch patch : data.patches()) {
                 out.addAll(Grooves.of(patch, uv, lava, GLOW_ARGB, 15));

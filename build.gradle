@@ -218,6 +218,12 @@ tasks.named('check').configure {
     dependsOn checkLightsaberProjection
 }
 
+// GameTest classes and fixtures are available in development runs, but do not ship in the mod jar.
+tasks.named('jar', Jar).configure {
+    exclude 'ml/mypals/meshcut/gametest/**'
+    exclude 'data/meshcut/structure/lightsaber_motion_empty.nbt'
+}
+
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
     module {

@@ -56,7 +56,7 @@ public final class MeshClipper {
 
     private static float[] clipOnce(float[] in, CutPlane plane) {
         int n = in.length / S;
-        float[] out = new float[(n + 2) * S];
+        float[] out = new float[(2 * n + 2) * S]; // a concave polygon can cross the plane at every edge
         int m = 0;
         for (int i = 0; i < n; i++) {
             int a = i * S;

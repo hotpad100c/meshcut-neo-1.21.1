@@ -29,7 +29,7 @@ import java.util.UUID;
 @EventBusSubscriber(modid = MeshCut.MODID)
 public final class LightsaberHandler {
     /** Larger jumps are teleports or dimension changes, not swings. */
-    private static final double MAX_TIP_SPEED = 12;
+    private static final double MAX_TIP_SPEED = 30;
     /** Slower than this the blade is standing still and sweeps nothing. */
     private static final double MIN_TIP_SPEED = 0.01;
     /** A cut longer than this is applied early (and carries on), so the work is not left to pile up. */

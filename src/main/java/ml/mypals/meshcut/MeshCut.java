@@ -6,6 +6,7 @@ import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.command.MeshCutCommand;
 import ml.mypals.meshcut.cut.SlashService;
 import ml.mypals.meshcut.item.LightsaberItem;
+import ml.mypals.meshcut.item.LightsaberMotion;
 import ml.mypals.meshcut.physics.MimicColliders;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
@@ -59,6 +60,7 @@ public class MeshCut {
         BLOCK_ENTITIES.register(modEventBus);
         ITEMS.register(modEventBus);
         COMPONENTS.register(modEventBus);
+        LightsaberMotion.register(modEventBus);
         modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
             if (e.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
                 e.accept(LIGHTSABER);

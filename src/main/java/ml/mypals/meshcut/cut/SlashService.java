@@ -10,6 +10,7 @@ import dev.ryanhcode.sable.sublevel.SubLevel;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.block.MimicBlock;
 import ml.mypals.meshcut.block.MimicBlockEntity;
+import ml.mypals.meshcut.block.MimicShapes;
 import ml.mypals.meshcut.cut.graph.BlockNodes;
 import ml.mypals.meshcut.cut.graph.StructureGraph;
 import ml.mypals.meshcut.cut.graph.WorldGraphs;
@@ -100,7 +101,7 @@ public final class SlashService {
             this.pos = pos;
             this.piece = piece;
             this.patches = patches;
-            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches);
+            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, MimicShapes.targetBoxes(piece.target()));
         }
 
         /** The graph node a cell group belongs to. */
@@ -411,6 +412,9 @@ public final class SlashService {
             List<CutPlane> planes = new ArrayList<>(piece.planes());
             boolean changed = false, burned = false;
             for (Patch patch : entry.getValue()) {
+                if (!straddles(MimicShapes.targetBoxes(piece.target()), patch.plane())) {
+                    continue; // passes through where the block has nothing (a torch is only a thin stick)
+                }
                 Polytope.Side side = Polytope.classify(planes, patch.plane(), MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);
                 if (side != Polytope.Side.SPLIT) {
                     // A cut right through that leaves only a thin layer on one side (or just clips a corner) does
@@ -541,7 +545,7 @@ public final class SlashService {
                 }
             }
             if (!stayingGroups.isEmpty()) {
-                List<Patch> kept = PieceFit.remaining(info.grid, stayingCells, info.patches, usedByMovers);
+                List<Patch> kept = PieceFit.remaining(info.grid, stayingCells, info.patches, List.of());
                 specs.computeIfAbsent(stayingGroups.iterator().next(), k -> new ArrayList<>())
                         .add(new Spec(info.pos, info, info.piece.planes(), holes, kept));
             }
@@ -855,6 +859,19 @@ public final class SlashService {
             }
         }
         return seeds;
+    }
+
+    /** Whether the plane has some of the shape on both sides of it. */
+    private static boolean straddles(List<double[]> shape, CutPlane plane) {
+        double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
+        for (double[] b : shape) {
+            for (int i = 0; i < 8; i++) {
+                double d = plane.signedDistance(b[(i & 1) == 0 ? 0 : 3], b[(i & 2) == 0 ? 1 : 4], b[(i & 4) == 0 ? 2 : 5]);
+                min = Math.min(min, d);
+                max = Math.max(max, d);
+            }
+        }
+        return min < -0.01 && max > 0.01;
     }
 
     private static List<CutPlane> with(List<CutPlane> planes, CutPlane extra) {

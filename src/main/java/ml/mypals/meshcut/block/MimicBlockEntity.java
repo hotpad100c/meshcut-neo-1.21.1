@@ -261,7 +261,7 @@ public class MimicBlockEntity extends BlockEntity {
     public CellGrid grid() {
         CellGrid g = grid;
         if (g == null) {
-            g = CellGrid.of(planes, excluded, patches);
+            g = CellGrid.of(planes, excluded, patches, MimicShapes.targetBoxes(targetState));
             grid = g;
         }
         return g;

@@ -35,6 +35,7 @@ public class LightsaberItem extends Item {
             return InteractionResultHolder.pass(stack);
         }
         player.startUsingItem(hand);
+        LightsaberMotion.begin(player);
         level.playSound(null, player.getX(), player.getY(), player.getZ(),
                 SoundEvents.BEACON_ACTIVATE, SoundSource.PLAYERS, 0.6f, 1.7f);
         return InteractionResultHolder.consume(stack);

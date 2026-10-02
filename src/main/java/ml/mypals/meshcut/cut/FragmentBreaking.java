@@ -27,35 +27,30 @@ public final class FragmentBreaking {
     /**
      * Removes the fragment of the mimic the player is looking at, leaving the others where they are.
      *
-     * @return {@code false} if that cannot be done (the block is not cut into several pieces, or the piece is not a
-     *         convex shape that can be cut out), in which case the whole block is broken as usual
+     * @return {@code false} if the block is to be broken as a whole: it is not cut into several pieces, or the player is
+     *         sneaking. A piece that cannot be cut out on its own (it is not a convex shape) is left alone, so that
+     *         the other pieces are not lost with it; the player is told, and can sneak to break the whole block.
      */
     public static boolean breakPointed(ServerLevel level, BlockPos pos, MimicBlockEntity be, Player player) {
         CellGrid grid = be.grid();
         if (grid.componentCount() < 2) {
             return false;
         }
+        if (player.isShiftKeyDown()) {
+            return false;
+        }
         int fragment = pointedFragment(level, pos, grid, player);
         if (fragment < 0) {
             return false;
         }
-        List<CutPlane> real = be.getPlanes();
-        List<Patch> patches = be.getPatches();
-        List<CutPlane> fit = PieceFit.fit(grid, Set.of(fragment), real, patches);
-        if (fit == null || fit.size() <= real.size()) {
-            return false;
+        FragmentRemoval.Result result = FragmentRemoval.remove(grid, be.getPlanes(), be.getExcluded(), be.getPatches(), fragment);
+        if (result == null) {
+            player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                    "This piece is not a convex shape and can't be broken on its own (sneak to break the whole block)"), true);
+            return true; // handled: nothing is broken
         }
-        List<CutPlane> hole = new ArrayList<>(fit.subList(real.size(), fit.size()));
-        List<List<CutPlane>> excluded = new ArrayList<>(be.getExcluded());
-        excluded.add(hole);
-        Set<Integer> staying = new HashSet<>();
-        for (int c = 0; c < grid.componentCount(); c++) {
-            if (c != fragment) {
-                staying.add(c);
-            }
-        }
-        List<Patch> kept = PieceFit.remaining(grid, staying, patches, hole);
-        MimicBlock.place(level, pos, be.getTargetState(), new ArrayList<>(real), excluded, kept, be.getCapMode(), be.getTargetBeTag());
+        MimicBlock.place(level, pos, be.getTargetState(), new ArrayList<>(be.getPlanes()), result.excluded(), result.patches(),
+                be.getCapMode(), be.getTargetBeTag());
         // what is left may have lost what held it
         SlashService.queueRecheck(level, pos);
         return true;

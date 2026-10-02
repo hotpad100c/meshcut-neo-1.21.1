@@ -21,7 +21,7 @@ public final class PieceFit {
     /** Cells nearer than this to a plane (more than half a cell) may be on either side of it. */
     private static final double AMBIGUOUS_DISTANCE = 0.1;
     /** At most this fraction of the group's size may be cells the fitted shape gets wrong. */
-    private static final double MAX_WRONG_FRACTION = 0.05;
+    private static final double MAX_WRONG_FRACTION = 0.01;
     /** Cells this close to a plane are on it: they belong to neither side, so they say nothing about the shape. */
     private static final double ON_PLANE = 1e-9;
 
@@ -44,6 +44,14 @@ public final class PieceFit {
         }
         if (foreign.isEmpty()) {
             return new ArrayList<>(real); // all of what is left of the block
+        }
+
+        // a piece made only by cuts that go right through is known exactly
+        Set<Integer> members = new java.util.HashSet<>(cells);
+        for (List<CutPlane> piece : Arrangement.pieces(real, patches)) {
+            if (piece.size() > real.size() && wrongCells(grid, members, piece) <= Math.max(1, MAX_WRONG_FRACTION * cells.size())) {
+                return piece;
+            }
         }
 
         List<CutPlane> planes = new ArrayList<>(real);
@@ -76,7 +84,12 @@ public final class PieceFit {
 
         // Does the shape the half-spaces make agree with the cells? Cells close to one of the planes may fall on
         // either side (a plane through cell centres puts them anywhere), so they say nothing; the others must agree.
-        Set<Integer> members = new java.util.HashSet<>(cells);
+        int wrong = wrongCells(grid, new java.util.HashSet<>(cells), planes);
+        return wrong > Math.max(2, MAX_WRONG_FRACTION * cells.size()) ? null : planes;
+    }
+
+    /** How many cells the shape made by the half-spaces gets wrong, leaving out those near a plane. */
+    private static int wrongCells(CellGrid grid, Set<Integer> members, List<CutPlane> planes) {
         int wrong = 0;
         for (int cell = 0; cell < CellGrid.CELLS; cell++) {
             if (grid.component(cell) < 0) {
@@ -98,14 +111,15 @@ public final class PieceFit {
                 wrong++;
             }
         }
-        return wrong > Math.max(2, MAX_WRONG_FRACTION * cells.size()) ? null : planes;
+        return wrong;
     }
 
     /**
-     * The scratches a piece keeps: those that did not bound it (they run through it or end inside it) and still touch
-     * it. A scratch that bounded it became one of its faces.
+     * The scratches a piece keeps: those that still touch it. For a piece that leaves, the scratches that bounded it
+     * became its faces ({@code bounding}); for a piece that stays, nothing is passed here: the scratches that bounded
+     * what left still divide what is left, and without them its fragments would join up.
      *
-     * @param bounding the extra half-spaces {@link #fit} added to the block's real cuts
+     * @param bounding the extra half-spaces {@link #fit} added to the block's real cuts, or empty
      */
     public static List<Patch> remaining(CellGrid grid, Set<Integer> group, List<Patch> patches, List<CutPlane> bounding) {
         List<Patch> kept = new ArrayList<>();
