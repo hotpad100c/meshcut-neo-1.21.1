@@ -619,6 +619,11 @@ public final class SlashService {
                 MeshCut.LOGGER.warn("The sub-level being cut was removed while its pieces were moved out; {} blocks could not follow", positions.size());
                 break;
             }
+            positions.removeIf(p -> level.getBlockState(p).isAir());
+            if (positions.isEmpty()) {
+                MeshCut.LOGGER.warn("A piece that should come loose has no blocks left; nothing is moved");
+                continue;
+            }
             ServerSubLevel moved = CutService.assemble(level, positions);
             if (moved != null) {
                 created[0]++;
@@ -765,6 +770,12 @@ public final class SlashService {
     /** Mimics whose surroundings changed, to be looked at again next tick (server thread only). */
     private static final Set<Recheck> RECHECKS = new LinkedHashSet<>();
     private static final int RECHECKS_PER_TICK = 16;
+    /** Ticks during which a block that came apart on re-examination is not re-examined again. */
+    private static final long SPLIT_COOLDOWN = 40;
+    /** At most this many pieces come loose from re-examinations in one tick. */
+    private static final int MAX_LOOSE_PER_TICK = 4;
+    private static final Map<Recheck, Long> LAST_SPLIT = new HashMap<>();
+    private static int createdThisTick;
 
     /**
      * A cut block that stayed whole was only held together by what was around it. When a neighbour changes (it is
@@ -775,6 +786,8 @@ public final class SlashService {
     }
 
     public static void onServerTick(ServerTickEvent.Post event) {
+        createdThisTick = 0;
+        LAST_SPLIT.entrySet().removeIf(e -> e.getKey().level().getGameTime() - e.getValue() > SPLIT_COOLDOWN);
         if (RECHECKS.isEmpty()) {
             return;
         }
@@ -784,6 +797,14 @@ public final class SlashService {
             it.remove();
         }
         for (Recheck r : batch) {
+            Long last = LAST_SPLIT.get(r);
+            if (last != null && r.level().getGameTime() - last < SPLIT_COOLDOWN) {
+                continue; // it has just come apart; whatever made it look again is most likely its own doing
+            }
+            if (createdThisTick >= MAX_LOOSE_PER_TICK) {
+                RECHECKS.add(r); // enough for one tick: later
+                continue;
+            }
             try {
                 recheck(r.level(), r.pos());
             } catch (RuntimeException e) {
@@ -800,6 +821,9 @@ public final class SlashService {
         var container = SubLevelContainer.getContainer(level);
         ServerSubLevel sub = container != null && container.inBounds(pos)
                 && Sable.HELPER.getContaining(level, pos) instanceof ServerSubLevel s && !s.isRemoved() ? s : null;
+        if (sub == null && container != null && container.inBounds(pos)) {
+            return; // left behind in the plot of a sub-level that is gone: not part of the world, nothing to do
+        }
         Domain dom = new Domain(level, be.getCapMode(), sub);
         if (!dom.loaded(pos)) {
             return;
@@ -817,7 +841,14 @@ public final class SlashService {
         Vector3d nl = new Vector3d(newest.nx(), newest.ny(), newest.nz());
         double dl = newest.d() + nl.x * pos.getX() + nl.y * pos.getY() + nl.z * pos.getZ();
         Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
-        resolve(level, sub, dom, List.of(info), nl, dl, new Vec3(world.x, world.y, world.z), new int[]{0}, false);
+        int[] created = {0};
+        resolve(level, sub, dom, List.of(info), nl, dl, new Vec3(world.x, world.y, world.z), created, false);
+        if (created[0] > 0) {
+            LAST_SPLIT.put(new Recheck(level, pos), level.getGameTime());
+            createdThisTick += created[0];
+            MeshCut.LOGGER.info("Re-examined the cut block at {}{}: {} piece(s) came loose", pos,
+                    sub == null ? "" : " (in a sub-level)", created[0]);
+        }
     }
 
     // ---------------------------------------------------------------- graph
