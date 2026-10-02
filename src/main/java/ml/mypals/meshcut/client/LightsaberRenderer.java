@@ -27,25 +27,21 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** World-space blades anchored to the rendered hilt, aimed along the cutting direction. */
+/** World-space blades and trails use the cutting segment; the hilt is aligned to its origin. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberRenderer {
     private static final float[] CORE = {1f, 1f, 1f, 1f};
     private static final float[] GLOW = {0.25f, 0.8f, 1f, 0.45f};
     private static final float[] HALO = {0.2f, 0.6f, 1f, 0.18f};
-    private static final Map<UUID, Vec3> EMITTERS = new HashMap<>();
     private static final Matrix4f WORLD_PROJECTION = new Matrix4f();
     private static final Matrix4f WORLD_VIEW = new Matrix4f();
     @Nullable private static RenderTarget sceneDepth;
-    @Nullable private static Vec3 firstPersonEmitter;
+    @Nullable private static Matrix4f firstPersonHilt;
+    @Nullable private static Blade firstPersonBlade;
     private static boolean firstPersonPrepared;
 
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() == RenderLevelStageEvent.Stage.AFTER_SKY) {
-            EMITTERS.clear();
-            return;
-        }
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES) {
             return;
         }
@@ -58,30 +54,29 @@ public final class LightsaberRenderer {
         PoseStack poseStack = event.getPoseStack();
         Matrix4f matrix = poseStack.last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
-        RenderType beamType = LightsaberRenderTypes.BEAM;
-        VertexConsumer consumer = buffers.getBuffer(beamType);
-        boolean drew = false;
+        Map<UUID, Blade> blades = new HashMap<>();
         for (Player player : minecraft.level.players()) {
             // This blade is drawn later in the same frame, after its hand pose has been captured.
             if (player == minecraft.player && minecraft.options.getCameraType().isFirstPerson()) continue;
             if (!LightsaberItem.isActive(player)) {
                 continue;
             }
-            Blade blade = Blade.of(player, partialTick);
-            // A culled player may not have rendered a hilt; its blade can still enter the view.
-            Vec3 base = EMITTERS.getOrDefault(player.getUUID(), blade.base()).subtract(camera);
-            drawBlade(consumer, matrix, base, base.add(blade.direction()));
-            drew = true;
+            blades.put(player.getUUID(), Blade.of(player, partialTick));
         }
-        if (drew) {
-            buffers.endBatch(beamType);
+        LightsaberTrail.renderWorld(event, blades);
+        RenderType beamType = LightsaberRenderTypes.BEAM;
+        VertexConsumer consumer = buffers.getBuffer(beamType);
+        for (Blade blade : blades.values()) {
+            drawBlade(consumer, matrix, blade.base().subtract(camera), blade.tip().subtract(camera));
         }
+        buffers.endBatch(beamType);
     }
 
     /** Called immediately before vanilla clears scene depth for the first-person hand pass. */
     public static void prepareFirstPersonFrame() {
         firstPersonPrepared = false;
-        firstPersonEmitter = null;
+        firstPersonHilt = null;
+        firstPersonBlade = null;
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null
                 || !minecraft.options.getCameraType().isFirstPerson() || minecraft.options.hideGui
@@ -109,19 +104,17 @@ public final class LightsaberRenderer {
                 : null;
     }
 
-    static void captureEmitter(Player player, boolean firstPerson, Vec3 cameraRelativeEmitter) {
-        Vec3 worldEmitter = cameraRelativeEmitter.add(Minecraft.getInstance().gameRenderer.getMainCamera().getPosition());
-        if (firstPerson) {
-            if (firstPersonPrepared) firstPersonEmitter = worldEmitter;
-        } else {
-            EMITTERS.put(player.getUUID(), worldEmitter);
+    static void captureFirstPersonHilt(Matrix4f pose, Blade blade) {
+        if (firstPersonPrepared) {
+            firstPersonHilt = new Matrix4f(pose);
+            firstPersonBlade = blade;
         }
     }
 
-    /** After hands have flushed, draw against the preserved world depth using this frame's emitter pose. */
+    /** After hands have flushed, combine world and hilt depth before drawing the world blade. */
     public static void renderFirstPersonBeam(float partialTick) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (!firstPersonPrepared || firstPersonEmitter == null || sceneDepth == null
+        if (!firstPersonPrepared || firstPersonHilt == null || firstPersonBlade == null || sceneDepth == null
                 || minecraft.player == null || !LightsaberItem.isActive(minecraft.player)) return;
 
         RenderTarget main = minecraft.getMainRenderTarget();
@@ -134,17 +127,21 @@ public final class LightsaberRenderer {
         RenderSystem.setProjectionMatrix(WORLD_PROJECTION, VertexSorting.DISTANCE_TO_ORIGIN);
         try {
             MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
+            LightsaberItemRenderer.renderHiltDepth(minecraft.player.getMainHandItem(), firstPersonHilt,
+                    WORLD_VIEW, buffers);
             Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
-            Vec3 base = firstPersonEmitter.subtract(camera);
-            Vec3 direction = Blade.of(minecraft.player, partialTick).direction();
-            drawBlade(buffers.getBuffer(LightsaberRenderTypes.BEAM), WORLD_VIEW, base, base.add(direction));
+            LightsaberTrail.renderFirstPerson(minecraft.player, firstPersonBlade, partialTick,
+                    WORLD_VIEW, camera, buffers);
+            drawBlade(buffers.getBuffer(LightsaberRenderTypes.BEAM), WORLD_VIEW,
+                    firstPersonBlade.base().subtract(camera), firstPersonBlade.tip().subtract(camera));
             buffers.endBatch(LightsaberRenderTypes.BEAM);
         } finally {
             RenderSystem.setProjectionMatrix(handProjection, VertexSorting.DISTANCE_TO_ORIGIN);
             modelView.popMatrix();
             RenderSystem.applyModelViewMatrix();
             firstPersonPrepared = false;
-            firstPersonEmitter = null;
+            firstPersonHilt = null;
+            firstPersonBlade = null;
         }
     }
 
@@ -154,13 +151,14 @@ public final class LightsaberRenderer {
             sceneDepth = null;
         }
         firstPersonPrepared = false;
-        firstPersonEmitter = null;
+        firstPersonHilt = null;
+        firstPersonBlade = null;
     }
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip) {
-        prism(consumer, matrix, base, tip, 0.16, HALO);
-        prism(consumer, matrix, base, tip, 0.09, GLOW);
-        prism(consumer, matrix, base, tip, 0.03, CORE);
+        prism(consumer, matrix, base, tip, 0.065, HALO);
+        prism(consumer, matrix, base, tip, 0.035, GLOW);
+        prism(consumer, matrix, base, tip, 0.014, CORE);
     }
 
     /** A square prism of half-width {@code r}; the beam render type disables face culling. */

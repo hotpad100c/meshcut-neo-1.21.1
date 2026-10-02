@@ -18,10 +18,10 @@ public final class PieceFit {
     private static final double TOUCH_MARGIN = 0.15;
     /** A scratch is on one side of a group if at most this fraction of the group's cells are on the other. */
     private static final double SIDE_PURITY = 0.04;
-    private static final double VOLUME_TOLERANCE = 0.2;
-    private static final double MIN_VOLUME_TOLERANCE = 0.03;
-    /** Of the cells that are not part of the group, at most this fraction may lie inside the fitted shape. */
-    private static final double MAX_FOREIGN_FRACTION = 0.1;
+    /** Cells nearer than this to a plane (more than half a cell) may be on either side of it. */
+    private static final double AMBIGUOUS_DISTANCE = 0.1;
+    /** At most this fraction of the group's size may be cells the fitted shape gets wrong. */
+    private static final double MAX_WRONG_FRACTION = 0.05;
     /** Cells this close to a plane are on it: they belong to neither side, so they say nothing about the shape. */
     private static final double ON_PLANE = 1e-9;
 
@@ -74,26 +74,31 @@ public final class PieceFit {
             // otherwise the scratch runs through the group: it does not bound it
         }
 
-        double cellVolume = cells.size() / (double) CellGrid.CELLS;
-        double volume = Polytope.volume(planes);
-        if (Math.abs(volume - cellVolume) > Math.max(MIN_VOLUME_TOLERANCE, VOLUME_TOLERANCE * cellVolume)) {
-            return null;
-        }
-        int strays = 0;
-        for (int cell : foreign) {
+        // Does the shape the half-spaces make agree with the cells? Cells close to one of the planes may fall on
+        // either side (a plane through cell centres puts them anywhere), so they say nothing; the others must agree.
+        Set<Integer> members = new java.util.HashSet<>(cells);
+        int wrong = 0;
+        for (int cell = 0; cell < CellGrid.CELLS; cell++) {
+            if (grid.component(cell) < 0) {
+                continue;
+            }
             double[] c = CellGrid.centerOf(cell);
             boolean inside = true;
+            boolean ambiguous = false;
             for (CutPlane p : planes) {
-                if (p.signedDistance(c[0], c[1], c[2]) <= ON_PLANE) { // on a plane or beyond: not inside
+                double dist = p.signedDistance(c[0], c[1], c[2]);
+                if (Math.abs(dist) < AMBIGUOUS_DISTANCE) {
+                    ambiguous = true;
+                }
+                if (dist < 0) {
                     inside = false;
-                    break;
                 }
             }
-            if (inside) {
-                strays++;
+            if (!ambiguous && inside != members.contains(cell)) {
+                wrong++;
             }
         }
-        return strays > Math.max(2, MAX_FOREIGN_FRACTION * foreign.size()) ? null : planes;
+        return wrong > Math.max(2, MAX_WRONG_FRACTION * cells.size()) ? null : planes;
     }
 
     /**

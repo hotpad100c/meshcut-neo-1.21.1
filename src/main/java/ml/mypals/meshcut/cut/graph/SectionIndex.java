@@ -436,6 +436,22 @@ public final class SectionIndex {
         return false;
     }
 
+    /** A region box or a fragment, with the number of the group (within this section) it belongs to; for debug views. */
+    public record DebugNode(boolean region, int x0, int y0, int z0, int x1, int y1, int z1, int fragment, int group) {}
+
+    public List<DebugNode> debugNodes() {
+        List<DebugNode> out = new ArrayList<>();
+        int number = 0;
+        for (Group g : groups) {
+            for (Node node : g.nodes) {
+                out.add(new DebugNode(node.region, sx * SIZE + node.x0, sy * SIZE + node.y0, sz * SIZE + node.z0,
+                        sx * SIZE + node.x1, sy * SIZE + node.y1, sz * SIZE + node.z1, node.fragment, number));
+            }
+            number++;
+        }
+        return out;
+    }
+
     // ---------------------------------------------------------------- editing
 
     /**

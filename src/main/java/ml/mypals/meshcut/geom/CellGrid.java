@@ -20,6 +20,10 @@ public final class CellGrid {
     private static final int MIN_COMPONENT_CELLS = 4;
     /** How far past its edge a patch still blocks (the polygon is clipped exactly at the block's boundary). */
     private static final double EDGE_TOLERANCE = 0.03;
+    /** Within this distance of a cut (in blocks) a point on a face touches nothing: that is the slit the cut leaves. */
+    private static final double FACE_GAP = 0.03;
+    /** A face point belongs to a piece only if one of its cells is this close (a cell is 0.125 across). */
+    private static final double FACE_REACH = 0.14;
 
     /** Every cell is part of one piece: the block has no cuts. */
     public static final CellGrid FULL = new CellGrid();
@@ -37,18 +41,83 @@ public final class CellGrid {
         }
     }
 
-    private CellGrid(int[] components, int count, int[] sizes) {
+    private CellGrid(int[] components, int count, int[] sizes, List<CutPlane> real, List<List<CutPlane>> excluded,
+                     List<Patch> patches) {
         System.arraycopy(components, 0, comp, 0, CELLS);
         this.size = sizes;
         for (int axis = 0; axis < 3; axis++) {
             for (int a = 0; a < N; a++) {
                 for (int b = 0; b < N; b++) {
-                    int low = cell(axis, 0, a, b), high = cell(axis, N - 1, a, b);
-                    faces[axis * 2][a * N + b] = comp[high];
-                    faces[axis * 2 + 1][a * N + b] = comp[low];
+                    faces[axis * 2][a * N + b] = faceSample(axis, 1, a, b, real, excluded, patches);
+                    faces[axis * 2 + 1][a * N + b] = faceSample(axis, 0, a, b, real, excluded, patches);
                 }
             }
         }
+    }
+
+    /**
+     * Which piece the point on the block's face (the centre of face cell {@code (a, b)}) belongs to, or -1 if there is
+     * none there. Taken at the face itself rather than from the cell behind it: a cut that runs between the two
+     * would otherwise let a piece touch a neighbour it does not reach, and the two blocks on either side of a face
+     * would not agree where a slanted cut crosses it.
+     */
+    private int faceSample(int axis, int value, int a, int b, List<CutPlane> real, List<List<CutPlane>> excluded,
+                           List<Patch> patches) {
+        double[] q = new double[3];
+        int first = axis == 0 ? 1 : 0, second = axis == 2 ? 1 : 2;
+        q[axis] = value;
+        q[first] = (a + 0.5) / N;
+        q[second] = (b + 0.5) / N;
+        for (CutPlane p : real) {
+            if (p.signedDistance(q[0], q[1], q[2]) < -1e-6) {
+                return -1; // cut away
+            }
+        }
+        for (List<CutPlane> region : excluded) {
+            boolean gone = true;
+            for (CutPlane p : region) {
+                if (p.signedDistance(q[0], q[1], q[2]) <= 1e-9) {
+                    gone = false;
+                    break;
+                }
+            }
+            if (gone) {
+                return -1;
+            }
+        }
+        for (Patch patch : patches) { // within the slit a cut leaves, nothing touches
+            CutPlane p = patch.plane();
+            if (Math.abs(p.signedDistance(q[0], q[1], q[2])) < FACE_GAP
+                    && (patch.through() || patch.containsProjected(q[0], q[1], q[2], EDGE_TOLERANCE))) {
+                return -1;
+            }
+        }
+        // the closest cell of the piece that the point can be reached from without crossing a cut
+        int best = -1;
+        double bestDistance = FACE_REACH * FACE_REACH;
+        int depth = value == 1 ? N - 1 : 0;
+        int inward = value == 1 ? -1 : 1;
+        for (int layer = 0; layer < 2; layer++) {
+            for (int da = -1; da <= 1; da++) {
+                for (int db = -1; db <= 1; db++) {
+                    int ca = a + da, cb = b + db;
+                    if (ca < 0 || cb < 0 || ca >= N || cb >= N) {
+                        continue;
+                    }
+                    int index = cell(axis, depth + inward * layer, ca, cb);
+                    if (comp[index] < 0) {
+                        continue;
+                    }
+                    double[] c = center(index);
+                    double dist = (c[0] - q[0]) * (c[0] - q[0]) + (c[1] - q[1]) * (c[1] - q[1]) + (c[2] - q[2]) * (c[2] - q[2]);
+                    if (dist < bestDistance && !blocked(patches, q, c)) {
+                        bestDistance = dist;
+                        best = comp[index];
+                    }
+                }
+            }
+        }
+        return best;
     }
 
     /**
@@ -125,12 +194,16 @@ public final class CellGrid {
             }
         }
         // slivers were dropped but may have left their cells marked "visited"; they are simply empty now
-        return new CellGrid(components, next, java.util.Arrays.copyOf(sizes, next));
+        return new CellGrid(components, next, java.util.Arrays.copyOf(sizes, next), real, excluded, patches);
     }
 
     /** Whether some patch lies between the centres of two neighbouring cells. */
     private static boolean blocked(List<Patch> patches, int a, int b) {
-        double[] ca = center(a), cb = center(b);
+        return blocked(patches, center(a), center(b));
+    }
+
+    /** Whether some patch lies between the two points. */
+    private static boolean blocked(List<Patch> patches, double[] ca, double[] cb) {
         for (Patch patch : patches) {
             CutPlane p = patch.plane();
             double da = p.d() - (p.nx() * ca[0] + p.ny() * ca[1] + p.nz() * ca[2]);

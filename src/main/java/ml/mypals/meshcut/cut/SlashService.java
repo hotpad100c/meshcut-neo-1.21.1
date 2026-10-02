@@ -63,8 +63,6 @@ import java.util.function.Predicate;
 public final class SlashService {
     private static final double SAMPLE_STEP = 0.3;
     private static final int MAX_SAMPLES = 900;
-    /** Cuts remembered per block; beyond this the oldest is forgotten. */
-    private static final int MAX_PATCHES = 6;
     /**
      * Each side of a cut must have at least this much volume (in blocks), so the blade merely grazing a corner
      * of a block doesn't count as cutting it.
@@ -241,7 +239,7 @@ public final class SlashService {
         var container = SubLevelContainer.getContainer(level);
         Vec3 representative = sweeps.get(0).n();
 
-        Map<BlockPos, List<Fragment>> worldFragments = new LinkedHashMap<>();
+        Map<BlockPos, List<StrokeFit.Fragment>> worldFragments = new LinkedHashMap<>();
         for (Sweep sweep : sweeps) {
             Vector3d n = new Vector3d(sweep.n().x, sweep.n().y, sweep.n().z);
             Vector3d center = new Vector3d(sweep.center().x, sweep.center().y, sweep.center().z);
@@ -252,7 +250,7 @@ public final class SlashService {
             collect(worldFragments, n, center, quad, sweep.samples(), null,
                     cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell)));
         }
-        int staticBlocks = process(level, null, fitPatches(worldFragments), representative, mode, created);
+        int staticBlocks = process(level, null, StrokeFit.fitPatches(worldFragments), representative, mode, created);
 
         int cutLevels = 0;
         for (ServerSubLevel sub : subLevels) {
@@ -260,7 +258,7 @@ public final class SlashService {
                 continue;
             }
             Pose3dc pose = sub.logicalPose();
-            Map<BlockPos, List<Fragment>> fragments = new LinkedHashMap<>();
+            Map<BlockPos, List<StrokeFit.Fragment>> fragments = new LinkedHashMap<>();
             for (Sweep sweep : sweeps) {
                 Vector3d nl = pose.transformNormalInverse(new Vector3d(sweep.n().x, sweep.n().y, sweep.n().z));
                 if (nl.lengthSquared() < 1e-12) {
@@ -277,7 +275,7 @@ public final class SlashService {
                 collect(fragments, nl, center, quad, sweep.samples(), pose,
                         cell -> container != null && container.inBounds(cell) && !level.getBlockState(cell).isAir());
             }
-            if (process(level, sub, fitPatches(fragments), representative, mode, created) > 0) {
+            if (process(level, sub, StrokeFit.fitPatches(fragments), representative, mode, created) > 0) {
                 cutLevels++;
             }
         }
@@ -289,8 +287,6 @@ public final class SlashService {
     /** Smallest piece of a sweep inside a block (in square blocks) that counts. */
     private static final double MIN_FRAGMENT_AREA = 1e-3;
 
-    /** The part of one swept quad inside one block, in that block's frame. */
-    private record Fragment(Vector3d n, float[] polygon) {}
 
     /**
      * Cuts the swept quad up by the blocks it crosses.
@@ -298,7 +294,7 @@ public final class SlashService {
      * @param pose   the sub-level's pose if the quad was brought into its plot space (for the samples), else null
      * @param accept which positions may be cut in this frame
      */
-    private static void collect(Map<BlockPos, List<Fragment>> out, Vector3d n, Vector3d center, Vector3d[] quad,
+    private static void collect(Map<BlockPos, List<StrokeFit.Fragment>> out, Vector3d n, Vector3d center, Vector3d[] quad,
                                 List<Vec3> samples, @Nullable Pose3dc pose, Predicate<BlockPos> accept) {
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
@@ -328,6 +324,8 @@ public final class SlashService {
                 candidates.add(BlockPos.containing(local.x, local.y, local.z));
             }
         }
+        // which way the blade travelled across the quad
+        Vector3d motion = new Vector3d(quad[3]).sub(quad[0]).add(new Vector3d(quad[2]).sub(quad[1])).mul(0.5);
         double d = n.dot(center);
         for (BlockPos cell : candidates) {
             if (!accept.test(cell)) {
@@ -343,109 +341,8 @@ public final class SlashService {
             }
             float[] clipped = Patch.clipToCube(polygon);
             if (clipped.length >= 9 && Patch.area(clipped) > MIN_FRAGMENT_AREA) {
-                out.computeIfAbsent(cell.immutable(), k -> new ArrayList<>()).add(new Fragment(n, clipped));
+                out.computeIfAbsent(cell.immutable(), k -> new ArrayList<>()).add(new StrokeFit.Fragment(n, motion, clipped));
             }
-        }
-    }
-
-    /** How far a stroke's pieces inside a block may stray from one plane for them to count as one straight cut. */
-    private static final double STRAIGHT_TOLERANCE = 0.2;
-    /** The sharpest bend (as the cosine of the angle between normals) a stroke may take and still be one cut. */
-    private static final double STRAIGHT_COS = 0.87;
-    /** How far a stroke is stretched at its ends, so one that reaches a block's edge really reaches it. */
-    private static final double STROKE_PAD = 0.06;
-
-    /** One straight approximation of what was swept inside a block. */
-    private static final class Stroke {
-        final Vector3d normalSum = new Vector3d();
-        final List<float[]> points = new ArrayList<>();
-
-        Vector3d normal() {
-            return new Vector3d(normalSum).normalize();
-        }
-
-        double offset(Vector3d n) {
-            double sum = 0;
-            for (float[] p : points) {
-                sum += n.x * p[0] + n.y * p[1] + n.z * p[2];
-            }
-            return sum / points.size();
-        }
-
-        boolean accepts(Fragment f) {
-            Vector3d n = normal();
-            if (Math.abs(n.dot(f.n())) < STRAIGHT_COS) {
-                return false;
-            }
-            double d = offset(n);
-            float[] v = f.polygon();
-            for (int i = 0; i < v.length; i += 3) {
-                if (Math.abs(n.x * v[i] + n.y * v[i + 1] + n.z * v[i + 2] - d) > STRAIGHT_TOLERANCE) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        void add(Fragment f) {
-            if (normalSum.dot(f.n()) >= 0) {
-                normalSum.add(f.n());
-            } else {
-                normalSum.sub(f.n());
-            }
-            float[] v = f.polygon();
-            for (int i = 0; i < v.length; i += 3) {
-                points.add(new float[]{v[i], v[i + 1], v[i + 2]});
-            }
-        }
-    }
-
-    /**
-     * Turns what the blade swept inside each block into patches. A stroke that bends within a block is replaced by
-     * the straight cut that is its best fit, so a wavy path still cuts; one that bends too much, or crosses itself,
-     * becomes several cuts.
-     */
-    private static Map<BlockPos, List<Patch>> fitPatches(Map<BlockPos, List<Fragment>> fragments) {
-        Map<BlockPos, List<Patch>> out = new LinkedHashMap<>();
-        for (var entry : fragments.entrySet()) {
-            List<Stroke> strokes = new ArrayList<>();
-            for (Fragment f : entry.getValue()) {
-                Stroke home = null;
-                for (Stroke s : strokes) {
-                    if (s.accepts(f)) {
-                        home = s;
-                        break;
-                    }
-                }
-                if (home == null) {
-                    home = new Stroke();
-                    strokes.add(home);
-                }
-                home.add(f);
-            }
-            for (Stroke s : strokes) {
-                Vector3d n = s.normal();
-                CutPlane plane = new CutPlane(n.x, n.y, n.z, s.offset(n));
-                Patch patch = Patch.fromPoints(plane, s.points, STROKE_PAD);
-                if (patch != null) {
-                    mergeInto(out.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()), patch);
-                }
-            }
-        }
-        return out;
-    }
-
-    /** Adds a patch to a block's list, joining it to one it continues. */
-    private static void mergeInto(List<Patch> list, Patch patch) {
-        for (int i = 0; i < list.size(); i++) {
-            if (list.get(i).samePlane(patch)) {
-                list.set(i, list.get(i).union(patch));
-                return;
-            }
-        }
-        list.add(patch);
-        if (list.size() > MAX_PATCHES) {
-            list.remove(0);
         }
     }
 
@@ -534,7 +431,7 @@ public final class SlashService {
                     continue;
                 }
                 List<Patch> before = new ArrayList<>(merged);
-                mergeInto(merged, patch);
+                StrokeFit.mergeInto(merged, patch);
                 if (!merged.equals(before)) {
                     changed = true;
                     if (nl == null) { // which way the parts are pushed apart is judged by the first cut
@@ -579,6 +476,8 @@ public final class SlashService {
         // 2. which pieces are connected to which
         Map<Node, Integer> comp = new HashMap<>();
         Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp, applyUnsevered);
+
+        MeshCut.LOGGER.debug("Cut of {} blocks: {} structures not attached, {} pieces in total", hits.size(), closures.size(), comp.size());
 
         // 3.-5. who is severed and who moves; every piece that moves must be convex, or its block stays whole
         Plan attempted = null;
@@ -792,6 +691,8 @@ public final class SlashService {
                 }
                 List<CutPlane> planes = PieceFit.fit(info.grid, group.getValue(), info.piece.planes(), info.patches);
                 if (planes == null) {
+                    MeshCut.LOGGER.info("Cut block at {} has {} pieces but piece {} cannot be split off as a convex shape; it stays whole ({} cuts)",
+                            info.pos, info.grid.componentCount(), group.getValue(), info.patches.size());
                     return info;
                 }
                 Fit fit = new Fit(planes, planes.subList(info.piece.planes().size(), planes.size()));

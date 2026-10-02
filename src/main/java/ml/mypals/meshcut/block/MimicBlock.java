@@ -8,11 +8,13 @@ import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
+import ml.mypals.meshcut.cut.FragmentBreaking;
 import ml.mypals.meshcut.cut.SlashService;
 import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
@@ -22,6 +24,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -139,6 +142,25 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         if (level instanceof ServerLevel server) {
             SlashService.queueRecheck(server, pos);
         }
+    }
+
+    /**
+     * A block cut into several pieces is broken one piece at a time: only the piece being pointed at goes. (If it
+     * cannot be taken out on its own, the whole block is broken as usual.)
+     */
+    @Override
+    public boolean onDestroyedByPlayer(BlockState state, Level level, BlockPos pos, Player player, boolean willHarvest,
+                                       FluidState fluid) {
+        if (level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.grid().componentCount() >= 2) {
+            if (level instanceof ServerLevel server) {
+                if (FragmentBreaking.breakPointed(server, pos, be, player)) {
+                    return false; // the block stays, with one piece fewer
+                }
+            } else {
+                return false; // the server decides what goes; the block's new shape arrives from it
+            }
+        }
+        return super.onDestroyedByPlayer(state, level, pos, player, willHarvest, fluid);
     }
 
     @Override
