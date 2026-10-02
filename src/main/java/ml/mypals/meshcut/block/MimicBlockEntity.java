@@ -261,12 +261,14 @@ public class MimicBlockEntity extends BlockEntity {
 
     /** Gives off the light the imitated block does (see {@link MimicBlock#getLightEmission}). */
     private void updateLight() {
-        if (level == null || level.isClientSide) {
-            return; // stored on the server, synced to clients with the chunk
+        // On both sides: the client works out its own lighting, and the synced light data may come later than this
+        // block entity's data, so it sets the value itself and relights rather than wait.
+        if (level == null) {
+            return;
         }
         var light = level.getAuxLightManager(worldPosition);
         int emission = targetState.getLightEmission();
-        if (light != null && light.getLightAt(worldPosition) != emission) {
+        if (light != null && (light.getLightAt(worldPosition) != emission || (level.isClientSide && emission > 0))) {
             light.setLightAt(worldPosition, emission);
             level.getLightEngine().checkBlock(worldPosition);
         }
@@ -353,6 +355,7 @@ public class MimicBlockEntity extends BlockEntity {
         renderData = null;
         grid = null;
         version++;
+        updateLight();
         // Moved into a sub-level, or loaded with its chunk: the block was placed before this data arrived, so the
         // structure graph still thinks it is whole
         if (level instanceof ServerLevel server) {

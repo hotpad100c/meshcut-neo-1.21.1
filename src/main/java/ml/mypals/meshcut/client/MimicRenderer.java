@@ -37,7 +37,7 @@ import java.util.WeakHashMap;
  */
 public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     /** How long the glow on a fresh cut lasts. */
-    private static final double GLOW_TICKS = 160;
+    private static final double GLOW_TICKS = 1000;
 
     private record CacheEntry(int version, Map<RenderType, List<MeshPoly>> byType) {}
 

@@ -42,6 +42,9 @@ public class MeshCut {
 
     public static final DeferredBlock<MimicBlock> MIMIC_BLOCK = BLOCKS.registerBlock("mimic",
             MimicBlock::new, BlockBehaviour.Properties.of().strength(1.5f).noOcclusion()
+                    // glows like what it imitates (magma, for instance, is drawn at full brightness)
+                    .emissiveRendering((state, level, pos) -> level.getBlockEntity(pos) instanceof ml.mypals.meshcut.block.MimicBlockEntity be
+                            && !(be.getTargetState().getBlock() instanceof MimicBlock) && be.getTargetState().emissiveRendering(level, pos))
                     // the shape depends on the block entity; without this vanilla caches one shape per state
                     .dynamicShape());
 

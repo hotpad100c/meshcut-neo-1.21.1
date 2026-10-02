@@ -217,7 +217,7 @@ public final class MimicMesh {
      * The pieces the cuts that go right through divide the block into: exactly the ones the server separates (see
      * {@link Arrangement}), each pulled back from the cuts by half the width of the slit between them.
      */
-    private static List<List<CutPlane>> regionPlanes(MimicRenderData data) {
+    public static List<List<CutPlane>> regionPlanes(MimicRenderData data) {
         List<List<CutPlane>> pieces = Arrangement.pieces(data.planes(), data.patches());
         int real = data.planes().size();
         List<List<CutPlane>> out = new ArrayList<>(pieces.size());
