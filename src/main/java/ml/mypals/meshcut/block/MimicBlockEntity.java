@@ -3,11 +3,15 @@ package ml.mypals.meshcut.block;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
+import ml.mypals.meshcut.cut.graph.BlockNodes;
+import ml.mypals.meshcut.cut.graph.WorldGraphs;
+import ml.mypals.meshcut.geom.CellGrid;
 import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.nbt.DoubleTag;
 import net.minecraft.nbt.FloatTag;
 import net.minecraft.nbt.ListTag;
@@ -56,6 +60,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     /** Snapshot for the client's block model; rebuilt lazily after every change. */
     private volatile MimicRenderData renderData;
+    private CellGrid grid;
 
     /** What Sable's mass tracker needs to know about this block: the block it weighs like, how much of it is left, where. */
     public record MassSnapshot(BlockState target, double volumeFraction, Vector3dc centerOfMass) {}
@@ -241,11 +246,30 @@ public class MimicBlockEntity extends BlockEntity {
 
     private void changed() {
         renderData = null;
+        grid = null;
         version++;
         setChanged();
         if (level != null) {
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+            if (level instanceof ServerLevel server) {
+                WorldGraphs.onNodesChanged(server, worldPosition);
+            }
         }
+    }
+
+    /** The pieces this block's cuts have divided it into (cached until the cuts change). */
+    public CellGrid grid() {
+        CellGrid g = grid;
+        if (g == null) {
+            g = CellGrid.of(planes, excluded, patches);
+            grid = g;
+        }
+        return g;
+    }
+
+    /** What this block contributes to the connectivity of the structure it is in. */
+    public BlockNodes nodes() {
+        return BlockNodes.of(grid(), false);
     }
 
     @Override
@@ -312,6 +336,7 @@ public class MimicBlockEntity extends BlockEntity {
         glowStart = tag.contains("glowStart") ? tag.getLong("glowStart") : NEVER;
         capMode = CapMode.byOrdinal(tag.contains("cap") ? tag.getByte("cap") : CapMode.LAVA.ordinal());
         renderData = null;
+        grid = null;
         version++;
         // When a chunk arrives, the block entity is created first and filled from the chunk data afterwards, and no
         // hook tells the model data manager about it. Without this the block's model data stays empty and it is

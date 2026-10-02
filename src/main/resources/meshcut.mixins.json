@@ -3,10 +3,14 @@
   "package": "ml.mypals.meshcut.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "LevelChunkMixin",
     "MassTrackerMixin",
     "PhysicsBlockPropertyHelperMixin",
     "RapierPhysicsPipelineMixin",
     "VoxelNeighborhoodStateMixin"
+  ],
+  "client": [
+    "LightsaberGameRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1

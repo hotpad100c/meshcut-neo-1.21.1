@@ -47,6 +47,35 @@ public final class Patch {
         return coverage >= THROUGH_COVERAGE ? full(plane) : new Patch(plane, clipped, false);
     }
 
+    /**
+     * The cut that approximates a bent stroke: all the given points, projected onto the plane and grown by
+     * {@code pad} on every side (so that a stroke that reaches the edge of the block really reaches it), as one
+     * patch.
+     *
+     * @return {@code null} if nothing of it is inside the block
+     */
+    public static Patch fromPoints(CutPlane plane, List<float[]> points, double pad) {
+        double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
+        double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
+        double tx = hy * nz, ty = -hx * nz, tz = hx * ny - hy * nx;
+        double tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        tx /= tl;
+        ty /= tl;
+        tz /= tl;
+        double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
+        List<float[]> grown = new ArrayList<>(points.size() * 4);
+        for (float[] p : points) {
+            double dist = plane.d() - (nx * p[0] + ny * p[1] + nz * p[2]);
+            double px = p[0] + nx * dist, py = p[1] + ny * dist, pz = p[2] + nz * dist;
+            for (int s = 0; s < 4; s++) {
+                double a = (s & 1) == 0 ? pad : -pad, b = (s & 2) == 0 ? pad : -pad;
+                grown.add(new float[]{(float) (px + tx * a + bx * b), (float) (py + ty * a + by * b), (float) (pz + tz * a + bz * b)});
+            }
+        }
+        float[] hull = new Patch(plane, new float[0], false).hull(grown);
+        return hull.length < 9 ? null : of(plane, hull);
+    }
+
     /** A patch from stored data. */
     public static Patch restore(CutPlane plane, float[] polygon, boolean through) {
         return new Patch(plane, polygon, through);

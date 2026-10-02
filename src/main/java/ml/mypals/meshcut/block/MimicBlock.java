@@ -129,15 +129,14 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     }
 
     /**
-     * A block that has been cut but stayed whole is only held by its surroundings. When one of them changes, check
-     * whether it still holds.
+     * A cut block may be held up only by what is around it. When a neighbour changes, check whether it still holds.
+     * (The structure graph also asks for a check when an edit splits a group; this catches neighbours across sections.)
      */
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos,
                                    boolean movedByPiston) {
         super.neighborChanged(state, level, pos, neighborBlock, neighborPos, movedByPiston);
-        if (level instanceof ServerLevel server && server.getBlockEntity(pos) instanceof MimicBlockEntity be
-                && !be.getPatches().isEmpty()) {
+        if (level instanceof ServerLevel server) {
             SlashService.queueRecheck(server, pos);
         }
     }
