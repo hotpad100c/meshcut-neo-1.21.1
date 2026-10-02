@@ -479,9 +479,8 @@ public final class SlashService {
                                Vector3d nl, double dl, Vec3 nWorld, int[] created, boolean applyUnsevered) {
         // 2. which pieces are connected to which
         Map<Node, Integer> comp = new HashMap<>();
-        Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp, applyUnsevered);
+        Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp);
 
-        MeshCut.LOGGER.debug("Cut of {} blocks: {} structures not attached, {} pieces in total", hits.size(), closures.size(), comp.size());
 
         // 3.-5. who is severed and who moves; every piece that moves must be convex, or its block stays whole
         Plan attempted = null;
@@ -495,7 +494,7 @@ public final class SlashService {
             }
             unfit.whole = true; // it cannot come apart into convex pieces: it stays one piece
             comp.clear();
-            closures = components(dom, hits, comp, applyUnsevered);
+            closures = components(dom, hits, comp);
             attempted = null;
         }
         if (attempted == null) {
@@ -545,7 +544,7 @@ public final class SlashService {
                 }
             }
             if (!stayingGroups.isEmpty()) {
-                List<Patch> kept = PieceFit.remaining(info.grid, stayingCells, info.patches, List.of());
+                List<Patch> kept = PieceFit.remainingStaying(info.grid, stayingCells, info.patches, usedByMovers);
                 specs.computeIfAbsent(stayingGroups.iterator().next(), k -> new ArrayList<>())
                         .add(new Spec(info.pos, info, info.piece.planes(), holes, kept));
             }
@@ -563,12 +562,31 @@ public final class SlashService {
         // If nothing would be left in the sub-level while the others move out, Sable would discard it on the spot.
         BlockPos placeholder = null;
         if (sub != null) {
-            // the biggest part of the sub-level stays, or something attached to more than we followed does
-            boolean survivor = false;
-            for (int id : comp.values()) {
-                if (!plan.movers().contains(id)) {
-                    survivor = true;
-                    break;
+            // Something attached to more than we followed certainly stays. Otherwise a block stays only if it is in a
+            // part that stays and is not itself being split: a split block is taken away whole with the part that
+            // leaves and only put back (as the piece that stays) after the move, so for that moment it is not there.
+            boolean survivor = comp.containsValue(HUGE);
+            if (!survivor) {
+                Set<BlockPos> leaving = new HashSet<>();
+                for (int id : plan.movers()) {
+                    for (long p : plan.closures().get(id).positions()) {
+                        leaving.add(BlockPos.of(p));
+                    }
+                }
+                Set<BlockPos> split = new HashSet<>();
+                plan.severed().keySet().forEach(info -> split.add(info.pos));
+                search:
+                for (var entry : plan.closures().entrySet()) {
+                    if (plan.movers().contains(entry.getKey())) {
+                        continue;
+                    }
+                    for (long p : entry.getValue().positions()) {
+                        BlockPos at = BlockPos.of(p);
+                        if (!leaving.contains(at) && !split.contains(at)) {
+                            survivor = true;
+                            break search;
+                        }
+                    }
                 }
             }
             if (!survivor) {
@@ -596,6 +614,10 @@ public final class SlashService {
             }
             for (Spec spec : specs.getOrDefault(id, List.of())) {
                 place(level, spec.info(), spec.planes(), spec.excluded(), spec.patches(), beTags);
+            }
+            if (sub != null && sub.isRemoved()) {
+                MeshCut.LOGGER.warn("The sub-level being cut was removed while its pieces were moved out; {} blocks could not follow", positions.size());
+                break;
             }
             ServerSubLevel moved = CutService.assemble(level, positions);
             if (moved != null) {
@@ -802,22 +824,19 @@ public final class SlashService {
 
     /**
      * Finds out which structure each piece of the cut blocks belongs to, using the world's structure graph. The cut
-     * blocks are looked at as they would be after the cut (the world still holds them as they were).
+     * blocks are always taken as they are described here (as the cut would leave them, or as they are now when
+     * re-examined), not as the graph remembers them: what the graph knows of a block can lag behind (a block entity
+     * whose data arrived after the block was placed, for instance).
      *
-     * @param overlay whether the blocks are to be taken as the cut would leave them; if not they are read from the
-     *                world, which lets the graph answer from what it already knows
      * @param comp    receives, for every piece of the cut blocks, its structure's id ({@link #HUGE} for everything
      *                attached to more than the search was willing to follow)
      * @return the structures that are not attached, by id
      */
-    private static Map<Integer, StructureGraph.Closure> components(Domain dom, List<Info> hits, Map<Node, Integer> comp,
-                                                                  boolean overlay) {
+    private static Map<Integer, StructureGraph.Closure> components(Domain dom, List<Info> hits, Map<Node, Integer> comp) {
         Map<Long, BlockNodes> over = new HashMap<>();
         List<StructureGraph.NodeRef> seeds = new ArrayList<>();
         for (Info hit : hits) {
-            if (overlay || hit.whole) {
-                over.put(StructureGraph.pack(hit.pos.getX(), hit.pos.getY(), hit.pos.getZ()), BlockNodes.of(hit.grid, hit.whole));
-            }
+            over.put(StructureGraph.pack(hit.pos.getX(), hit.pos.getY(), hit.pos.getZ()), BlockNodes.of(hit.grid, hit.whole));
             for (Node seed : seedsOf(dom, hit)) {
                 seeds.add(new StructureGraph.NodeRef(seed.pos().getX(), seed.pos().getY(), seed.pos().getZ(), seed.node()));
             }

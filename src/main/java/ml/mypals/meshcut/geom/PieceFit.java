@@ -141,6 +141,39 @@ public final class PieceFit {
         return kept;
     }
 
+    /**
+     * The scratches a piece that stays keeps, after parts of the block left (those parts were bounded by
+     * {@code hole}). A scratch that bounded what left still divides what is left only if the staying cells lie on
+     * both sides of it; if they are all on one side it has nothing to separate any more, and keeping it would only
+     * draw a slit (and a face of the hole) beside the cut.
+     */
+    public static List<Patch> remainingStaying(CellGrid grid, Set<Integer> group, List<Patch> patches, List<CutPlane> hole) {
+        List<Patch> kept = new ArrayList<>();
+        for (Patch patch : remaining(grid, group, patches, List.of())) {
+            if (isBounding(patch.plane(), hole)) {
+                int positive = 0, negative = 0;
+                for (int i = 0; i < CellGrid.CELLS; i++) {
+                    int c = grid.component(i);
+                    if (c >= 0 && group.contains(c)) {
+                        double[] x = CellGrid.centerOf(i);
+                        double d = patch.plane().signedDistance(x[0], x[1], x[2]);
+                        if (d > 0.1) {
+                            positive++;
+                        } else if (d < -0.1) {
+                            negative++;
+                        }
+                    }
+                }
+                if (positive == 0 || negative == 0) {
+                    continue;
+                }
+            }
+            kept.add(patch);
+        }
+        return kept;
+    }
+
+    /** Whether the plane is one of the planes (or the same plane turned around). */
     private static boolean isBounding(CutPlane plane, List<CutPlane> bounding) {
         for (CutPlane b : bounding) {
             double dot = plane.nx() * b.nx() + plane.ny() * b.ny() + plane.nz() * b.nz();

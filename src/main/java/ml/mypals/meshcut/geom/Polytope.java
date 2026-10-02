@@ -18,6 +18,39 @@ public final class Polytope {
     private static final List<MeshPoly> CUBE = buildCube();
     private static final float[] DUMMY_UV = {0, 0, 1, 1};
 
+    /**
+     * The faces of the unit cube clipped by the planes, caps included, each as {x, y, z} per vertex in turn.
+     */
+    public static List<float[]> faces(List<CutPlane> planes) {
+        List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));
+        boundary.addAll(CapBuilder.build(CUBE, planes, DUMMY_UV));
+        List<float[]> out = new ArrayList<>();
+        for (MeshPoly poly : boundary) {
+            float[] v = poly.verts();
+            int n = poly.vertexCount();
+            float[] flat = new float[n * 3];
+            for (int i = 0; i < n; i++) {
+                flat[i * 3] = v[i * MeshPoly.STRIDE];
+                flat[i * 3 + 1] = v[i * MeshPoly.STRIDE + 1];
+                flat[i * 3 + 2] = v[i * MeshPoly.STRIDE + 2];
+            }
+            out.add(flat);
+        }
+        return out;
+    }
+
+    /** The faces of the unit cube clipped by the planes, caps included. */
+    public static List<MeshPoly> faceMeshes(List<CutPlane> planes) {
+        List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));
+        boundary.addAll(CapBuilder.build(CUBE, planes, DUMMY_UV));
+        return boundary;
+    }
+
+    /** The six faces of the unit cube, as a closed solid. */
+    public static List<MeshPoly> cube() {
+        return CUBE;
+    }
+
     /** Volume of the unit cube clipped by the given planes. */
     public static double volume(List<CutPlane> planes) {
         List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));

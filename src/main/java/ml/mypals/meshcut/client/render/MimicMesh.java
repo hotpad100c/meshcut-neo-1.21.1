@@ -5,8 +5,8 @@ import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
 import ml.mypals.meshcut.geom.Polytope;
+import ml.mypals.meshcut.geom.Arrangement;
 import ml.mypals.meshcut.geom.CapBuilder;
-import ml.mypals.meshcut.geom.Grooves;
 import ml.mypals.meshcut.geom.Patch;
 import ml.mypals.meshcut.geom.MeshClipper;
 import ml.mypals.meshcut.geom.MeshPoly;
@@ -44,8 +44,6 @@ public final class MimicMesh {
     /** Width, in blocks, of the slit that marks a cut that has not separated anything yet. */
     private static final double SLIT_WIDTH = 0.08;
     /** At most this many pending cuts are drawn (a block cannot hold more). */
-    private static final int MAX_SLITS = 6;
-    private static final double MIN_REGION_VOLUME = 0.002;
 
     private static final Map<MimicRenderData, MimicMesh> CACHE = new ConcurrentHashMap<>();
     private static final Map<MimicRenderData, List<MeshPoly>> GLOW = new ConcurrentHashMap<>();
@@ -73,6 +71,74 @@ public final class MimicMesh {
                 }
             }
         }
+    }
+
+    /**
+     * Everything the mesh of a cut block is made of, as text, for debugging: for each piece (region) the model faces,
+     * cut faces and hole walls before baking, with their vertices and normals; then every baked quad.
+     */
+    public static String describe(MimicRenderData data) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("target ").append(data.target()).append('\n');
+        sb.append("planes ").append(data.planes()).append('\n');
+        sb.append("excluded ").append(data.excluded()).append('\n');
+        sb.append("patches ").append(data.patches()).append('\n');
+        if (ModelCapturer.hasBlockEntityRenderer(data.target())) {
+            return sb.append("(drawn by a block entity renderer)\n").toString();
+        }
+        ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
+        List<MeshPoly> capBase = capBase(model.opaque(), data.target());
+        sb.append("cut faces from ").append(capBase == Polytope.cube() ? "the unit cube" : "the model").append('\n');
+        List<List<CutPlane>> regions = regionPlanes(data);
+        for (int r = 0; r < regions.size(); r++) {
+            List<CutPlane> region = regions.get(r);
+            sb.append("\n== piece ").append(r).append(" planes ").append(region).append('\n');
+            int index = 0;
+            for (var entry : model.byChunkType().entrySet()) {
+                List<MeshPoly> clipped = MeshClipper.clip(entry.getValue(), region);
+                for (List<CutPlane> hole : data.excluded()) {
+                    clipped = MeshClipper.subtract(clipped, hole);
+                }
+                for (MeshPoly p : clipped) {
+                    describe(sb, "model " + entry.getKey() + " #" + index++, p);
+                }
+            }
+            index = 0;
+            for (MeshPoly p : cutCaps(capBase, region, data.excluded(), model.particleUv(), model.particle())) {
+                describe(sb, "cut face #" + index++, p);
+            }
+            index = 0;
+            for (MeshPoly p : holeFaces(capBase, region, data.excluded(), model.particleUv(), model.particle())) {
+                describe(sb, "hole wall #" + index++, p);
+            }
+        }
+        sb.append("\n== baked quads\n");
+        MimicMesh mesh = of(data);
+        mesh.byLayer.forEach((layer, sides) -> {
+            for (int side = 0; side < sides.length; side++) {
+                for (BakedQuad q : sides[side]) {
+                    int[] v = q.getVertices();
+                    int stride = v.length / 4;
+                    sb.append(layer).append(" side ").append(side == SIDES - 1 ? "none" : Direction.from3DDataValue(side))
+                            .append(" dir ").append(q.getDirection()).append(" :");
+                    for (int i = 0; i < 4; i++) {
+                        sb.append(String.format(" (%.4f %.4f %.4f)", Float.intBitsToFloat(v[i * stride]),
+                                Float.intBitsToFloat(v[i * stride + 1]), Float.intBitsToFloat(v[i * stride + 2])));
+                    }
+                    sb.append('\n');
+                }
+            }
+        });
+        return sb.toString();
+    }
+
+    private static void describe(StringBuilder sb, String what, MeshPoly p) {
+        sb.append(what).append(String.format(" normal (%.3f %.3f %.3f) cull %d :", p.nx(), p.ny(), p.nz(), p.cullFace()));
+        float[] v = p.verts();
+        for (int i = 0; i < p.vertexCount(); i++) {
+            sb.append(String.format(" (%.4f %.4f %.4f)", v[i * MeshPoly.STRIDE], v[i * MeshPoly.STRIDE + 1], v[i * MeshPoly.STRIDE + 2]));
+        }
+        sb.append('\n');
     }
 
     public static MimicMesh of(MimicRenderData data) {
@@ -122,17 +188,7 @@ public final class MimicMesh {
 
         Map<RenderType, List<MeshPoly>> clipped = new LinkedHashMap<>();
         for (List<CutPlane> region : regionPlanes(data)) {
-            addPiece(clipped, model, region, data.excluded());
-        }
-        if (!data.excluded().isEmpty()) {
-            clipped.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>())
-                    .addAll(holeFaces(model.opaque(), data.planes(), data.excluded(), model.particleUv(), model.particle()));
-        }
-        // scratches that stop midway show where they reach the outside of the block
-        float[] uv = model.particleUv();
-        for (Patch patch : data.patches()) {
-            clipped.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>())
-                    .addAll(Grooves.of(patch, uv, model.particle(), SCRATCH_ARGB, 0));
+            addPiece(clipped, model, capBase(model.opaque(), data.target()), region, data.excluded());
         }
 
         Map<RenderType, List<BakedQuad>[]> byLayer = new LinkedHashMap<>();
@@ -159,38 +215,26 @@ public final class MimicMesh {
      * divide it into. Each region is pulled back from every pending cut by half a slit, so a gap shows where the
      * block was cut.
      */
+    /**
+     * The pieces the cuts that go right through divide the block into: exactly the ones the server separates (see
+     * {@link Arrangement}), each pulled back from the cuts by half the width of the slit between them.
+     */
     private static List<List<CutPlane>> regionPlanes(MimicRenderData data) {
-        List<CutPlane> pending = new ArrayList<>();
-        for (Patch patch : data.patches()) {
-            if (patch.through() && pending.size() < MAX_SLITS) {
-                pending.add(patch.plane());
+        List<List<CutPlane>> pieces = Arrangement.pieces(data.planes(), data.patches());
+        int real = data.planes().size();
+        List<List<CutPlane>> out = new ArrayList<>(pieces.size());
+        for (List<CutPlane> piece : pieces) {
+            List<CutPlane> shrunk = new ArrayList<>(piece.subList(0, real));
+            for (CutPlane cut : piece.subList(real, piece.size())) {
+                shrunk.add(new CutPlane(cut.nx(), cut.ny(), cut.nz(), cut.d() - SLIT_WIDTH / 2));
             }
+            out.add(shrunk);
         }
-        if (pending.isEmpty()) {
-            return List.of(data.planes());
-        }
-        // one cut at a time, dropping empty combinations of sides as they appear
-        List<List<CutPlane>> regions = new ArrayList<>();
-        regions.add(new ArrayList<>(data.planes()));
-        for (CutPlane cut : pending) {
-            List<List<CutPlane>> next = new ArrayList<>();
-            for (List<CutPlane> region : regions) {
-                for (int side = 0; side < 2; side++) {
-                    CutPlane half = side == 1 ? cut.flipped() : cut;
-                    List<CutPlane> split = new ArrayList<>(region);
-                    split.add(new CutPlane(half.nx(), half.ny(), half.nz(), half.d() - SLIT_WIDTH / 2));
-                    if (Polytope.volume(split) >= MIN_REGION_VOLUME) {
-                        next.add(split);
-                    }
-                }
-            }
-            regions = next;
-        }
-        return regions;
+        return out;
     }
 
     /** The model clipped by {@code planes}, with the plain cut faces added. */
-    private static void addPiece(Map<RenderType, List<MeshPoly>> into, ModelCapturer.ModelMesh model, List<CutPlane> planes,
+    private static void addPiece(Map<RenderType, List<MeshPoly>> into, ModelCapturer.ModelMesh model, List<MeshPoly> capBase, List<CutPlane> planes,
                                  List<List<CutPlane>> excluded) {
         model.byChunkType().forEach((type, polys) -> {
             List<MeshPoly> clipped = MeshClipper.clip(polys, planes);
@@ -199,7 +243,8 @@ public final class MimicMesh {
             }
             into.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
         });
-        List<MeshPoly> caps = cutCaps(model.opaque(), planes, excluded, model.particleUv(), model.particle());
+        List<MeshPoly> caps = new ArrayList<>(cutCaps(capBase, planes, excluded, model.particleUv(), model.particle()));
+        caps.addAll(holeFaces(capBase, planes, excluded, model.particleUv(), model.particle()));
         if (!caps.isEmpty()) {
             into.computeIfAbsent(RenderType.cutout(), k -> new ArrayList<>()).addAll(caps);
         }
@@ -215,12 +260,37 @@ public final class MimicMesh {
                 caps = MeshClipper.subtract(caps, region);
             }
         }
-        return caps;
+        return withinBlock(caps);
     }
 
     /**
-     * The faces around the parts that were cut out of the block, turned to face into the hole. Made once for the
-     * whole block (not once for each of the regions the scratches divide it into), within the block's real cuts.
+     * What the cut faces are made from. A block whose collision shape is a whole cube is cut open as a plain cube:
+     * the section of its model can be unreliable (models made of several shells, or with inner faces, give loops that
+     * do not close), and a cube's section is exact. Other blocks use their own model.
+     */
+    private static List<MeshPoly> capBase(List<MeshPoly> opaque, net.minecraft.world.level.block.state.BlockState target) {
+        for (double[] b : ml.mypals.meshcut.block.MimicShapes.targetBoxes(target)) {
+            if (b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6) {
+                return Polytope.cube();
+            }
+        }
+        return opaque;
+    }
+
+    /** The six half-spaces of the unit cube. */
+    private static final List<CutPlane> CUBE = List.of(
+            new CutPlane(-1, 0, 0, 0), new CutPlane(1, 0, 0, 1), new CutPlane(0, -1, 0, 0),
+            new CutPlane(0, 1, 0, 1), new CutPlane(0, 0, -1, 0), new CutPlane(0, 0, 1, 1));
+
+    /** Faces made here (not taken from the model) never leave the block, whatever the geometry they came from. */
+    private static List<MeshPoly> withinBlock(List<MeshPoly> faces) {
+        return faces.isEmpty() ? faces : MeshClipper.clip(faces, CUBE);
+    }
+
+    /**
+     * The faces around the parts that were cut out of the block, turned to face into the hole, within one piece:
+     * a piece is pulled back from the cuts by the slit, and a wall must stop where its piece stops, or it is left
+     * standing alone in the slit.
      */
     private static List<MeshPoly> holeFaces(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
                                             float[] uv, Object sprite) {
@@ -233,10 +303,16 @@ public final class MimicMesh {
                         others.add(region.get(k));
                     }
                 }
-                faces.addAll(CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite));
+                List<MeshPoly> wall = CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite);
+                for (List<CutPlane> other : excluded) { // nothing is behind a wall where another part was cut out too
+                    if (other != region && !wall.isEmpty()) {
+                        wall = MeshClipper.subtract(wall, other);
+                    }
+                }
+                faces.addAll(wall);
             }
         }
-        return faces;
+        return withinBlock(faces);
     }
 
     /**
@@ -253,20 +329,16 @@ public final class MimicMesh {
             List<MeshPoly> opaque = ModelCapturer.hasBlockEntityRenderer(data.target())
                     ? ModelCapturer.capture(data.target(), data.beTag()).opaque()
                     : ModelCapturer.captureModel(data.target()).opaque();
+            opaque = capBase(opaque, data.target());
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
             for (List<CutPlane> region : regionPlanes(data)) {
-                if (!region.isEmpty()) {
-                    for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
-                        out.add(glowOf(cap));
-                    }
+                for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
+                    out.add(glowOf(cap));
                 }
-            }
-            for (MeshPoly face : holeFaces(opaque, data.planes(), data.excluded(), uv, lava)) {
-                out.add(glowOf(face));
-            }
-            for (Patch patch : data.patches()) {
-                out.addAll(Grooves.of(patch, uv, lava, GLOW_ARGB, 15));
+                for (MeshPoly face : holeFaces(opaque, region, data.excluded(), uv, lava)) {
+                    out.add(glowOf(face));
+                }
             }
         }
         if (GLOW.size() >= MAX_CACHED) {

@@ -11,7 +11,15 @@ import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.cut.graph.BlockNodes;
 import ml.mypals.meshcut.cut.graph.BlockSource;
 import ml.mypals.meshcut.cut.graph.SectionIndex;
+import ml.mypals.meshcut.block.MimicShapes;
+import ml.mypals.meshcut.cut.CutPlane;
+import ml.mypals.meshcut.geom.Arrangement;
+import ml.mypals.meshcut.geom.CapBuilder;
 import ml.mypals.meshcut.geom.CellGrid;
+import ml.mypals.meshcut.geom.MeshClipper;
+import ml.mypals.meshcut.geom.MeshPoly;
+import ml.mypals.meshcut.geom.FragmentPick;
+import ml.mypals.meshcut.geom.Polytope;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.InteractionHand;
@@ -47,6 +55,8 @@ public final class FragmentDebugRenderer {
     private static final float FRAGMENT_ALPHA = 0.38f;
     /** How far (in blocks) the drawn faces stand off the surface they lie on. */
     private static final float LIFT = 0.006f;
+    /** The gap the model leaves between pieces, in blocks (as in the mesh). */
+    private static final float SLIT = 0.08f;
 
     /** The colours fragments (and groups) take, in turn. */
     private static final float[][] PALETTE = {
@@ -107,7 +117,7 @@ public final class FragmentDebugRenderer {
     // ---------------------------------------------------------------- picking a block
 
     /** A group picked with an empty-handed right click: the boxes it is made of, and how to draw them. */
-    private record Highlight(ClientSubLevel sub, List<int[]> boxes, float[] color, float alpha) {}
+    private record Highlight(ClientSubLevel sub, List<int[]> boxes, List<double[]> exact, float[] color, float alpha) {}
 
     private static final List<Highlight> HIGHLIGHTS = new ArrayList<>();
     private static long highlightUntil;
@@ -120,12 +130,20 @@ public final class FragmentDebugRenderer {
     @SubscribeEvent
     public static void onRightClick(PlayerInteractEvent.RightClickBlock event) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (!event.getLevel().isClientSide() || event.getHand() != InteractionHand.MAIN_HAND || !event.getItemStack().isEmpty()
+        if (!event.getLevel().isClientSide() || event.getHand() != InteractionHand.MAIN_HAND
                 || !(event.getLevel() instanceof ClientLevel level) || !enabled(minecraft)) {
+            return;
+        }
+        boolean fragmentMode = net.minecraft.client.gui.screens.Screen.hasControlDown();
+        if (!fragmentMode && !event.getItemStack().isEmpty()) {
             return;
         }
         event.setCanceled(true); // looking, not opening doors
         BlockSource source = sourceOf(level);
+        if (fragmentMode) {
+            showFragment(level, source, event.getPos(), minecraft);
+            return;
+        }
         java.util.Map<Long, SectionIndex> sections = new java.util.HashMap<>();
         java.util.function.Function<int[], SectionIndex> lookup = at -> {
             long key = ((long) at[0] & 0x3FFFFF) << 42 | ((long) at[2] & 0x3FFFFF) << 20 | (at[1] & 0xFFFFF);
@@ -147,7 +165,23 @@ public final class FragmentDebugRenderer {
                 }
             }
         }
-        List<SectionIndex.Group> mine = home.groupsAt(SectionIndex.cell(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15));
+        // the group of the piece looked at (a cut block's other pieces may be in other groups)
+        int cell = SectionIndex.cell(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15);
+        List<SectionIndex.Group> mine = home.groupsAt(cell);
+        if (level.getBlockEntity(pos) instanceof MimicBlockEntity mimic) {
+            Vec3 eye = minecraft.player.getEyePosition();
+            Vec3 look = minecraft.player.getLookAngle();
+            if (sub != null) {
+                eye = sub.renderPose(1f).transformPositionInverse(eye);
+                look = sub.renderPose(1f).transformNormalInverse(look);
+            }
+            int fragment = FragmentPick.pick(mimic.grid(), new double[]{eye.x - pos.getX(), eye.y - pos.getY(), eye.z - pos.getZ()},
+                    new double[]{look.x, look.y, look.z});
+            SectionIndex.Group g = fragment < 0 ? null : home.groupOf(cell, fragment);
+            if (g != null) {
+                mine = List.of(g);
+            }
+        }
         List<SectionIndex.Group> others = new ArrayList<>();
         for (SectionIndex.Group g : mine) {
             for (SectionIndex.Group n : g.section().neighbourGroups(g, lookup)) {
@@ -157,20 +191,99 @@ public final class FragmentDebugRenderer {
             }
         }
         for (SectionIndex.Group g : mine) {
-            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), new float[]{1f, 1f, 1f}, 0.35f));
+            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), List.of(), new float[]{1f, 1f, 1f}, 0.35f));
         }
         for (SectionIndex.Group g : others) {
-            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), new float[]{1f, 0.85f, 0.1f}, 0.3f));
+            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), List.of(), new float[]{1f, 0.85f, 0.1f}, 0.3f));
         }
         highlightUntil = System.currentTimeMillis() + HIGHLIGHT_MS;
         minecraft.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
                 "group: " + mine.size() + " here, " + others.size() + " linked across sections"), true);
     }
 
+    private static final int[][] DIRECTIONS = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+
+    /**
+     * Ctrl + right click on a cut block: the fragment looked at (white) and the pieces of the neighbouring blocks it
+     * touches face to face (yellow). What it touches is what holds it, so a fragment that is shown touching something
+     * it should be cut off from is where the cut did not separate.
+     */
+    private static void showFragment(ClientLevel level, BlockSource source, BlockPos pos, Minecraft minecraft) {
+        HIGHLIGHTS.clear();
+        if (!(level.getBlockEntity(pos) instanceof MimicBlockEntity be)) {
+            return;
+        }
+        CellGrid grid = be.grid();
+        ClientSubLevel sub = null;
+        var container = SubLevelContainer.getContainer(level);
+        if (container != null && container.inBounds(pos)) {
+            for (var candidate : container.getAllSubLevels()) {
+                if (candidate instanceof ClientSubLevel c && c.getPlot().getBoundingBox().contains(pos.getX(), pos.getY(), pos.getZ())) {
+                    sub = c;
+                }
+            }
+        }
+        Vec3 eye = minecraft.player.getEyePosition();
+        Vec3 look = minecraft.player.getLookAngle();
+        if (sub != null) {
+            eye = sub.renderPose(1f).transformPositionInverse(eye);
+            look = sub.renderPose(1f).transformNormalInverse(look);
+        }
+        int fragment = FragmentPick.pick(grid, new double[]{eye.x - pos.getX(), eye.y - pos.getY(), eye.z - pos.getZ()},
+                new double[]{look.x, look.y, look.z});
+        if (fragment < 0) {
+            return;
+        }
+        BlockNodes mine = be.nodes();
+        List<double[]> own = cellBoxes(pos, grid, fragment);
+        HIGHLIGHTS.add(new Highlight(sub, List.of(), own, new float[]{1f, 1f, 1f}, 0.5f));
+        int touching = 0;
+        for (int face = 0; face < 6; face++) {
+            BlockPos other = pos.offset(DIRECTIONS[face][0], DIRECTIONS[face][1], DIRECTIONS[face][2]);
+            BlockNodes there = source.at(other.getX(), other.getY(), other.getZ());
+            if (there == null || fragment >= mine.count()) {
+                continue;
+            }
+            for (int g = 0; g < there.count(); g++) {
+                if ((mine.mask(fragment, face) & there.mask(g, face ^ 1)) == 0) {
+                    continue;
+                }
+                touching++;
+                List<double[]> boxes = level.getBlockEntity(other) instanceof MimicBlockEntity otherBe
+                        ? cellBoxes(other, otherBe.grid(), g)
+                        : List.of(new double[]{other.getX(), other.getY(), other.getZ(), other.getX() + 1, other.getY() + 1, other.getZ() + 1});
+                HIGHLIGHTS.add(new Highlight(sub, List.of(), boxes, new float[]{1f, 0.85f, 0.1f}, 0.4f));
+            }
+        }
+        highlightUntil = System.currentTimeMillis() + HIGHLIGHT_MS;
+        minecraft.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                "fragment " + fragment + " of " + mine.count() + ": touches " + touching + " piece(s) of the neighbouring blocks"), true);
+    }
+
+    /** The cells of one fragment as boxes in the block's own space (absolute coordinates). */
+    private static List<double[]> cellBoxes(BlockPos pos, CellGrid grid, int fragment) {
+        List<double[]> boxes = new ArrayList<>();
+        int n = CellGrid.N;
+        double s = 1.0 / n;
+        for (int i = 0; i < CellGrid.CELLS; i++) {
+            if (grid.component(i) == fragment) {
+                double x = pos.getX() + (i / (n * n)) * s, y = pos.getY() + (i / n % n) * s, z = pos.getZ() + (i % n) * s;
+                boxes.add(new double[]{x, y, z, x + s, y + s, z + s});
+            }
+        }
+        return boxes;
+    }
+
     private static void fillBox(VertexConsumer c, Matrix4f matrix, Vec3 camera, ClientSubLevel sub, float partial,
                                 int[] box, float[] color, float alpha) {
         double e = 0.02; // a little bigger than the blocks, so it shows over them
-        double x0 = box[0] - e, y0 = box[1] - e, z0 = box[2] - e, x1 = box[3] + 1 + e, y1 = box[4] + 1 + e, z1 = box[5] + 1 + e;
+        fillBox(c, matrix, camera, sub, partial, new double[]{box[0] - e, box[1] - e, box[2] - e, box[3] + 1 + e, box[4] + 1 + e, box[5] + 1 + e},
+                color, alpha);
+    }
+
+    private static void fillBox(VertexConsumer c, Matrix4f matrix, Vec3 camera, ClientSubLevel sub, float partial,
+                                double[] box, float[] color, float alpha) {
+        double x0 = box[0], y0 = box[1], z0 = box[2], x1 = box[3], y1 = box[4], z1 = box[5];
         double[][][] faces = {
                 {{x1, y0, z0}, {x1, y1, z0}, {x1, y1, z1}, {x1, y0, z1}}, {{x0, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x0, y1, z0}},
                 {{x0, y1, z0}, {x0, y1, z1}, {x1, y1, z1}, {x1, y1, z0}}, {{x0, y0, z0}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1}},
@@ -223,7 +336,7 @@ public final class FragmentDebugRenderer {
                     pos.set(x, y, z);
                     if (level.getBlockState(pos).getBlock() instanceof MimicBlock
                             && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
-                        SHAPES.add(shapeOf(pos.immutable(), null, be.grid()));
+                        SHAPES.add(shapeOf(pos.immutable(), null, be));
                     }
                 }
             }
@@ -262,7 +375,7 @@ public final class FragmentDebugRenderer {
                             pos.set(x, y, z);
                             if (level.getBlockState(pos).getBlock() instanceof MimicBlock
                                     && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
-                                SHAPES.add(shapeOf(pos.immutable(), client, be.grid()));
+                                SHAPES.add(shapeOf(pos.immutable(), client, be));
                             }
                         }
                     }
@@ -312,7 +425,121 @@ public final class FragmentDebugRenderer {
     }
 
     /** The faces of the fragment cells that are not shared with a cell of the same fragment. */
-    private static Shape shapeOf(BlockPos pos, ClientSubLevel sub, CellGrid grid) {
+    private static Shape shapeOf(BlockPos pos, ClientSubLevel sub, MimicBlockEntity be) {
+        CellGrid grid = be.grid();
+        Shape exact = exactShapeOf(pos, sub, be, grid);
+        return exact != null ? exact : cellShapeOf(pos, sub, grid);
+    }
+
+    /**
+     * The exact convex pieces the server separates, as they are drawn, when they correspond one to one to the
+     * fragments (and the block is whole to begin with, not a thin shape like a torch); otherwise null.
+     */
+    private static Shape exactShapeOf(BlockPos pos, ClientSubLevel sub, MimicBlockEntity be, CellGrid grid) {
+        var boxes = MimicShapes.targetBoxes(be.getTargetState());
+        boolean whole = false;
+        for (double[] b : boxes) {
+            whole |= b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6;
+        }
+        if (!whole) {
+            return null;
+        }
+        List<List<CutPlane>> pieces = Arrangement.pieces(be.getPlanes(), be.getPatches());
+        List<List<CutPlane>> holes = be.getExcluded();
+        // which fragment each piece is: the one most of the cells well inside it belong to
+        int[] fragmentOf = new int[pieces.size()];
+        boolean[] taken = new boolean[Math.max(1, grid.componentCount())];
+        for (int p = 0; p < pieces.size(); p++) {
+            int[] votes = new int[Math.max(1, grid.componentCount())];
+            for (int i = 0; i < CellGrid.CELLS; i++) {
+                int comp = grid.component(i);
+                if (comp < 0) {
+                    continue;
+                }
+                double[] c = CellGrid.centerOf(i);
+                boolean inside = true;
+                for (CutPlane plane : pieces.get(p)) {
+                    if (plane.signedDistance(c[0], c[1], c[2]) < 0.06) {
+                        inside = false;
+                        break;
+                    }
+                }
+                if (inside) {
+                    votes[comp]++;
+                }
+            }
+            int best = 0;
+            for (int c = 1; c < votes.length; c++) {
+                if (votes[c] > votes[best]) {
+                    best = c;
+                }
+            }
+            if (votes[best] == 0) {
+                fragmentOf[p] = -1; // all of it was cut out
+                continue;
+            }
+            if (taken[best]) {
+                return null; // pieces and fragments do not match one to one: show the cells instead
+            }
+            taken[best] = true;
+            fragmentOf[p] = best;
+        }
+        List<float[]> quads = new ArrayList<>();
+        List<float[]> colors = new ArrayList<>();
+        int real = be.getPlanes().size();
+        float[] uv = {0, 0, 1, 1};
+        for (int p = 0; p < pieces.size(); p++) {
+            if (fragmentOf[p] < 0) {
+                continue;
+            }
+            float[] color = PALETTE[fragmentOf[p] % PALETTE.length];
+            // pulled back from the cuts like the model is
+            List<CutPlane> shrunk = new ArrayList<>(pieces.get(p).subList(0, real));
+            for (CutPlane cut : pieces.get(p).subList(real, pieces.get(p).size())) {
+                shrunk.add(new CutPlane(cut.nx(), cut.ny(), cut.nz(), cut.d() - SLIT / 2));
+            }
+            // the piece, minus the parts that were cut out of the block, plus the walls around those parts
+            List<MeshPoly> faces = Polytope.faceMeshes(shrunk);
+            for (List<CutPlane> hole : holes) {
+                faces = MeshClipper.subtract(faces, hole);
+            }
+            for (List<CutPlane> hole : holes) {
+                for (int j = 0; j < hole.size(); j++) {
+                    List<CutPlane> others = new ArrayList<>(shrunk);
+                    for (int k = 0; k < hole.size(); k++) {
+                        if (k != j) {
+                            others.add(hole.get(k));
+                        }
+                    }
+                    List<MeshPoly> wall = CapBuilder.face(Polytope.cube(), hole.get(j).flipped(), others, uv, null);
+                    for (List<CutPlane> other : holes) { // as in the mesh: no wall inside another cut-out part
+                        if (other != hole && !wall.isEmpty()) {
+                            wall = MeshClipper.subtract(wall, other);
+                        }
+                    }
+                    faces.addAll(wall);
+                }
+            }
+            for (MeshPoly poly : faces) {
+                float[] v = poly.verts();
+                int n = poly.vertexCount();
+                for (int i = 1; i + 1 < n; i++) { // a fan of triangles, each drawn as a quad with a repeated corner
+                    int[] corner = {0, i, i + 1, i + 1};
+                    float[] q = new float[12];
+                    for (int k = 0; k < 4; k++) {
+                        q[k * 3] = v[corner[k] * MeshPoly.STRIDE];
+                        q[k * 3 + 1] = v[corner[k] * MeshPoly.STRIDE + 1];
+                        q[k * 3 + 2] = v[corner[k] * MeshPoly.STRIDE + 2];
+                    }
+                    quads.add(q);
+                    colors.add(color);
+                }
+            }
+        }
+        return new Shape(pos, sub, quads, colors);
+    }
+
+    private static Shape cellShapeOf(BlockPos pos, ClientSubLevel sub, CellGrid grid) {
         List<float[]> quads = new ArrayList<>();
         List<float[]> colors = new ArrayList<>();
         int n = CellGrid.N;
@@ -397,6 +624,9 @@ public final class FragmentDebugRenderer {
         }
         for (Highlight h : HIGHLIGHTS) {
             for (int[] box : h.boxes()) {
+                fillBox(filled, matrix, camera, h.sub(), partial, box, h.color(), h.alpha());
+            }
+            for (double[] box : h.exact()) {
                 fillBox(filled, matrix, camera, h.sub(), partial, box, h.color(), h.alpha());
             }
         }

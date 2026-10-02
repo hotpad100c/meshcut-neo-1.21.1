@@ -50,6 +50,7 @@ public final class LightsaberRenderer {
             return;
         }
         float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
+        double time = minecraft.level.getGameTime() + partialTick;
         Vec3 camera = event.getCamera().getPosition();
         PoseStack poseStack = event.getPoseStack();
         Matrix4f matrix = poseStack.last().pose();
@@ -66,8 +67,10 @@ public final class LightsaberRenderer {
         LightsaberTrail.renderWorld(event, blades);
         RenderType beamType = LightsaberRenderTypes.BEAM;
         VertexConsumer consumer = buffers.getBuffer(beamType);
-        for (Blade blade : blades.values()) {
-            drawBlade(consumer, matrix, blade.base().subtract(camera), blade.tip().subtract(camera));
+        for (var entry : blades.entrySet()) {
+            Blade blade = entry.getValue();
+            drawBlade(consumer, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
+                    time, entry.getKey());
         }
         buffers.endBatch(beamType);
     }
@@ -133,7 +136,8 @@ public final class LightsaberRenderer {
             LightsaberTrail.renderFirstPerson(minecraft.player, firstPersonBlade, partialTick,
                     WORLD_VIEW, camera, buffers);
             drawBlade(buffers.getBuffer(LightsaberRenderTypes.BEAM), WORLD_VIEW,
-                    firstPersonBlade.base().subtract(camera), firstPersonBlade.tip().subtract(camera));
+                    firstPersonBlade.base().subtract(camera), firstPersonBlade.tip().subtract(camera),
+                    minecraft.player.level().getGameTime() + partialTick, minecraft.player.getUUID());
             buffers.endBatch(LightsaberRenderTypes.BEAM);
         } finally {
             RenderSystem.setProjectionMatrix(handProjection, VertexSorting.DISTANCE_TO_ORIGIN);
@@ -155,14 +159,25 @@ public final class LightsaberRenderer {
         firstPersonBlade = null;
     }
 
-    private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip) {
-        prism(consumer, matrix, base, tip, 0.065, HALO);
-        prism(consumer, matrix, base, tip, 0.035, GLOW);
-        prism(consumer, matrix, base, tip, 0.014, CORE);
+    private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,
+                                  double time, UUID owner) {
+        // Continuous game-time oscillation avoids frame-dependent random jumps and freezes when paused.
+        double phase = (owner.hashCode() & 0xffff) * (Math.PI * 2 / 65536);
+        double pulse = Math.sin(time * 1.7 + phase) * 0.035 + Math.sin(time * 2.9 + phase) * 0.015;
+        Vec3 direction = tip.subtract(base).normalize();
+        Vec3 helper = Math.abs(direction.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+        Vec3 sideways = direction.cross(helper).normalize();
+        Vec3 upwards = direction.cross(sideways);
+        Vec3 shimmer = sideways.scale(Math.sin(time * 1.3 + phase) * 0.003)
+                .add(upwards.scale(Math.sin(time * 1.9 + phase) * 0.003));
+        // Only the glow wavers; the emitter, core and cutting segment retain their exact alignment.
+        prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), HALO, (float) (1 + pulse));
+        prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), GLOW, (float) (1 + pulse));
+        prism(consumer, matrix, base, tip, 0.008 * (1 + pulse * 0.4), CORE, 1f);
     }
 
     /** A square prism of half-width {@code r}; the beam render type disables face culling. */
-    private static void prism(VertexConsumer c, Matrix4f m, Vec3 a, Vec3 b, double r, float[] color) {
+    private static void prism(VertexConsumer c, Matrix4f m, Vec3 a, Vec3 b, double r, float[] color, float intensity) {
         Vec3 dir = b.subtract(a).normalize();
         Vec3 helper = Math.abs(dir.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
         Vec3 u = dir.cross(helper).normalize().scale(r);
@@ -171,20 +186,22 @@ public final class LightsaberRenderer {
         Vec3[] cb = {b.add(u).add(v), b.subtract(u).add(v), b.subtract(u).subtract(v), b.add(u).subtract(v)};
         for (int i = 0; i < 4; i++) {
             int j = (i + 1) % 4;
-            quad(c, m, ca[i], ca[j], cb[j], cb[i], color);
+            quad(c, m, ca[i], ca[j], cb[j], cb[i], color, intensity);
         }
-        quad(c, m, cb[0], cb[1], cb[2], cb[3], color);
+        quad(c, m, cb[0], cb[1], cb[2], cb[3], color, intensity);
     }
 
-    private static void quad(VertexConsumer c, Matrix4f m, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, float[] color) {
-        vertex(c, m, p0, color);
-        vertex(c, m, p1, color);
-        vertex(c, m, p2, color);
-        vertex(c, m, p3, color);
+    private static void quad(VertexConsumer c, Matrix4f m, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3,
+                             float[] color, float intensity) {
+        vertex(c, m, p0, color, intensity);
+        vertex(c, m, p1, color, intensity);
+        vertex(c, m, p2, color, intensity);
+        vertex(c, m, p3, color, intensity);
     }
 
-    private static void vertex(VertexConsumer c, Matrix4f m, Vec3 p, float[] color) {
-        c.addVertex(m, (float) p.x, (float) p.y, (float) p.z).setColor(color[0], color[1], color[2], color[3]);
+    private static void vertex(VertexConsumer c, Matrix4f m, Vec3 p, float[] color, float intensity) {
+        c.addVertex(m, (float) p.x, (float) p.y, (float) p.z)
+                .setColor(color[0], color[1], color[2], color[3] * intensity);
     }
 
     private LightsaberRenderer() {}

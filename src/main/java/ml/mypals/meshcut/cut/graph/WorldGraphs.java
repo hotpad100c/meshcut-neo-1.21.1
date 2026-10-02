@@ -45,6 +45,13 @@ public final class WorldGraphs {
     }
 
     private static void update(ServerLevel level, BlockPos pos) {
+        // a cut block next to the change may have lost (or gained) what holds it, whatever section it is in
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+            BlockPos next = pos.relative(dir);
+            if (level.isLoaded(next) && level.getBlockState(next).getBlock() instanceof MimicBlock) {
+                SlashService.queueRecheck(level, next);
+            }
+        }
         StructureGraph graph = GRAPHS.get(level);
         if (graph == null) {
             return;

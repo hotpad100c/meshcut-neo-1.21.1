@@ -32,8 +32,8 @@ public final class FragmentRemoval {
                 staying.add(c);
             }
         }
-        // every scratch stays: the ones that bounded the fragment still divide what is left
-        return new Result(holes, PieceFit.remaining(grid, staying, patches, List.of()));
+        // the scratches that bounded the fragment stay if they still divide what is left
+        return new Result(holes, PieceFit.remainingStaying(grid, staying, patches, hole));
     }
 
     private FragmentRemoval() {}

@@ -44,7 +44,8 @@ public final class Patch {
             return null;
         }
         double coverage = area(clipped) / area(fullPolygon(plane));
-        return coverage >= THROUGH_COVERAGE ? full(plane) : new Patch(plane, clipped, false);
+        // a cut that stops inside the block is not a cut: only those that go right through count
+        return coverage >= THROUGH_COVERAGE ? full(plane) : null;
     }
 
     /**

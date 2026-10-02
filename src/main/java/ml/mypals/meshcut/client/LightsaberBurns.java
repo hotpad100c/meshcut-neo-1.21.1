@@ -14,8 +14,8 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.Direction;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -48,7 +48,7 @@ public final class LightsaberBurns {
     /** Ticks the glowing ember in it lasts. */
     private static final double EMBER_LIFETIME = 50;
     /** Tip movement per tick below which the blade is held still and burns nothing. */
-    private static final double MIN_TIP_MOVEMENT = 0.12;
+    private static final double MIN_TIP_MOVEMENT = 0.02;
     /** Hits closer together than this add nothing new to the line. */
     private static final double MIN_SPACING = 0.1;
     /** Hits further apart in time, in space, or on different faces are separate lines. */
@@ -71,16 +71,18 @@ public final class LightsaberBurns {
     private static final ArrayDeque<Segment> SEGMENTS = new ArrayDeque<>();
     private static final Map<UUID, Hit> LAST_HIT = new HashMap<>();
     private static final Map<UUID, Blade> LAST_BLADE = new HashMap<>();
+    @Nullable private static ClientLevel burnLevel;
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         ClientLevel level = Minecraft.getInstance().level;
-        if (level == null) {
+        if (level != burnLevel) {
             SEGMENTS.clear();
             LAST_HIT.clear();
             LAST_BLADE.clear();
-            return;
+            burnLevel = level;
         }
+        if (level == null) return;
         long now = level.getGameTime();
         while (!SEGMENTS.isEmpty() && now - SEGMENTS.peekFirst().time() > CHAR_LIFETIME) {
             SEGMENTS.pollFirst();
@@ -114,15 +116,19 @@ public final class LightsaberBurns {
                 }
                 subLevel = sub.getUniqueId();
             }
-            addHit(id, new Hit(now, hit.getLocation(), hit.getDirection(), subLevel));
+            Hit contact = new Hit(now, hit.getLocation(), hit.getDirection(), subLevel);
+            if (addHit(id, contact)) {
+                emitContactParticles(level, container, contact, blade.tip().subtract(before.tip()));
+            }
         }
     }
 
-    private static void addHit(UUID id, Hit hit) {
+    private static boolean addHit(UUID id, Hit hit) {
         Hit last = LAST_HIT.get(id);
         if (last != null && sameSurface(last, hit)
+                && hit.time() - last.time() <= MAX_GAP_TICKS
                 && last.pos().distanceToSqr(hit.pos()) < MIN_SPACING * MIN_SPACING) {
-            return;
+            return false;
         }
         if (last != null && sameSurface(last, hit) && hit.time() - last.time() <= MAX_GAP_TICKS
                 && last.pos().distanceTo(hit.pos()) <= MAX_JOIN_DISTANCE) {
@@ -132,6 +138,38 @@ public final class LightsaberBurns {
             }
         }
         LAST_HIT.put(id, hit);
+        return true;
+    }
+
+    /** One small burst per moving contact per tick, independent of render frame rate. */
+    private static void emitContactParticles(ClientLevel level, @Nullable SubLevelContainer container,
+                                             Hit hit, Vec3 swing) {
+        Vec3 position = hit.pos();
+        Vec3 normal = Vec3.atLowerCornerOf(hit.face().getNormal());
+        if (hit.subLevel() != null) {
+            SubLevel sub = container == null ? null : container.getSubLevel(hit.subLevel());
+            if (!(sub instanceof ClientSubLevel client)) return;
+            Pose3dc pose = client.renderPose(1f);
+            position = pose.transformPosition(position);
+            normal = pose.transformNormal(normal).normalize();
+        }
+        // Lift off the collision face so the first particle frame is visible instead of buried in the block.
+        position = position.add(normal.scale(0.06));
+        Vec3 drag = swing.subtract(normal.scale(swing.dot(normal))).normalize().scale(0.035);
+        var random = level.random;
+        int sparks = 4 + random.nextInt(3);
+        for (int i = 0; i < sparks; i++) {
+            Vec3 scatter = new Vec3(random.nextGaussian(), random.nextGaussian(), random.nextGaussian());
+            Vec3 tangent = scatter.subtract(normal.scale(scatter.dot(normal))).scale(0.055);
+            Vec3 velocity = normal.scale(0.08 + random.nextDouble() * 0.10).add(tangent).add(drag);
+            // Vanilla electric sparks multiply the supplied velocity by 0.25.
+            level.addParticle(ParticleTypes.ELECTRIC_SPARK, position.x, position.y, position.z,
+                    velocity.x * 4, velocity.y * 4, velocity.z * 4);
+        }
+        if (random.nextFloat() < 0.4f) {
+            // LAVA supplies its own upward pop and gravity; its provider ignores velocity arguments.
+            level.addParticle(ParticleTypes.LAVA, position.x, position.y, position.z, 0, 0, 0);
+        }
     }
 
     private static boolean sameSurface(Hit a, Hit b) {

@@ -323,8 +323,8 @@ public class MimicBlockEntity extends BlockEntity {
             for (int i = 0; i < polygon.length; i++) {
                 polygon[i] = poly.getFloat(i);
             }
-            if (plane.size() == 1) {
-                patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
+            if (plane.size() == 1 && p.getBoolean("through")) { // saves from when a cut could stop midway: those are dropped
+                patches.add(Patch.restore(plane.get(0), polygon, true));
             }
         }
         if (tag.contains("pending")) { // saves from before cuts could stop midway: each was a cut right through
@@ -338,6 +338,11 @@ public class MimicBlockEntity extends BlockEntity {
         renderData = null;
         grid = null;
         version++;
+        // Moved into a sub-level, or loaded with its chunk: the block was placed before this data arrived, so the
+        // structure graph still thinks it is whole
+        if (level instanceof ServerLevel server) {
+            WorldGraphs.onNodesChanged(server, worldPosition);
+        }
         // When a chunk arrives, the block entity is created first and filled from the chunk data afterwards, and no
         // hook tells the model data manager about it. Without this the block's model data stays empty and it is
         // not drawn until something else (a block update) requests a refresh.
