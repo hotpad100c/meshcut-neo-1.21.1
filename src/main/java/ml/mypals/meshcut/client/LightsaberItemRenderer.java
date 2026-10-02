@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
+import ml.mypals.meshcut.cut.SaberPose;
 import ml.mypals.meshcut.item.LightsaberItem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
@@ -37,7 +38,7 @@ public final class LightsaberItemRenderer extends BlockEntityWithoutLevelRendere
     private static final ModelResourceLocation HILT = ModelResourceLocation.standalone(
             ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "item/lightsaber_hilt"));
     // Coordinates are normalized from the hilt model's (8, 15.35, 8) emitter cap.
-    private static final Vector3f EMITTER = new Vector3f(0.5f, 15.35f / 16f, 0.5f);
+    private static final Vector3f EMITTER = new Vector3f(0.5f, SaberPose.EMITTER_Y, 0.5f);
 
     private LightsaberItemRenderer() {
         super(Minecraft.getInstance().getBlockEntityRenderDispatcher(), Minecraft.getInstance().getEntityModels());

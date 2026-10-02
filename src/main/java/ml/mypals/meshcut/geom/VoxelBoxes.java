@@ -41,7 +41,14 @@ public final class VoxelBoxes {
                 return boxes;
             }
         }
-        return cutCells(shape, planes, excluded);
+        List<double[]> cells = cutCells(shape, planes, excluded);
+        if (cells.isEmpty() && !shape.isEmpty()) {
+            // Nothing of the piece is thick enough to find, but a block with no collider has no mass either, and
+            // the physics engine cannot have a body without mass: give it a token cell in the middle.
+            double h = 0.5 / RES;
+            cells = new ArrayList<>(List.of(new double[]{0.5 - h, 0.5 - h, 0.5 - h, 0.5 + h, 0.5 + h, 0.5 + h}));
+        }
+        return cells;
     }
 
     // ---------------------------------------------------------------- columns

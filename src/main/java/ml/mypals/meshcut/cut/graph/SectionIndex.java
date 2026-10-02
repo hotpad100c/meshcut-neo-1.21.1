@@ -452,6 +452,70 @@ public final class SectionIndex {
         return out;
     }
 
+    /** The groups of the pieces in the cell (a mimic may have fragments in several); for debug views. */
+    public List<Group> groupsAt(int c) {
+        List<Group> out = new ArrayList<>(2);
+        for (int id : nodesAt(c)) {
+            Group g = nodes.get(id).group;
+            if (g != null && !out.contains(g)) {
+                out.add(g);
+            }
+        }
+        return out;
+    }
+
+    /** The groups in other sections that the group touches across the section border; for debug views. */
+    public List<Group> neighbourGroups(Group g, java.util.function.Function<int[], SectionIndex> neighbours) {
+        List<Group> out = new ArrayList<>();
+        List<int[]> portals = portals(g);
+        for (int i = 0; i < portals.size(); i++) {
+            int[] p = portals.get(i);
+            int face = p[3], axis = face / 2, dir = face % 2 == 0 ? 1 : -1;
+            int nx = p[0] + (axis == 0 ? dir : 0), ny = p[1] + (axis == 1 ? dir : 0), nz = p[2] + (axis == 2 ? dir : 0);
+            SectionIndex other = neighbours.apply(new int[]{nx >> 4, ny >> 4, nz >> 4});
+            if (other != null) {
+                for (Group n : other.touching(cell(nx & 15, ny & 15, nz & 15), face ^ 1, portalMask(g, i))) {
+                    if (!out.contains(n)) {
+                        out.add(n);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** A line across a section border, from a block of a group to the block of the group it touches on the other side. */
+    public record DebugLink(double x0, double y0, double z0, double x1, double y1, double z1) {}
+
+    /**
+     * The links from this section's groups to the groups they touch across the section border: one line for each
+     * pair, drawn between the two blocks that touch.
+     *
+     * @param neighbours finds the section at the given section coordinates, or null
+     */
+    public List<DebugLink> debugLinks(java.util.function.Function<int[], SectionIndex> neighbours) {
+        List<DebugLink> out = new ArrayList<>();
+        for (Group g : groups) {
+            Set<Group> seen = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+            List<int[]> portals = portals(g);
+            for (int i = 0; i < portals.size(); i++) {
+                int[] p = portals.get(i);
+                int face = p[3], axis = face / 2, dir = face % 2 == 0 ? 1 : -1;
+                int nx = p[0] + (axis == 0 ? dir : 0), ny = p[1] + (axis == 1 ? dir : 0), nz = p[2] + (axis == 2 ? dir : 0);
+                SectionIndex other = neighbours.apply(new int[]{nx >> 4, ny >> 4, nz >> 4});
+                if (other == null) {
+                    continue;
+                }
+                for (Group n : other.touching(cell(nx & 15, ny & 15, nz & 15), face ^ 1, portalMask(g, i))) {
+                    if (seen.add(n)) {
+                        out.add(new DebugLink(p[0] + 0.5, p[1] + 0.5, p[2] + 0.5, nx + 0.5, ny + 0.5, nz + 0.5));
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     // ---------------------------------------------------------------- editing
 
     /**

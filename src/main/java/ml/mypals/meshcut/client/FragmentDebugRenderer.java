@@ -14,7 +14,8 @@ import ml.mypals.meshcut.cut.graph.SectionIndex;
 import ml.mypals.meshcut.geom.CellGrid;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.world.InteractionHand;
+import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
@@ -40,6 +41,8 @@ import java.util.List;
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class FragmentDebugRenderer {
     private static final int RADIUS = 6;
+    /** Sub-levels whose middle is further than this from the player are left out. */
+    private static final double SUB_LEVEL_RANGE = 48;
     private static final int REFRESH_TICKS = 10;
     private static final float FRAGMENT_ALPHA = 0.38f;
     /** How far (in blocks) the drawn faces stand off the surface they lie on. */
@@ -55,10 +58,14 @@ public final class FragmentDebugRenderer {
     /** One cut block's fragment faces, ready to draw: x y z per vertex, four vertices a quad, in block-local space. */
     private record Shape(BlockPos pos, ClientSubLevel sub, List<float[]> quads, List<float[]> colors) {}
 
-    private record Box(double x0, double y0, double z0, double x1, double y1, double z1, float[] color) {}
+    private record Box(ClientSubLevel sub, double x0, double y0, double z0, double x1, double y1, double z1, float[] color) {}
+
+    /** A line between the middles of two touching groups, in the space of the world or of a sub-level's plot. */
+    private record Link(ClientSubLevel sub, double x0, double y0, double z0, double x1, double y1, double z1) {}
 
     private static final List<Shape> SHAPES = new ArrayList<>();
     private static final List<Box> BOXES = new ArrayList<>();
+    private static final List<Link> LINKS = new ArrayList<>();
     private static int ticks;
 
     private static Field findChunkBorderFlag() {
@@ -72,46 +79,8 @@ public final class FragmentDebugRenderer {
         }
     }
 
-    private static boolean enabled(Minecraft minecraft) {
-        try {
-            return CHUNK_BORDER != null && CHUNK_BORDER.getBoolean(minecraft.debugRenderer);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            return false;
-        }
-    }
-
-    // ---------------------------------------------------------------- snapshot
-
-    @SubscribeEvent
-    public static void onClientTick(ClientTickEvent.Post event) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null || !enabled(minecraft)) {
-            SHAPES.clear();
-            BOXES.clear();
-            return;
-        }
-        if (ticks++ % REFRESH_TICKS != 0) {
-            return;
-        }
-        ClientLevel level = minecraft.level;
-        SHAPES.clear();
-        BOXES.clear();
-        BlockPos center = minecraft.player.blockPosition();
-
-        // the static world: fragments and regions
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-        for (int x = center.getX() - RADIUS; x <= center.getX() + RADIUS; x++) {
-            for (int y = center.getY() - RADIUS; y <= center.getY() + RADIUS; y++) {
-                for (int z = center.getZ() - RADIUS; z <= center.getZ() + RADIUS; z++) {
-                    pos.set(x, y, z);
-                    if (level.getBlockState(pos).getBlock() instanceof MimicBlock
-                            && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
-                        SHAPES.add(shapeOf(pos.immutable(), null, be.grid()));
-                    }
-                }
-            }
-        }
-        BlockSource source = new BlockSource() {
+    private static BlockSource sourceOf(ClientLevel level) {
+        return new BlockSource() {
             @Override
             public BlockNodes at(int x, int y, int z) {
                 if (level.isOutsideBuildHeight(y)) {
@@ -133,52 +102,209 @@ public final class FragmentDebugRenderer {
                 return level.hasChunk(x >> 4, z >> 4);
             }
         };
-        int minX = center.getX() - RADIUS, maxX = center.getX() + RADIUS;
-        int minY = center.getY() - RADIUS, maxY = center.getY() + RADIUS;
-        int minZ = center.getZ() - RADIUS, maxZ = center.getZ() + RADIUS;
-        for (int sx = minX >> 4; sx <= maxX >> 4; sx++) {
-            for (int sy = minY >> 4; sy <= maxY >> 4; sy++) {
-                for (int sz = minZ >> 4; sz <= maxZ >> 4; sz++) {
-                    if (!source.loaded(sx * 16, sy * 16, sz * 16)) {
-                        continue;
-                    }
-                    int salt = (sx * 31 + sy) * 31 + sz;
-                    for (SectionIndex.DebugNode node : new SectionIndex(sx, sy, sz, source).debugNodes()) {
-                        if (!node.region()) {
-                            continue;
-                        }
-                        // only the part of the box near the player, so a big floor stays readable
-                        double x0 = Math.max(node.x0(), minX), x1 = Math.min(node.x1() + 1, maxX + 1);
-                        double y0 = Math.max(node.y0(), minY), y1 = Math.min(node.y1() + 1, maxY + 1);
-                        double z0 = Math.max(node.z0(), minZ), z1 = Math.min(node.z1() + 1, maxZ + 1);
-                        if (x0 < x1 && y0 < y1 && z0 < z1) {
-                            float[] color = PALETTE[Math.floorMod(salt + node.group(), PALETTE.length)];
-                            BOXES.add(new Box(x0, y0, z0, x1, y1, z1, color));
-                        }
+    }
+
+    // ---------------------------------------------------------------- picking a block
+
+    /** A group picked with an empty-handed right click: the boxes it is made of, and how to draw them. */
+    private record Highlight(ClientSubLevel sub, List<int[]> boxes, float[] color, float alpha) {}
+
+    private static final List<Highlight> HIGHLIGHTS = new ArrayList<>();
+    private static long highlightUntil;
+    private static final long HIGHLIGHT_MS = 20_000;
+
+    /**
+     * With the debug view on, an empty-handed right click on a block shows the group it is in (white) and the groups
+     * it touches across section borders (yellow), as filled boxes that are hard to miss.
+     */
+    @SubscribeEvent
+    public static void onRightClick(PlayerInteractEvent.RightClickBlock event) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!event.getLevel().isClientSide() || event.getHand() != InteractionHand.MAIN_HAND || !event.getItemStack().isEmpty()
+                || !(event.getLevel() instanceof ClientLevel level) || !enabled(minecraft)) {
+            return;
+        }
+        event.setCanceled(true); // looking, not opening doors
+        BlockSource source = sourceOf(level);
+        java.util.Map<Long, SectionIndex> sections = new java.util.HashMap<>();
+        java.util.function.Function<int[], SectionIndex> lookup = at -> {
+            long key = ((long) at[0] & 0x3FFFFF) << 42 | ((long) at[2] & 0x3FFFFF) << 20 | (at[1] & 0xFFFFF);
+            return sections.computeIfAbsent(key, k -> source.loaded(at[0] * 16, at[1] * 16, at[2] * 16)
+                    ? new SectionIndex(at[0], at[1], at[2], source) : null);
+        };
+        BlockPos pos = event.getPos();
+        SectionIndex home = lookup.apply(new int[]{pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4});
+        HIGHLIGHTS.clear();
+        if (home == null) {
+            return;
+        }
+        ClientSubLevel sub = null;
+        var container = SubLevelContainer.getContainer(level);
+        if (container != null && container.inBounds(pos)) {
+            for (var candidate : container.getAllSubLevels()) {
+                if (candidate instanceof ClientSubLevel c && c.getPlot().getBoundingBox().contains(pos.getX(), pos.getY(), pos.getZ())) {
+                    sub = c;
+                }
+            }
+        }
+        List<SectionIndex.Group> mine = home.groupsAt(SectionIndex.cell(pos.getX() & 15, pos.getY() & 15, pos.getZ() & 15));
+        List<SectionIndex.Group> others = new ArrayList<>();
+        for (SectionIndex.Group g : mine) {
+            for (SectionIndex.Group n : g.section().neighbourGroups(g, lookup)) {
+                if (!mine.contains(n) && !others.contains(n)) {
+                    others.add(n);
+                }
+            }
+        }
+        for (SectionIndex.Group g : mine) {
+            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), new float[]{1f, 1f, 1f}, 0.35f));
+        }
+        for (SectionIndex.Group g : others) {
+            HIGHLIGHTS.add(new Highlight(sub, g.section().boxes(g), new float[]{1f, 0.85f, 0.1f}, 0.3f));
+        }
+        highlightUntil = System.currentTimeMillis() + HIGHLIGHT_MS;
+        minecraft.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                "group: " + mine.size() + " here, " + others.size() + " linked across sections"), true);
+    }
+
+    private static void fillBox(VertexConsumer c, Matrix4f matrix, Vec3 camera, ClientSubLevel sub, float partial,
+                                int[] box, float[] color, float alpha) {
+        double e = 0.02; // a little bigger than the blocks, so it shows over them
+        double x0 = box[0] - e, y0 = box[1] - e, z0 = box[2] - e, x1 = box[3] + 1 + e, y1 = box[4] + 1 + e, z1 = box[5] + 1 + e;
+        double[][][] faces = {
+                {{x1, y0, z0}, {x1, y1, z0}, {x1, y1, z1}, {x1, y0, z1}}, {{x0, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x0, y1, z0}},
+                {{x0, y1, z0}, {x0, y1, z1}, {x1, y1, z1}, {x1, y1, z0}}, {{x0, y0, z0}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1}},
+                {{x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}}, {{x0, y0, z0}, {x0, y1, z0}, {x1, y1, z0}, {x1, y0, z0}}};
+        for (double[][] face : faces) {
+            for (double[] v : face) {
+                Vec3 p = new Vec3(v[0], v[1], v[2]);
+                if (sub != null) {
+                    p = sub.renderPose(partial).transformPosition(p);
+                }
+                c.addVertex(matrix, (float) (p.x - camera.x), (float) (p.y - camera.y), (float) (p.z - camera.z))
+                        .setColor(color[0], color[1], color[2], alpha);
+            }
+        }
+    }
+
+    private static boolean enabled(Minecraft minecraft) {
+        try {
+            return CHUNK_BORDER != null && CHUNK_BORDER.getBoolean(minecraft.debugRenderer);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    // ---------------------------------------------------------------- snapshot
+
+    @SubscribeEvent
+    public static void onClientTick(ClientTickEvent.Post event) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || !enabled(minecraft)) {
+            SHAPES.clear();
+            BOXES.clear();
+            LINKS.clear();
+            return;
+        }
+        if (ticks++ % REFRESH_TICKS != 0) {
+            return;
+        }
+        ClientLevel level = minecraft.level;
+        SHAPES.clear();
+        BOXES.clear();
+        LINKS.clear();
+        BlockPos center = minecraft.player.blockPosition();
+
+        // the static world: fragments and regions
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        for (int x = center.getX() - RADIUS; x <= center.getX() + RADIUS; x++) {
+            for (int y = center.getY() - RADIUS; y <= center.getY() + RADIUS; y++) {
+                for (int z = center.getZ() - RADIUS; z <= center.getZ() + RADIUS; z++) {
+                    pos.set(x, y, z);
+                    if (level.getBlockState(pos).getBlock() instanceof MimicBlock
+                            && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
+                        SHAPES.add(shapeOf(pos.immutable(), null, be.grid()));
                     }
                 }
             }
         }
+        BlockSource source = sourceOf(level);
+        regionsAndLinks(source, null, center.getX() - RADIUS, center.getY() - RADIUS, center.getZ() - RADIUS,
+                center.getX() + RADIUS, center.getY() + RADIUS, center.getZ() + RADIUS);
 
         // cut blocks inside sub-levels near the player
         var container = SubLevelContainer.getContainer(level);
         if (container != null) {
             Vec3 eye = minecraft.player.position();
             for (var sub : container.getAllSubLevels()) {
-                if (!(sub instanceof ClientSubLevel client)
-                        || client.logicalPose().position().distance(eye.x, eye.y, eye.z) > RADIUS * 3) {
+                if (!(sub instanceof ClientSubLevel client)) {
                     continue;
                 }
                 var box = client.getPlot().getBoundingBox();
-                for (int x = box.minX(); x <= box.maxX(); x++) {
-                    for (int y = box.minY(); y <= box.maxY(); y++) {
-                        for (int z = box.minZ(); z <= box.maxZ(); z++) {
+                Vec3 middle = client.renderPose(1f).transformPosition(new Vec3((box.minX() + box.maxX() + 1) / 2.0,
+                        (box.minY() + box.maxY() + 1) / 2.0, (box.minZ() + box.maxZ() + 1) / 2.0));
+                if (middle.distanceTo(eye) > SUB_LEVEL_RANGE) {
+                    continue;
+                }
+                // only what is near the player: the player's place in the plot, and a few blocks around it
+                Vec3 inPlot = client.renderPose(1f).transformPositionInverse(eye);
+                int cx = (int) Math.floor(inPlot.x), cy = (int) Math.floor(inPlot.y), cz = (int) Math.floor(inPlot.z);
+                int x0 = Math.max(box.minX(), cx - RADIUS), x1 = Math.min(box.maxX(), cx + RADIUS);
+                int y0 = Math.max(box.minY(), cy - RADIUS), y1 = Math.min(box.maxY(), cy + RADIUS);
+                int z0 = Math.max(box.minZ(), cz - RADIUS), z1 = Math.min(box.maxZ(), cz + RADIUS);
+                if (x0 > x1 || y0 > y1 || z0 > z1) {
+                    continue;
+                }
+                regionsAndLinks(source, client, x0, y0, z0, x1, y1, z1);
+                for (int x = x0; x <= x1; x++) {
+                    for (int y = y0; y <= y1; y++) {
+                        for (int z = z0; z <= z1; z++) {
                             pos.set(x, y, z);
                             if (level.getBlockState(pos).getBlock() instanceof MimicBlock
                                     && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
                                 SHAPES.add(shapeOf(pos.immutable(), client, be.grid()));
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The region boxes (coloured by group) and the links between neighbouring groups in a block range: the world
+     * near the player, or the whole plot of a sub-level.
+     */
+    private static void regionsAndLinks(BlockSource source, ClientSubLevel sub, int minX, int minY, int minZ,
+                                        int maxX, int maxY, int maxZ) {
+        java.util.Map<Long, SectionIndex> sections = new java.util.HashMap<>();
+        java.util.function.Function<int[], SectionIndex> lookup = at -> {
+            long key = ((long) at[0] & 0x3FFFFF) << 42 | ((long) at[2] & 0x3FFFFF) << 20 | (at[1] & 0xFFFFF);
+            return sections.computeIfAbsent(key, k -> source.loaded(at[0] * 16, at[1] * 16, at[2] * 16)
+                    ? new SectionIndex(at[0], at[1], at[2], source) : null);
+        };
+        for (int sx = minX >> 4; sx <= maxX >> 4; sx++) {
+            for (int sy = minY >> 4; sy <= maxY >> 4; sy++) {
+                for (int sz = minZ >> 4; sz <= maxZ >> 4; sz++) {
+                    SectionIndex index = lookup.apply(new int[]{sx, sy, sz});
+                    if (index == null) {
+                        continue;
+                    }
+                    int salt = (sx * 31 + sy) * 31 + sz;
+                    for (SectionIndex.DebugNode node : index.debugNodes()) {
+                        if (!node.region()) {
+                            continue;
+                        }
+                        // only the part of the box in range, so a big floor stays readable
+                        double x0 = Math.max(node.x0(), minX), x1 = Math.min(node.x1() + 1, maxX + 1);
+                        double y0 = Math.max(node.y0(), minY), y1 = Math.min(node.y1() + 1, maxY + 1);
+                        double z0 = Math.max(node.z0(), minZ), z1 = Math.min(node.z1() + 1, maxZ + 1);
+                        if (x0 < x1 && y0 < y1 && z0 < z1) {
+                            BOXES.add(new Box(sub, x0, y0, z0, x1, y1, z1, PALETTE[Math.floorMod(salt + node.group(), PALETTE.length)]));
+                        }
+                    }
+                    for (SectionIndex.DebugLink l : index.debugLinks(lookup)) {
+                        LINKS.add(new Link(sub, l.x0(), l.y0(), l.z0(), l.x1(), l.y1(), l.z1()));
                     }
                 }
             }
@@ -235,7 +361,10 @@ public final class FragmentDebugRenderer {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || !enabled(minecraft) || (SHAPES.isEmpty() && BOXES.isEmpty())) {
+        if (System.currentTimeMillis() > highlightUntil) {
+            HIGHLIGHTS.clear();
+        }
+        if (minecraft.level == null || !enabled(minecraft) || (SHAPES.isEmpty() && BOXES.isEmpty() && HIGHLIGHTS.isEmpty())) {
             return;
         }
         float partial = event.getPartialTick().getGameTimeDeltaPartialTick(true);
@@ -250,27 +379,76 @@ public final class FragmentDebugRenderer {
                 float[] quad = shape.quads().get(q);
                 float[] c = shape.colors().get(q);
                 for (int k = 0; k < 4; k++) {
-                    Vec3 p = new Vec3(shape.pos().getX() + quad[k * 3], shape.pos().getY() + quad[k * 3 + 1], shape.pos().getZ() + quad[k * 3 + 2]);
+                    Vec3 p = new Vec3(shape.pos().getX() + (double) quad[k * 3], shape.pos().getY() + (double) quad[k * 3 + 1], shape.pos().getZ() + (double) quad[k * 3 + 2]);
                     if (shape.sub() != null) {
                         Pose3dc pose = shape.sub().renderPose(partial);
                         p = pose.transformPosition(p);
+                    }
+                    // depth precision gets worse with distance, so the faces are pulled towards the eye the further off they are
+                    Vec3 toEye = camera.subtract(p);
+                    double dist = toEye.length();
+                    if (dist > 1e-6) {
+                        p = p.add(toEye.scale((0.012 + 0.004 * dist) / dist));
                     }
                     filled.addVertex(matrix, (float) (p.x - camera.x), (float) (p.y - camera.y), (float) (p.z - camera.z))
                             .setColor(c[0], c[1], c[2], FRAGMENT_ALPHA);
                 }
             }
         }
+        for (Highlight h : HIGHLIGHTS) {
+            for (int[] box : h.boxes()) {
+                fillBox(filled, matrix, camera, h.sub(), partial, box, h.color(), h.alpha());
+            }
+        }
         buffers.endBatch(RenderType.debugQuads());
 
         VertexConsumer lines = buffers.getBuffer(RenderType.lines());
-        poseStack.pushPose();
-        poseStack.translate(-camera.x, -camera.y, -camera.z);
         for (Box box : BOXES) {
-            LevelRenderer.renderLineBox(poseStack, lines, box.x0(), box.y0(), box.z0(), box.x1(), box.y1(), box.z1(),
-                    box.color()[0], box.color()[1], box.color()[2], 1f);
+            double[][] c = new double[8][];
+            for (int i = 0; i < 8; i++) {
+                c[i] = new double[]{(i & 1) == 0 ? box.x0() : box.x1(), (i & 2) == 0 ? box.y0() : box.y1(), (i & 4) == 0 ? box.z0() : box.z1()};
+            }
+            for (int i = 0; i < 8; i++) {
+                for (int bit = 1; bit <= 4; bit <<= 1) {
+                    if ((i & bit) == 0) {
+                        line(lines, poseStack, camera, box.sub(), partial, c[i], c[i | bit], box.color()[0], box.color()[1], box.color()[2]);
+                    }
+                }
+            }
         }
-        poseStack.popPose();
+        for (Link link : LINKS) { // where two groups touch across a section border
+            line(lines, poseStack, camera, link.sub(), partial, new double[]{link.x0(), link.y0(), link.z0()},
+                    new double[]{link.x1(), link.y1(), link.z1()}, 1f, 1f, 1f);
+        }
         buffers.endBatch(RenderType.lines());
+    }
+
+    private static void line(VertexConsumer lines, PoseStack poseStack, Vec3 camera, ClientSubLevel sub, float partial,
+                             double[] from, double[] to, float r, float g, float b) {
+        Vec3 a = new Vec3(from[0], from[1], from[2]), c = new Vec3(to[0], to[1], to[2]);
+        if (sub != null) {
+            Pose3dc pose = sub.renderPose(partial);
+            a = pose.transformPosition(a);
+            c = pose.transformPosition(c);
+        }
+        a = towardsEye(a, camera);
+        c = towardsEye(c, camera);
+        Vec3 d = c.subtract(a);
+        if (d.lengthSqr() < 1e-12) {
+            return;
+        }
+        Vec3 n = d.normalize();
+        PoseStack.Pose pose = poseStack.last();
+        lines.addVertex(pose, (float) (a.x - camera.x), (float) (a.y - camera.y), (float) (a.z - camera.z))
+                .setColor(r, g, b, 1f).setNormal(pose, (float) n.x, (float) n.y, (float) n.z);
+        lines.addVertex(pose, (float) (c.x - camera.x), (float) (c.y - camera.y), (float) (c.z - camera.z))
+                .setColor(r, g, b, 1f).setNormal(pose, (float) n.x, (float) n.y, (float) n.z);
+    }
+
+    private static Vec3 towardsEye(Vec3 p, Vec3 camera) {
+        Vec3 toEye = camera.subtract(p);
+        double dist = toEye.length();
+        return dist > 1e-6 ? p.add(toEye.scale((0.012 + 0.004 * dist) / dist)) : p;
     }
 
     private FragmentDebugRenderer() {}

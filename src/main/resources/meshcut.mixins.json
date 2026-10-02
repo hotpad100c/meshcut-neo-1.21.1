@@ -10,7 +10,8 @@
     "VoxelNeighborhoodStateMixin"
   ],
   "client": [
-    "LightsaberGameRendererMixin"
+    "LightsaberGameRendererMixin",
+    "LightsaberArmPoseMixin"
   ],
   "injectors": {
     "defaultRequire": 1

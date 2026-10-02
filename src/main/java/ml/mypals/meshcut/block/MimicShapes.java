@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class MimicShapes {
     private static final int MAX_CACHED = 4096;
     private static final double QUANT = 1000.0;
+    private static final double MIN_FRACTION = 0.004;
 
     /** Imitated block plus its cuts, quantised so near-identical cuts share one cache entry. */
     public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded) {
@@ -71,7 +72,8 @@ public final class MimicShapes {
     /** Fraction (0..1) of the imitated block's collision volume that survives the cuts. */
     public static double volumeFraction(Key key) {
         double full = VoxelBoxes.volume(targetBoxes(key.target()));
-        return full <= 0 ? 1 : Math.min(1, VoxelBoxes.volume(boxes(key)) / full);
+        // never zero: a body whose blocks all weigh nothing has no centre of mass, which crashes the physics engine
+        return full <= 0 ? 1 : Math.max(MIN_FRACTION, Math.min(1, VoxelBoxes.volume(boxes(key)) / full));
     }
 
     /** Volume-weighted centre of what is left of the block, in block-local coordinates; the middle if nothing is. */

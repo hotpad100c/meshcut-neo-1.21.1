@@ -1,6 +1,14 @@
 package ml.mypals.meshcut.client;
 
 import ml.mypals.meshcut.MeshCut;
+import ml.mypals.meshcut.block.MimicBlock;
+import ml.mypals.meshcut.block.MimicBlockEntity;
+import net.minecraft.client.particle.ParticleEngine;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.client.extensions.common.IClientBlockExtensions;
+import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsEvent;
 import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.client.render.MimicBakedModel;
 import ml.mypals.meshcut.client.render.MimicMesh;
@@ -56,6 +64,24 @@ public final class MeshCutClient {
             event.getInput().leftImpulse *= 5f;
             event.getInput().forwardImpulse *= 5f;
         }
+    }
+
+    /**
+     * Vanilla spawns break particles for every box of a block's shape, and a cut block's shape is made of a hundred or
+     * so boxes. The particles are made for the block it imitates instead, whose shape is its own.
+     */
+    @SubscribeEvent
+    public static void registerClientExtensions(RegisterClientExtensionsEvent event) {
+        event.registerBlock(new IClientBlockExtensions() {
+            @Override
+            public boolean addDestroyEffects(BlockState state, Level level, BlockPos pos, ParticleEngine manager) {
+                if (level.getBlockEntity(pos) instanceof MimicBlockEntity be && !(be.getTargetState().getBlock() instanceof MimicBlock)
+                        && !be.getTargetState().isAir()) {
+                    manager.destroy(pos, be.getTargetState());
+                }
+                return true;
+            }
+        }, MeshCut.MIMIC_BLOCK.get());
     }
 
     private MeshCutClient() {}
