@@ -82,7 +82,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
         }
         double age = be.getLevel().getGameTime() + partialTick - be.getGlowStart();
         if (age < 0) {
-            return 1f; // a clock that ran backwards just means "fresh"
+            return 1f;
         }
         if (age >= GLOW_TICKS) {
             return 0f;

@@ -51,6 +51,21 @@ public final class VoxelBoxes {
         return cells;
     }
 
+    /**
+     * How much of the shape is left after the cuts (cubic blocks), as finely as {@link #cut} finds it but without
+     * the token cell it adds to a piece too thin to find: zero means nothing is left.
+     */
+    public static double remainingVolume(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+        if (planes.isEmpty() && excluded.isEmpty()) {
+            return volume(shape);
+        }
+        List<double[]> boxes = cutColumns(shape, planes, excluded, COLUMNS);
+        if (boxes.isEmpty()) {
+            boxes = cutCells(shape, planes, excluded);
+        }
+        return volume(boxes);
+    }
+
     // ---------------------------------------------------------------- columns
 
     /**

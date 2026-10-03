@@ -81,7 +81,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     }
 
     /** A block holding less of a body than this (in cubic blocks) holds nothing. */
-    private static final double EMPTY_BODY_VOLUME = 2e-4;
+    private static final double EMPTY_BODY_VOLUME = 1e-5;
 
     /** Places a mimic of {@code target} cut by {@code planes} (block-local half-spaces). */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes, CapMode mode,
@@ -102,8 +102,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
                              @Nullable EntityAppearance entity) {
-        if (entity != null && ml.mypals.meshcut.geom.VoxelBoxes.volume(
-                MimicShapes.boxes(MimicShapes.Key.of(target, planes, excluded, entity.boxes()))) < EMPTY_BODY_VOLUME) {
+        if (entity != null && ml.mypals.meshcut.geom.VoxelBoxes.remainingVolume(entity.boxes(), planes, excluded) < EMPTY_BODY_VOLUME) {
             // nothing of the body is left in this block (it was all cut away, or only ever passed by): it goes, or
             // it would hold together what is no longer touching
             if (level.getBlockState(pos).getBlock() instanceof MimicBlock) {

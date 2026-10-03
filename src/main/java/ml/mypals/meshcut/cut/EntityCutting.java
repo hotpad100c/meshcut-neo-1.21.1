@@ -16,30 +16,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.world.entity.AreaEffectCloud;
-import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ExperienceOrb;
-import net.minecraft.world.entity.Interaction;
-import net.minecraft.world.entity.LightningBolt;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.Marker;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
-import net.minecraft.world.entity.decoration.LeashFenceKnotEntity;
-import net.minecraft.world.entity.item.FallingBlockEntity;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.entity.projectile.EvokerFangs;
-import net.minecraft.world.entity.projectile.Projectile;
-import net.minecraft.world.entity.vehicle.VehicleEntity;
-import net.minecraft.world.entity.decoration.HangingEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.common.Tags;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
@@ -68,10 +53,13 @@ import java.util.function.Consumer;
  * the entity's box.
  */
 public final class EntityCutting {
-    /** Entities larger than this (in blocks, along any axis) are not cut. */
-    private static final double MAX_SIZE = 4;
-    /** A block that would hold less of a limb than this (along any axis) is left out. */
-    private static final double MIN_PART = 0.02;
+    /**
+     * No part of a limb in a block is thinner than this (in blocks): a sliver of a limb that just reaches into a block
+     * still gets that block, or what of the model is there would not be drawn by anyone.
+     */
+    private static final double MIN_PART = 0.03;
+    /** At most this many blocks for one body (a client could ask for anything). */
+    private static final int MAX_CELLS = 65536;
     /** How long a client may take to answer (ticks). */
     private static final int ANSWER_TICKS = 20;
     /** Things of these types are never cut. */
@@ -125,9 +113,11 @@ public final class EntityCutting {
         Set<Entity> hit = new LinkedHashSet<>();
         for (Swept sweep : sweeps) {
             AABB reach = bounds(sweep.quad()).inflate(0.5);
-            for (Entity e : level.getEntities(wielder, reach, EntityCutting::cuttable)) {
-                if (!hit.contains(e) && crosses(sweep.quad(), e.getBoundingBox())) {
-                    hit.add(e);
+            for (Entity e : level.getEntities(wielder, reach, e -> true)) {
+                // a part of a bigger entity (the ender dragon's wings, say) is hit: the whole entity is cut
+                Entity whole = e instanceof net.neoforged.neoforge.entity.PartEntity<?> part ? part.getParent() : e;
+                if (whole != wielder && !hit.contains(whole) && cuttable(whole) && crosses(sweep.quad(), e.getBoundingBox())) {
+                    hit.add(whole);
                 }
             }
         }
@@ -160,11 +150,16 @@ public final class EntityCutting {
             return;
         }
         PENDING.remove(id);
-        List<BodySpec> valid = validate(bodies, pending.entity);
-        if (valid == null) {
-            MeshCut.LOGGER.warn("{} sent limbs for a {} that make no sense; it falls as one piece", player.getName().getString(), pending.look.type());
+        if (bodies.isEmpty()) {
+            complete(pending, List.of()); // nothing of it can be seen (a marker, say): it is cut down and leaves nothing
+            return;
         }
-        complete(pending, valid);
+        String problem = problemWith(bodies);
+        if (problem != null) {
+            MeshCut.LOGGER.warn("{} sent limbs for a {} that cannot be built ({}); it falls as one piece",
+                    player.getName().getString(), pending.look.type(), problem);
+        }
+        complete(pending, problem == null ? bodies : null);
     }
 
     public static void onServerTick(ServerTickEvent.Post event) {
@@ -175,6 +170,9 @@ public final class EntityCutting {
             Pending pending = it.next().getValue();
             if (pending.level.getGameTime() >= pending.deadline || pending.entity.isRemoved()) {
                 it.remove();
+                if (!pending.entity.isRemoved()) {
+                    MeshCut.LOGGER.warn("No client said in time what a {} is made of; it falls as one piece", pending.look.type());
+                }
                 complete(pending, null);
             } else if (!(pending.entity instanceof Player)) {
                 pending.entity.setDeltaMovement(Vec3.ZERO);
@@ -222,14 +220,19 @@ public final class EntityCutting {
         if (!cutDown(level, entity, wielder)) {
             return List.of();
         }
+        // no client said what it looks like: one piece the size of its box
+        List<BodySpec> asBox = List.of(new BodySpec(null, EntityAppearance.NO_ROTATION.clone(), new double[3],
+                List.of(new double[]{box.minX - feet.x, box.minY - feet.y, box.minZ - feet.z,
+                        box.maxX - feet.x, box.maxY - feet.y, box.maxZ - feet.z}), -1, new double[3]));
         if (bodies == null) {
-            bodies = List.of(new BodySpec(null, EntityAppearance.NO_ROTATION.clone(), new double[3],
-                    List.of(new double[]{box.minX - feet.x, box.minY - feet.y, box.minZ - feet.z,
-                            box.maxX - feet.x, box.maxY - feet.y, box.maxZ - feet.z}), -1, new double[3]));
+            bodies = asBox;
         }
-        List<ServerSubLevel> built = new ArrayList<>(bodies.size());
-        for (BodySpec spec : bodies) {
-            built.add(makeLimb(level, look, spec, feet, velocity));
+        List<ServerSubLevel> built = build(level, look, bodies, feet, velocity);
+        if (!bodies.isEmpty() && built.stream().allMatch(java.util.Objects::isNull) && bodies != asBox) {
+            // it is dead already; whatever went wrong, it must not just vanish
+            MeshCut.LOGGER.warn("None of the limbs of a {} could be built; it falls as one piece", look.type());
+            bodies = asBox;
+            built = build(level, look, bodies, feet, velocity);
         }
         for (int i = 0; i < bodies.size(); i++) {
             BodySpec spec = bodies.get(i);
@@ -238,35 +241,42 @@ public final class EntityCutting {
                 RagdollJoints.join(level, built.get(spec.parent()), bodies.get(spec.parent()).name(), built.get(i), spec.name(), anchor);
             }
         }
+        int limbs = (int) built.stream().filter(java.util.Objects::nonNull).count();
+        MeshCut.LOGGER.info("Cut down a {}: {} limb(s){}", look.type(), limbs, bodies == asBox ? " (one piece the size of its box)" : "");
         built.removeIf(java.util.Objects::isNull);
+        return built;
+    }
+
+    /** Builds each limb on its own: one that fails (null in its place) does not take the others with it. */
+    private static List<ServerSubLevel> build(ServerLevel level, EntityAppearance.Look look, List<BodySpec> bodies, Vec3 feet,
+                                              Vec3 velocity) {
+        List<ServerSubLevel> built = new ArrayList<>(bodies.size());
+        for (BodySpec spec : bodies) {
+            ServerSubLevel limb = null;
+            try {
+                limb = makeLimb(level, look, spec, feet, velocity);
+            } catch (RuntimeException e) {
+                MeshCut.LOGGER.error("Couldn't build the {} of a cut-down {}", spec.name(), look.type(), e);
+            }
+            built.add(limb);
+        }
         return built;
     }
 
     // ---------------------------------------------------------------- which entities, and how they go
 
+    /**
+     * Anything can be cut, except what cannot be hurt at all: an entity made invulnerable, a player in creative or
+     * spectator mode, and the types in the {@link #UNCUTTABLE} tag.
+     */
     private static boolean cuttable(Entity e) {
-        if (e.isRemoved() || e.isInvulnerable() || e.isMultipartEntity() || e.getType().is(Tags.EntityTypes.BOSSES)
-                || e.getType().is(UNCUTTABLE)) {
-            return false;
-        }
-        AABB box = e.getBoundingBox();
-        if (box.getXsize() > MAX_SIZE || box.getYsize() > MAX_SIZE || box.getZsize() > MAX_SIZE) {
+        if (e.isRemoved() || e.isInvulnerable() || e.getType().is(UNCUTTABLE)) {
             return false;
         }
         if (e instanceof LivingEntity living) {
             return !living.isDeadOrDying() && !(living instanceof Player player && (player.isCreative() || player.isSpectator()));
         }
-        if (e instanceof Projectile || e instanceof ItemEntity || e instanceof ExperienceOrb || e instanceof Display
-                || e instanceof Marker || e instanceof Interaction || e instanceof FallingBlockEntity || e instanceof PrimedTnt
-                || e instanceof AreaEffectCloud || e instanceof EvokerFangs || e instanceof LightningBolt
-                || e instanceof EndCrystal || e instanceof LeashFenceKnotEntity) {
-            return false;
-        }
-        if (e instanceof VehicleEntity || e instanceof HangingEntity) {
-            return true;
-        }
-        ItemStack pick = e.getPickResult();
-        return pick != null && !pick.isEmpty();
+        return true;
     }
 
     private static EntityAppearance.Look lookOf(Entity entity) {
@@ -299,6 +309,16 @@ public final class EntityCutting {
                 : wielder instanceof LivingEntity mob ? level.damageSources().mobAttack(mob) : level.damageSources().generic();
         entity.ejectPassengers();
         entity.stopRiding();
+        if (entity instanceof net.minecraft.world.entity.boss.enderdragon.EnderDragon dragon) {
+            // hurt, it would only start its long death; this is the end of it
+            var fight = dragon.getDragonFight();
+            ExperienceOrb.award(level, dragon.position(), fight == null || fight.hasPreviouslyKilledDragon() ? 500 : 12000);
+            if (fight != null) {
+                fight.setDragonKilled(dragon); // the exit portal opens, the egg appears
+            }
+            dragon.remove(Entity.RemovalReason.KILLED);
+            return true;
+        }
         if (entity instanceof LivingEntity living) {
             Vec3 feet = living.position();
             living.hurt(source, Float.MAX_VALUE);
@@ -334,53 +354,54 @@ public final class EntityCutting {
 
     // ---------------------------------------------------------------- building
 
-    /** What a client sent, if it is sound: a few limbs, each near where the entity stood. */
+    /**
+     * Why what a client sent cannot be built, or null if it can. Only its shape is checked (limbs that hang from
+     * limbs that exist, numbers that are numbers); where the model reaches is the model's business.
+     */
     @Nullable
-    private static List<BodySpec> validate(List<BodySpec> bodies, Entity entity) {
-        if (bodies.isEmpty() || bodies.size() > BodySpec.MAX_BODIES) {
-            return null;
+    private static String problemWith(List<BodySpec> bodies) {
+        if (bodies.size() > BodySpec.MAX_BODIES) {
+            return bodies.size() + " limbs";
         }
-        AABB allowed = entity.getBoundingBox().move(entity.position().scale(-1)).inflate(1);
         int boxes = 0;
+        long cells = 0;
         for (int i = 0; i < bodies.size(); i++) {
             BodySpec b = bodies.get(i);
-            if (b.parent() < -1 || b.parent() >= bodies.size() || b.parent() == i || b.boxes().isEmpty()
-                    || !finite(b.rotation()) || !finite(b.origin()) || !finite(b.anchor())
-                    || b.parent() >= 0 && !allowed.contains(b.anchor()[0], b.anchor()[1], b.anchor()[2])) {
-                return null;
+            if (b.parent() < -1 || b.parent() >= bodies.size() || b.parent() == i) {
+                return "limb " + i + " hangs from " + b.parent();
+            }
+            if (b.boxes().isEmpty() || !finite(b.rotation()) || !finite(b.origin()) || !finite(b.anchor())) {
+                return "limb " + i + " is empty or not a number";
             }
             double length = Math.sqrt(b.rotation()[0] * b.rotation()[0] + b.rotation()[1] * b.rotation()[1]
                     + b.rotation()[2] * b.rotation()[2] + b.rotation()[3] * b.rotation()[3]);
-            if (Math.abs(length - 1) > 1e-3) {
-                return null;
+            if (length < 1e-6) {
+                return "limb " + i + " has no rotation";
             }
-            Quaterniond q = new Quaterniond(b.rotation()[0], b.rotation()[1], b.rotation()[2], b.rotation()[3]);
+            for (int k = 0; k < 4; k++) {
+                b.rotation()[k] /= length;
+            }
             for (double[] box : b.boxes()) {
                 boxes++;
                 if (box.length != 6 || !finite(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
-                    return null;
+                    return "limb " + i + " has a box inside out";
                 }
-                for (int c = 0; c < 8; c++) {
-                    Vector3d p = q.transform(new Vector3d(box[(c & 1) == 0 ? 0 : 3], box[(c & 2) == 0 ? 1 : 4], box[(c & 4) == 0 ? 2 : 5]))
-                            .add(b.origin()[0], b.origin()[1], b.origin()[2]);
-                    if (!allowed.contains(p.x, p.y, p.z)) {
-                        return null;
-                    }
-                }
+                cells += (long) (Math.floor(box[3]) - Math.floor(box[0]) + 1) * (long) (Math.floor(box[4]) - Math.floor(box[1]) + 1)
+                        * (long) (Math.floor(box[5]) - Math.floor(box[2]) + 1);
             }
         }
-        if (boxes > BodySpec.MAX_BOXES) {
-            return null;
+        if (boxes > BodySpec.MAX_BOXES || cells > MAX_CELLS) {
+            return boxes + " boxes over " + cells + " blocks";
         }
         for (int i = 0; i < bodies.size(); i++) { // no loops
             int steps = 0;
             for (int p = bodies.get(i).parent(); p >= 0; p = bodies.get(p).parent()) {
-                if (p >= bodies.size() || ++steps > bodies.size()) {
-                    return null;
+                if (++steps > bodies.size()) {
+                    return "limbs hang from each other in a loop";
                 }
             }
         }
-        return bodies;
+        return null;
     }
 
     private static boolean finite(double[] values) {
@@ -410,9 +431,16 @@ public final class EntityCutting {
                     for (int z = (int) Math.floor(b[2]); z <= (int) Math.floor(b[5] - 1e-9); z++) {
                         double[] in = {Math.max(b[0] - x, 0), Math.max(b[1] - y, 0), Math.max(b[2] - z, 0),
                                 Math.min(b[3] - x, 1), Math.min(b[4] - y, 1), Math.min(b[5] - z, 1)};
-                        if (in[3] - in[0] >= MIN_PART && in[4] - in[1] >= MIN_PART && in[5] - in[2] >= MIN_PART) {
-                            cells.computeIfAbsent(new BlockPos(x, y, z), k -> new ArrayList<>()).add(in);
+                        for (int a = 0; a < 3; a++) { // a sliver is thickened into the block, never cut off
+                            if (in[a + 3] - in[a] < MIN_PART) {
+                                if (in[a] + MIN_PART <= 1) {
+                                    in[a + 3] = in[a] + MIN_PART;
+                                } else {
+                                    in[a] = in[a + 3] - MIN_PART;
+                                }
+                            }
                         }
+                        cells.computeIfAbsent(new BlockPos(x, y, z), k -> new ArrayList<>()).add(in);
                     }
                 }
             }
@@ -442,37 +470,56 @@ public final class EntityCutting {
         Pose3d pose = new Pose3d();
         pose.position().set(feet.x, feet.y, feet.z);
         ServerSubLevel limb = (ServerSubLevel) container.allocateNewSubLevel(pose);
-        var plot = limb.getPlot();
-        plot.newEmptyChunk(plot.getCenterChunk());
-        BlockPos plotAnchor = plot.getCenterBlock();
-        for (var cell : cells.entrySet()) {
-            BlockPos c = cell.getKey();
-            BlockPos at = plotAnchor.offset(c.subtract(shift));
-            double[] origin = {toFrame.x - c.getX(), toFrame.y - c.getY(), toFrame.z - c.getZ()};
-            MimicBlock.place(level, at, MeshCut.ENTITY_BODY.get().defaultBlockState(), List.of(), List.of(), List.of(),
-                    CapMode.LAVA, null, new EntityAppearance(look, spec.name(), spec.rotation().clone(), origin, cell.getValue()));
+        try {
+            var plot = limb.getPlot();
+            plot.newEmptyChunk(plot.getCenterChunk());
+            BlockPos plotAnchor = plot.getCenterBlock();
+            // a big limb (the dragon's) reaches into more chunks of the plot than the first
+            Set<net.minecraft.world.level.ChunkPos> chunks = new java.util.HashSet<>();
+            for (BlockPos c : cells.keySet()) {
+                chunks.add(new net.minecraft.world.level.ChunkPos(plotAnchor.offset(c.subtract(shift))));
+            }
+            for (var chunk : chunks) {
+                // the plot keeps its chunks by local position; newEmptyChunk takes the global one
+                if (plot.getChunkHolder(plot.toLocal(chunk)) == null) {
+                    plot.newEmptyChunk(chunk);
+                }
+            }
+            for (var cell : cells.entrySet()) {
+                BlockPos c = cell.getKey();
+                BlockPos at = plotAnchor.offset(c.subtract(shift));
+                double[] origin = {toFrame.x - c.getX(), toFrame.y - c.getY(), toFrame.z - c.getZ()};
+                MimicBlock.place(level, at, MeshCut.ENTITY_BODY.get().defaultBlockState(), List.of(), List.of(), List.of(),
+                        CapMode.LAVA, null, new EntityAppearance(look, spec.name(), spec.rotation().clone(), origin, cell.getValue()));
+            }
+            if (limb.isRemoved()) {
+                return null;
+            }
+            // plot point P is the limb-frame point L = P − plotAnchor + shift, which is at feet + origin + rotation·L
+            Vector3dc center = limb.getMassTracker().getCenterOfMass();
+            Vector3d rotationPoint;
+            if (center != null) {
+                rotationPoint = new Vector3d(center);
+            } else {
+                rotationPoint = new Vector3d(plotAnchor.getX() + 0.5, plotAnchor.getY() + 0.5, plotAnchor.getZ() + 0.5);
+                limb.logicalPose().rotationPoint().set(rotationPoint);
+            }
+            Vector3d local = new Vector3d(rotationPoint).sub(plotAnchor.getX(), plotAnchor.getY(), plotAnchor.getZ())
+                    .add(shift.getX(), shift.getY(), shift.getZ());
+            Vector3d position = rotation.transform(local).add(frameOrigin).add(feet.x, feet.y, feet.z);
+            limb.logicalPose().position().set(position);
+            limb.logicalPose().orientation().set(rotation);
+            container.physicsSystem().getPipeline().teleport(limb, limb.logicalPose().position(), limb.logicalPose().orientation());
+            limb.updateLastPose();
+            CutService.push(limb, velocity);
+            return limb;
+        } catch (RuntimeException e) {
+            // half built, it would be left standing nowhere
+            if (!limb.isRemoved()) {
+                container.removeSubLevel(limb, dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason.REMOVED);
+            }
+            throw e;
         }
-        if (limb.isRemoved()) {
-            return null;
-        }
-        // plot point P is the limb-frame point L = P − plotAnchor + shift, which is at feet + origin + rotation·L
-        Vector3dc center = limb.getMassTracker().getCenterOfMass();
-        Vector3d rotationPoint;
-        if (center != null) {
-            rotationPoint = new Vector3d(center);
-        } else {
-            rotationPoint = new Vector3d(plotAnchor.getX() + 0.5, plotAnchor.getY() + 0.5, plotAnchor.getZ() + 0.5);
-            limb.logicalPose().rotationPoint().set(rotationPoint);
-        }
-        Vector3d local = new Vector3d(rotationPoint).sub(plotAnchor.getX(), plotAnchor.getY(), plotAnchor.getZ())
-                .add(shift.getX(), shift.getY(), shift.getZ());
-        Vector3d position = rotation.transform(local).add(frameOrigin).add(feet.x, feet.y, feet.z);
-        limb.logicalPose().position().set(position);
-        limb.logicalPose().orientation().set(rotation);
-        container.physicsSystem().getPipeline().teleport(limb, limb.logicalPose().position(), limb.logicalPose().orientation());
-        limb.updateLastPose();
-        CutService.push(limb, velocity);
-        return limb;
     }
 
     private static AABB bounds(Vec3[] quad) {

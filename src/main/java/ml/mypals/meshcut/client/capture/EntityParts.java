@@ -246,7 +246,63 @@ public final class EntityParts {
             bodies.add(spec(name, limb, parent));
             meshes.put(name, new ModelCapturer.CapturedMesh(limb.faces, ModelCapturer.opaqueOf(limb.faces), whole.capUv()));
         }
-        return new ModelCapturer.EntityCapture(whole, meshes, bodies);
+        return new ModelCapturer.EntityCapture(whole, meshes, fitBoxes(bodies));
+    }
+
+    /**
+     * Joins boxes until there are at most {@code limit}: each time the two whose joint box adds the least empty space.
+     * Everything stays covered (so nothing of the model goes undrawn); only the collision gets coarser.
+     */
+    private static List<double[]> merged(List<double[]> boxes, int limit) {
+        while (boxes.size() > limit) {
+            int bestA = 0, bestB = 1;
+            double bestWaste = Double.MAX_VALUE;
+            for (int a = 0; a < boxes.size(); a++) {
+                for (int b = a + 1; b < boxes.size(); b++) {
+                    double[] u = boxes.get(a).clone();
+                    grow(u, boxes.get(b));
+                    double waste = volume(u) - volume(boxes.get(a)) - volume(boxes.get(b));
+                    if (waste < bestWaste) {
+                        bestWaste = waste;
+                        bestA = a;
+                        bestB = b;
+                    }
+                }
+            }
+            double[] u = boxes.get(bestA).clone();
+            grow(u, boxes.get(bestB));
+            boxes.set(bestA, u);
+            boxes.remove(bestB);
+        }
+        return boxes;
+    }
+
+    private static double volume(double[] b) {
+        return Math.max(0, b[3] - b[0]) * Math.max(0, b[4] - b[1]) * Math.max(0, b[5] - b[2]);
+    }
+
+    /**
+     * Keeps the whole body within what the server takes ({@link BodySpec#MAX_BOXES}): the limbs with the most boxes
+     * are made of one box each until it fits. Coarser collision, but nothing of the model is lost.
+     */
+    private static List<BodySpec> fitBoxes(List<BodySpec> bodies) {
+        List<BodySpec> out = new ArrayList<>(bodies);
+        while (out.stream().mapToInt(b -> b.boxes().size()).sum() > BodySpec.MAX_BOXES) {
+            int most = 0;
+            for (int i = 1; i < out.size(); i++) {
+                if (out.get(i).boxes().size() > out.get(most).boxes().size()) {
+                    most = i;
+                }
+            }
+            BodySpec b = out.get(most);
+            if (b.boxes().size() <= 1) {
+                break;
+            }
+            int excess = out.stream().mapToInt(x -> x.boxes().size()).sum() - BodySpec.MAX_BOXES;
+            List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, Math.max(b.boxes().size() / 2, b.boxes().size() - excess)));
+            out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
+        }
+        return out;
     }
 
     /** Everything as one rigid piece, in the frame of its biggest part (a boat's hull lies along the boat). */
@@ -288,12 +344,7 @@ public final class EntityParts {
     }
 
     private static BodySpec spec(String name, Limb limb, int parent) {
-        List<double[]> boxes = new ArrayList<>(limb.boxes.values());
-        if (boxes.size() > MAX_BOXES_PER_LIMB) {
-            double[] all = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
-            boxes.forEach(b -> grow(all, b));
-            boxes = List.of(all);
-        }
+        List<double[]> boxes = merged(new ArrayList<>(limb.boxes.values()), MAX_BOXES_PER_LIMB);
         List<double[]> out = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {
             double[] t = b.clone();
@@ -543,6 +594,22 @@ public final class EntityParts {
     private static void findNames(Entity entity, Map<ModelPart, String> names, Set<ModelPart> base) {
         var renderer = Minecraft.getInstance().getEntityRenderDispatcher().getRenderer(entity);
         if (!(renderer instanceof LivingEntityRenderer<?, ?> living)) {
+            // a renderer of its own (the ender dragon's): every model it holds is the body's
+            for (Class<?> c = renderer.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (!Modifier.isStatic(f.getModifiers()) && net.minecraft.client.model.Model.class.isAssignableFrom(f.getType())) {
+                        try {
+                            f.setAccessible(true);
+                            Object model = f.get(renderer);
+                            if (model != null) {
+                                scanModel(model, names, base);
+                            }
+                        } catch (ReflectiveOperationException | RuntimeException e) {
+                            // a field we may not read: its parts go unnamed
+                        }
+                    }
+                }
+            }
             return;
         }
         scanModel(living.getModel(), names, base);
