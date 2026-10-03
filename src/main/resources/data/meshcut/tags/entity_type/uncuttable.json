@@ -1,4 +1,16 @@
 {
   "replace": false,
-  "values": []
+  "values": [
+    "minecraft:marker",
+    "minecraft:item_display",
+    "minecraft:block_display",
+    "minecraft:text_display",
+    "minecraft:interaction",
+    "minecraft:item",
+    "minecraft:experience_orb",
+    "minecraft:area_effect_cloud",
+    "minecraft:leash_knot",
+    "minecraft:lightning_bolt",
+    "minecraft:fishing_bobber"
+  ]
 }

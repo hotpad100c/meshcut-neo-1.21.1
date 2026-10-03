@@ -190,6 +190,15 @@ public final class StrokeFit {
 
     /** Adds a patch to a block's list, joining it to one it continues. */
     public static void mergeInto(List<Patch> list, Patch patch) {
+        mergeInto(list, patch, List.of(), List.of(), null);
+    }
+
+    /**
+     * As {@link #mergeInto(List, Patch)}, for a block whose real cuts, cut-out parts and shape are known: which patch
+     * may be forgotten is judged on the block as it is.
+     */
+    public static void mergeInto(List<Patch> list, Patch patch, List<CutPlane> real, List<List<CutPlane>> excluded,
+                                 @Nullable List<double[]> shape) {
         for (int i = 0; i < list.size(); i++) {
             if (list.get(i).samePlane(patch)) {
                 list.set(i, list.get(i).union(patch));
@@ -198,7 +207,7 @@ public final class StrokeFit {
         }
         list.add(patch);
         while (list.size() > MAX_PATCHES) {
-            list.remove(forgettable(list));
+            list.remove(forgettable(list, real, excluded, shape));
         }
     }
 
@@ -207,12 +216,13 @@ public final class StrokeFit {
      * Which cut to forget when there are too many: one that divides nothing (the pieces are the same without it), or
      * else the oldest.
      */
-    private static int forgettable(List<Patch> list) {
-        int all = CellGrid.of(List.of(), List.of(), list).componentCount();
+    private static int forgettable(List<Patch> list, List<CutPlane> real, List<List<CutPlane>> excluded,
+                                   @Nullable List<double[]> shape) {
+        int all = CellGrid.of(real, excluded, list, shape).componentCount();
         for (int i = 0; i < list.size(); i++) {
             List<Patch> without = new ArrayList<>(list);
             without.remove(i);
-            if (CellGrid.of(List.of(), List.of(), without).componentCount() >= all) {
+            if (CellGrid.of(real, excluded, without, shape).componentCount() >= all) {
                 return i;
             }
         }

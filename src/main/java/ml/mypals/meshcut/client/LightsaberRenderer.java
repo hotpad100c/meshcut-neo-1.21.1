@@ -1,11 +1,7 @@
 package ml.mypals.meshcut.client;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.pipeline.TextureTarget;
-import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.mojang.blaze3d.vertex.VertexSorting;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
 import ml.mypals.meshcut.item.LightsaberItem;
@@ -18,10 +14,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
-import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
-import org.joml.Matrix4fStack;
-import org.joml.Quaternionf;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -33,12 +26,6 @@ public final class LightsaberRenderer {
     private static final float[] CORE = {1f, 1f, 1f, 1f};
     private static final float[] GLOW = {0.25f, 0.8f, 1f, 0.45f};
     private static final float[] HALO = {0.2f, 0.6f, 1f, 0.18f};
-    private static final Matrix4f WORLD_PROJECTION = new Matrix4f();
-    private static final Matrix4f WORLD_VIEW = new Matrix4f();
-    @Nullable private static RenderTarget sceneDepth;
-    @Nullable private static Matrix4f firstPersonHilt;
-    @Nullable private static Blade firstPersonBlade;
-    private static boolean firstPersonPrepared;
 
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
@@ -57,14 +44,22 @@ public final class LightsaberRenderer {
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         Map<UUID, Blade> blades = new HashMap<>();
         for (Player player : minecraft.level.players()) {
-            // This blade is drawn later in the same frame, after its hand pose has been captured.
-            if (player == minecraft.player && minecraft.options.getCameraType().isFirstPerson()) continue;
             if (!LightsaberItem.isActive(player)) {
                 continue;
             }
             blades.put(player.getUUID(), Blade.of(player, partialTick));
         }
+        if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
+                && !minecraft.options.hideGui && LightsaberItem.isActive(minecraft.player)) {
+            LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
+                    camera, matrix, buffers);
+        }
         LightsaberTrail.renderWorld(event, blades);
+        if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
+                && !minecraft.options.hideGui && blades.containsKey(minecraft.player.getUUID())) {
+            LightsaberTrail.renderFirstPerson(minecraft.player, blades.get(minecraft.player.getUUID()),
+                    partialTick, matrix, camera, buffers);
+        }
         RenderType beamType = LightsaberRenderTypes.BEAM;
         VertexConsumer consumer = buffers.getBuffer(beamType);
         for (var entry : blades.entrySet()) {
@@ -73,90 +68,6 @@ public final class LightsaberRenderer {
                     time, entry.getKey());
         }
         buffers.endBatch(beamType);
-    }
-
-    /** Called immediately before vanilla clears scene depth for the first-person hand pass. */
-    public static void prepareFirstPersonFrame() {
-        firstPersonPrepared = false;
-        firstPersonHilt = null;
-        firstPersonBlade = null;
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.level == null || minecraft.player == null
-                || !minecraft.options.getCameraType().isFirstPerson() || minecraft.options.hideGui
-                || !LightsaberItem.isActive(minecraft.player)) return;
-
-        RenderTarget main = minecraft.getMainRenderTarget();
-        if (sceneDepth == null || sceneDepth.isStencilEnabled() != main.isStencilEnabled()) {
-            releaseDepthTarget();
-            sceneDepth = new TextureTarget(main.width, main.height, true, Minecraft.ON_OSX);
-            if (main.isStencilEnabled()) sceneDepth.enableStencil();
-        } else if (sceneDepth.width != main.width || sceneDepth.height != main.height) {
-            sceneDepth.resize(main.width, main.height, Minecraft.ON_OSX);
-        }
-        sceneDepth.copyDepthFrom(main);
-        main.bindWrite(false);
-        WORLD_PROJECTION.set(RenderSystem.getProjectionMatrix());
-        WORLD_VIEW.rotation(minecraft.gameRenderer.getMainCamera().rotation().conjugate(new Quaternionf()));
-        firstPersonPrepared = true;
-    }
-
-    @Nullable
-    static Matrix4f firstPersonWorldPose(Matrix4f handProjection, Matrix4f handView, Matrix4f itemPose) {
-        return firstPersonPrepared
-                ? LightsaberProjection.itemToWorld(WORLD_PROJECTION, WORLD_VIEW, handProjection, handView, itemPose)
-                : null;
-    }
-
-    static void captureFirstPersonHilt(Matrix4f pose, Blade blade) {
-        if (firstPersonPrepared) {
-            firstPersonHilt = new Matrix4f(pose);
-            firstPersonBlade = blade;
-        }
-    }
-
-    /** After hands have flushed, combine world and hilt depth before drawing the world blade. */
-    public static void renderFirstPersonBeam(float partialTick) {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (!firstPersonPrepared || firstPersonHilt == null || firstPersonBlade == null || sceneDepth == null
-                || minecraft.player == null || !LightsaberItem.isActive(minecraft.player)) return;
-
-        RenderTarget main = minecraft.getMainRenderTarget();
-        main.copyDepthFrom(sceneDepth);
-        main.bindWrite(false);
-        Matrix4f handProjection = new Matrix4f(RenderSystem.getProjectionMatrix());
-        Matrix4fStack modelView = RenderSystem.getModelViewStack();
-        modelView.pushMatrix().identity();
-        RenderSystem.applyModelViewMatrix();
-        RenderSystem.setProjectionMatrix(WORLD_PROJECTION, VertexSorting.DISTANCE_TO_ORIGIN);
-        try {
-            MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
-            LightsaberItemRenderer.renderHiltDepth(minecraft.player.getMainHandItem(), firstPersonHilt,
-                    WORLD_VIEW, buffers);
-            Vec3 camera = minecraft.gameRenderer.getMainCamera().getPosition();
-            LightsaberTrail.renderFirstPerson(minecraft.player, firstPersonBlade, partialTick,
-                    WORLD_VIEW, camera, buffers);
-            drawBlade(buffers.getBuffer(LightsaberRenderTypes.BEAM), WORLD_VIEW,
-                    firstPersonBlade.base().subtract(camera), firstPersonBlade.tip().subtract(camera),
-                    minecraft.player.level().getGameTime() + partialTick, minecraft.player.getUUID());
-            buffers.endBatch(LightsaberRenderTypes.BEAM);
-        } finally {
-            RenderSystem.setProjectionMatrix(handProjection, VertexSorting.DISTANCE_TO_ORIGIN);
-            modelView.popMatrix();
-            RenderSystem.applyModelViewMatrix();
-            firstPersonPrepared = false;
-            firstPersonHilt = null;
-            firstPersonBlade = null;
-        }
-    }
-
-    public static void releaseDepthTarget() {
-        if (sceneDepth != null) {
-            sceneDepth.destroyBuffers();
-            sceneDepth = null;
-        }
-        firstPersonPrepared = false;
-        firstPersonHilt = null;
-        firstPersonBlade = null;
     }
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,

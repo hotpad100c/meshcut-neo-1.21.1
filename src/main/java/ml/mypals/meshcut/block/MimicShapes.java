@@ -7,13 +7,16 @@ import ml.mypals.meshcut.geom.VoxelBoxes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.phys.shapes.BooleanOp;
+import net.minecraft.world.phys.shapes.ArrayVoxelShape;
+import net.minecraft.world.phys.shapes.BitSetDiscreteVoxelShape;
+import net.minecraft.world.phys.shapes.DiscreteVoxelShape;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3d;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +30,8 @@ public final class MimicShapes {
     private static final int MAX_CACHED = 4096;
     private static final double QUANT = 1000.0;
     private static final double MIN_FRACTION = 0.004;
+    /** Box edges closer than this are the same edge of a shape. */
+    private static final double EDGE = 1e-7;
 
     /**
      * Imitated block plus its cuts, quantised so near-identical cuts share one cache entry.
@@ -90,6 +95,7 @@ public final class MimicShapes {
     }
 
     private static final Map<Key, List<double[]>> BOXES = new HashMap<>();
+    private static final Map<Key, VoxelShape> SHAPES = new HashMap<>();
     private static final Map<BlockState, List<double[]>> TARGET_BOXES = new ConcurrentHashMap<>();
 
     public static synchronized List<double[]> boxes(Key key) {
@@ -125,15 +131,89 @@ public final class MimicShapes {
         return volume <= 0 ? new Vector3d(0.5, 0.5, 0.5) : new Vector3d(x / volume, y / volume, z / volume);
     }
 
+    /** The vanilla shape of the cut block (collision, outline, light), shared by every block with the same key. */
+    public static synchronized VoxelShape shape(Key key) {
+        VoxelShape shape = SHAPES.get(key);
+        if (shape == null) {
+            if (SHAPES.size() >= MAX_CACHED) {
+                SHAPES.clear();
+            }
+            shape = shape(boxes(key));
+            SHAPES.put(key, shape);
+        }
+        return shape;
+    }
+
+    /**
+     * The boxes as one vanilla shape, built in a single pass: the grid of all their edges, with the cells inside a
+     * box filled. Joining them one by one ({@link Shapes#joinUnoptimized}, then {@link VoxelShape#optimize}) walks
+     * the whole merged grid for every box, which for a slanted cut of a hundred boxes stalled whole ticks.
+     */
     public static VoxelShape shape(List<double[]> boxes) {
-        if (boxes.isEmpty()) {
+        List<double[]> solid = new ArrayList<>(boxes.size());
+        for (double[] b : boxes) {
+            if (b[3] - b[0] > EDGE && b[4] - b[1] > EDGE && b[5] - b[2] > EDGE) {
+                solid.add(b);
+            }
+        }
+        if (solid.isEmpty()) {
             return Shapes.empty();
         }
-        VoxelShape shape = Shapes.empty();
-        for (double[] b : boxes) {
-            shape = Shapes.joinUnoptimized(shape, Shapes.box(b[0], b[1], b[2], b[3], b[4], b[5]), BooleanOp.OR);
+        if (solid.size() == 1) {
+            double[] b = solid.getFirst();
+            return Shapes.create(b[0], b[1], b[2], b[3], b[4], b[5]);
         }
-        return shape.optimize();
+        double[] xs = edges(solid, 0), ys = edges(solid, 1), zs = edges(solid, 2);
+        BitSetDiscreteVoxelShape cells = new BitSetDiscreteVoxelShape(xs.length - 1, ys.length - 1, zs.length - 1);
+        for (double[] b : solid) {
+            int x1 = cell(xs, b[3]), y1 = cell(ys, b[4]), z1 = cell(zs, b[5]);
+            for (int x = cell(xs, b[0]); x < x1; x++) {
+                for (int y = cell(ys, b[1]); y < y1; y++) {
+                    for (int z = cell(zs, b[2]); z < z1; z++) {
+                        cells.fill(x, y, z);
+                    }
+                }
+            }
+        }
+        return new GridShape(cells, xs, ys, zs);
+    }
+
+    /** Where the boxes start and end along the axis, sorted; edges closer than {@link #EDGE} count as one. */
+    private static double[] edges(List<double[]> boxes, int axis) {
+        double[] all = new double[boxes.size() * 2];
+        for (int i = 0; i < boxes.size(); i++) {
+            all[i * 2] = boxes.get(i)[axis];
+            all[i * 2 + 1] = boxes.get(i)[axis + 3];
+        }
+        Arrays.sort(all);
+        int n = 1;
+        for (int i = 1; i < all.length; i++) {
+            if (all[i] - all[n - 1] > EDGE) {
+                all[n++] = all[i];
+            }
+        }
+        return Arrays.copyOf(all, n);
+    }
+
+    /** Index of the edge {@code v} was merged into. */
+    private static int cell(double[] edges, double v) {
+        int lo = 0, hi = edges.length - 1;
+        while (lo < hi) { // the first edge no further than EDGE below v
+            int mid = (lo + hi) >>> 1;
+            if (edges[mid] < v - EDGE) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    /** Opens up vanilla's constructor of a shape from a grid of cells and its edges. */
+    private static final class GridShape extends ArrayVoxelShape {
+        GridShape(DiscreteVoxelShape cells, double[] xs, double[] ys, double[] zs) {
+            super(cells, xs, ys, zs);
+        }
     }
 
     private static final Map<BlockState, List<double[]>> CUT_BOXES = new ConcurrentHashMap<>();
@@ -183,6 +263,7 @@ public final class MimicShapes {
     public static void clearCaches() {
         synchronized (MimicShapes.class) {
             BOXES.clear();
+            SHAPES.clear();
         }
         TARGET_BOXES.clear();
         CUT_BOXES.clear();

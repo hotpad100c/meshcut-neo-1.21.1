@@ -1,5 +1,7 @@
 package ml.mypals.meshcut.client.render;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import ml.mypals.meshcut.block.MimicRenderData;
 import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.cut.CapMode;
@@ -47,6 +49,16 @@ public final class MimicMesh {
 
     private static final Map<MimicRenderData, MimicMesh> CACHE = new ConcurrentHashMap<>();
     private static final Map<MimicRenderData, List<MeshPoly>> GLOW = new ConcurrentHashMap<>();
+    /**
+     * The same, by identity: a block entity hands out one data object until it changes, and the model asks for it
+     * for every side and layer (every frame, for a sub-level that is a single block). Hashing and comparing the data
+     * of a cut-up entity each time is slow, so those lookups do neither. Bounded like the caches above, so a mesh
+     * dropped there is not kept alive here; one that falls out is found again by the slow way.
+     */
+    private static final Cache<MimicRenderData, MimicMesh> BY_IDENTITY = CacheBuilder.newBuilder()
+            .weakKeys().maximumSize(MAX_CACHED).build();
+    private static final Cache<MimicRenderData, List<MeshPoly>> GLOW_BY_IDENTITY = CacheBuilder.newBuilder()
+            .weakKeys().maximumSize(MAX_CACHED).build();
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -164,7 +176,11 @@ public final class MimicMesh {
     }
 
     public static MimicMesh of(MimicRenderData data) {
-        MimicMesh mesh = CACHE.get(data);
+        MimicMesh mesh = BY_IDENTITY.getIfPresent(data);
+        if (mesh != null) {
+            return mesh;
+        }
+        mesh = CACHE.get(data);
         if (mesh == null) {
             mesh = build(data);
             if (CACHE.size() >= MAX_CACHED) {
@@ -172,12 +188,15 @@ public final class MimicMesh {
             }
             CACHE.put(data, mesh);
         }
+        BY_IDENTITY.put(data, mesh);
         return mesh;
     }
 
     public static void clearCache() {
         CACHE.clear();
         GLOW.clear();
+        BY_IDENTITY.invalidateAll();
+        GLOW_BY_IDENTITY.invalidateAll();
     }
 
     /**
@@ -459,8 +478,13 @@ public final class MimicMesh {
      * mesh: {@code MimicRenderer} draws it for a while after the cut and lets it fade. Render thread only.
      */
     public static List<MeshPoly> glowPolys(MimicRenderData data) {
-        List<MeshPoly> cached = GLOW.get(data);
+        List<MeshPoly> cached = GLOW_BY_IDENTITY.getIfPresent(data);
         if (cached != null) {
+            return cached;
+        }
+        cached = GLOW.get(data);
+        if (cached != null) {
+            GLOW_BY_IDENTITY.put(data, cached);
             return cached;
         }
         List<MeshPoly> out = new ArrayList<>();
@@ -489,6 +513,7 @@ public final class MimicMesh {
             GLOW.clear();
         }
         GLOW.put(data, out);
+        GLOW_BY_IDENTITY.put(data, out);
         return out;
     }
 

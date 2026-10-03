@@ -261,6 +261,24 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         return light == null ? 0 : light.getLightAt(pos);
     }
 
+    // ---------------------------------------------------------------- light
+
+    /**
+     * Light passes through it as through glass, whatever is left of the block. Working it out from the shape would
+     * need the block entity, which the light engine cannot have (it runs off the server thread, where the level
+     * gives no block entities), and costs building the shape on every block change.
+     */
+    @Override
+    protected boolean propagatesSkylightDown(BlockState state, BlockGetter level, BlockPos pos) {
+        return state.getFluidState().isEmpty();
+    }
+
+    /** It does not darken its neighbours' corners either, as glass does not. */
+    @Override
+    protected float getShadeBrightness(BlockState state, BlockGetter level, BlockPos pos) {
+        return 1.0F;
+    }
+
     // ---------------------------------------------------------------- water
 
     @Override

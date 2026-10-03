@@ -4,19 +4,16 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 
 /** Unlit translucent beam geometry tested against the main scene's depth, without writing glow depth. */
 final class LightsaberRenderTypes extends RenderStateShard {
-    static final RenderType HILT_DEPTH = RenderType.create("meshcut_lightsaber_hilt_depth", DefaultVertexFormat.NEW_ENTITY,
-            VertexFormat.Mode.QUADS, 1536, false, false, RenderType.CompositeState.builder()
-                    .setShaderState(RENDERTYPE_ENTITY_CUTOUT_NO_CULL_SHADER)
-                    .setTextureState(new TextureStateShard(TextureAtlas.LOCATION_BLOCKS, false, false))
-                    .setLightmapState(LIGHTMAP)
-                    .setOverlayState(OVERLAY)
+    static final RenderType SCORCH = RenderType.create("meshcut_lightsaber_scorch", DefaultVertexFormat.POSITION_COLOR,
+            VertexFormat.Mode.TRIANGLES, 1536, false, false, RenderType.CompositeState.builder()
+                    .setShaderState(POSITION_COLOR_SHADER)
+                    .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
                     .setCullState(NO_CULL)
                     .setDepthTestState(LEQUAL_DEPTH_TEST)
-                    .setWriteMaskState(DEPTH_WRITE)
+                    .setWriteMaskState(COLOR_WRITE)
                     .setOutputState(MAIN_TARGET)
                     .createCompositeState(false));
     static final RenderType BEAM = RenderType.create("meshcut_lightsaber_beam", DefaultVertexFormat.POSITION_COLOR,

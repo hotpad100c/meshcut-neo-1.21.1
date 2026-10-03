@@ -94,14 +94,22 @@ public final class VoxelBoxes {
      * the token cell it adds to a piece too thin to find: zero means nothing is left.
      */
     public static double remainingVolume(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+        return volume(remaining(shape, planes, excluded));
+    }
+
+    /**
+     * What is left of the shape after the cuts, as boxes, as finely as {@link #cut} finds it but without the token
+     * cell it adds to a piece too thin to find: empty means nothing is left.
+     */
+    public static List<double[]> remaining(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         if (planes.isEmpty() && excluded.isEmpty()) {
-            return volume(shape);
+            return shape;
         }
         List<double[]> boxes = cutColumns(shape, planes, excluded, COLUMNS);
         if (boxes.isEmpty()) {
             boxes = cutCells(shape, planes, excluded);
         }
-        return volume(boxes);
+        return boxes;
     }
 
     // ---------------------------------------------------------------- columns

@@ -76,6 +76,90 @@ public final class Polytope {
         return classify(existing, cut, minVolume, 0);
     }
 
+    /** How much of what there is on each side of a cut is enough, at least, for it to be a cut (see below). */
+    private static final double RELATIVE_VOLUME = 0.15, RELATIVE_EXTENT = 0.3;
+
+    /**
+     * How {@code cut} divides what the block is made of: its {@code shape} (boxes), restricted by {@code existing}.
+     * A side counts if it has at least {@code minVolume} of it and reaches {@code minExtent} from the plane, or, for
+     * something small (a thin limb, a slice already cut thin), at least a fair share of what there is: a part two
+     * pixels wide can be cut like any other.
+     */
+    public static Side classify(List<CutPlane> existing, List<List<CutPlane>> excluded, CutPlane cut, List<double[]> shape,
+                                double minVolume, double minExtent) {
+        double kept = 0, removed = 0, keptReach = 0, removedReach = 0;
+        if (!excluded.isEmpty()) {
+            // Parts were cut out of it: what is on either side is no longer convex, so it is measured in the boxes
+            // that approximate it (as its collision shape does), not exactly.
+            List<double[]> keptBoxes = VoxelBoxes.remaining(shape, with(existing, cut), excluded);
+            List<double[]> removedBoxes = VoxelBoxes.remaining(shape, with(existing, cut.flipped()), excluded);
+            kept = VoxelBoxes.volume(keptBoxes);
+            removed = VoxelBoxes.volume(removedBoxes);
+            keptReach = reach(keptBoxes, cut);
+            removedReach = reach(removedBoxes, cut.flipped());
+            return sides(kept, removed, keptReach, removedReach, minVolume, minExtent);
+        }
+        for (double[] b : shape) {
+            List<CutPlane> material = new ArrayList<>(existing);
+            material.add(new CutPlane(-1, 0, 0, -b[0]));
+            material.add(new CutPlane(1, 0, 0, b[3]));
+            material.add(new CutPlane(0, -1, 0, -b[1]));
+            material.add(new CutPlane(0, 1, 0, b[4]));
+            material.add(new CutPlane(0, 0, -1, -b[2]));
+            material.add(new CutPlane(0, 0, 1, b[5]));
+            List<CutPlane> keep = new ArrayList<>(material);
+            keep.add(cut);
+            List<CutPlane> remove = new ArrayList<>(material);
+            remove.add(cut.flipped());
+            kept += volume(keep);
+            removed += volume(remove);
+            for (MeshPoly face : MeshClipper.clip(CUBE, material)) {
+                float[] v = face.verts();
+                for (int o = 0; o < v.length; o += MeshPoly.STRIDE) {
+                    double dist = cut.signedDistance(v[o], v[o + 1], v[o + 2]);
+                    keptReach = Math.max(keptReach, dist);
+                    removedReach = Math.max(removedReach, -dist);
+                }
+            }
+        }
+        return sides(kept, removed, keptReach, removedReach, minVolume, minExtent);
+    }
+
+    /** Which sides of a cut count, given how much is on each and how far each reaches from the plane. */
+    private static Side sides(double kept, double removed, double keptReach, double removedReach, double minVolume,
+                              double minExtent) {
+        double total = kept + removed;
+        if (total <= 0) {
+            return Side.ALL_KEPT; // nothing there to cut
+        }
+        double volumeNeeded = Math.min(minVolume, RELATIVE_VOLUME * total);
+        double extentNeeded = Math.min(minExtent, RELATIVE_EXTENT * (keptReach + removedReach));
+        if (kept < volumeNeeded || keptReach < extentNeeded) {
+            return removed > 0 ? Side.ALL_REMOVED : Side.ALL_KEPT;
+        }
+        if (removed < volumeNeeded || removedReach < extentNeeded) {
+            return Side.ALL_KEPT;
+        }
+        return Side.SPLIT;
+    }
+
+    /** How far the boxes reach on the kept side of the plane, at their furthest corner. */
+    private static double reach(List<double[]> boxes, CutPlane plane) {
+        double reach = 0;
+        for (double[] b : boxes) {
+            for (int i = 0; i < 8; i++) {
+                reach = Math.max(reach, plane.signedDistance(b[(i & 1) == 0 ? 0 : 3], b[(i & 2) == 0 ? 1 : 4], b[(i & 4) == 0 ? 2 : 5]));
+            }
+        }
+        return reach;
+    }
+
+    private static List<CutPlane> with(List<CutPlane> planes, CutPlane extra) {
+        List<CutPlane> out = new ArrayList<>(planes);
+        out.add(extra);
+        return out;
+    }
+
     /**
      * As {@link #classify(List, CutPlane, double)}, and a side that reaches less than {@code minExtent} away from
      * the plane (at its furthest point) counts as nothing too. Volume alone lets a thin layer over a whole face pass

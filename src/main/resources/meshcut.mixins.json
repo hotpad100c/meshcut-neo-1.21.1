@@ -3,6 +3,7 @@
   "package": "ml.mypals.meshcut.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "EntitySaveMixin",
     "LevelChunkMixin",
     "MassTrackerMixin",
     "PhysicsBlockPropertyHelperMixin",
@@ -14,8 +15,9 @@
     "ModelPartAccessor",
     "ModelPartCubeMixin",
     "ModelPartMixin",
-    "LightsaberGameRendererMixin",
-    "LightsaberArmPoseMixin"
+    "LightsaberArmPoseMixin",
+    "LightsaberMouseMixin",
+    "LightsaberOffhandMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -34,11 +34,16 @@ import java.util.Set;
 /**
  * Takes a recorded entity apart into limbs, the way sable-player-ragdoll does: by the model parts that drew it.
  * <ul>
- *   <li>A part becomes a limb of its own if its name says it is one (head, body, arm, leg, wing, tail) and it does
- *       not merely continue a limb of the same kind it hangs from. Everything else (a nose, a hat, the lower half
- *       of a tentacle) goes with the limb it hangs from; a part that hangs from nothing goes with the limb drawn at
- *       the same pivot (a player's hat with its head), or with the body.</li>
- *   <li>Limbs that hang from nothing hang from the body (the first part called a body, or the biggest limb).</li>
+ *   <li>The name first. A part named as a limb (head, body, arm, leg, wing, tail) is one, unless it only continues
+ *       the limb of the same kind it hangs from (a wing's tip). A part named as an attachment (a nose, a hat, a
+ *       mane), or a single tiny cube, goes with the limb it hangs from, or the limb drawn at the same pivot.</li>
+ *   <li>Then the hierarchy. A part whose name tells nothing ("bone3", "tentacle", "neck") is a limb of its own,
+ *       joined to the limb it hangs from where it is drawn; drawn where a limb that hangs from nothing is drawn, it
+ *       is a layer of that limb (a player's sleeves). A part with nothing to see ("root") only passes its children
+ *       on. A part drawn several times in different places (the dragon's neck and tail) is a limb each time.</li>
+ *   <li>The body is the first part called a body, or the biggest limb. A limb that hangs from nothing hangs from the
+ *       limb nearest its pivot that already hangs from the body, so drawn segments chain up from it.</li>
+ *   <li>Limbs that would weigh almost nothing go with what they hang from.</li>
  *   <li>Each limb keeps the frame its part was drawn in (pivot and rotation), and is made of one box per cube of its
  *       parts that can be seen, in that frame.</li>
  *   <li>Anything that is not an animal is one rigid piece.</li>
@@ -51,13 +56,11 @@ public final class EntityParts {
     private static final double MIN_LIMB_VOLUME = 8;
     /** A part with a single cube no bigger than this (cubic model pixels) is an attachment, as in the ragdoll mod. */
     private static final double ATTACHMENT_VOLUME = 12;
-    private static final int MAX_LIMBS = 16;
+    private static final int MAX_LIMBS = 24;
     /** Two parts whose pivots are closer than this (in blocks) are drawn at the same place. */
     private static final double SAME_PIVOT = 0.05;
     /** No box is thinner than this (in blocks): it would have nothing to collide with. */
     private static final double MIN_THICKNESS = 0.02;
-    /** Limbs are made of voxels this big (one model pixel), or bigger if the body would have too many boxes. */
-    private static final double VOXEL = 1 / 16.0;
 
     private enum Role {
         HEAD, TORSO, ARM, LEG, WING, TAIL, ATTACHMENT, OTHER;
@@ -69,11 +72,14 @@ public final class EntityParts {
 
     /** Answers the server: what the entity it asks about is made of. */
     public static void answer(EntityPartsNet.PartsRequest request) {
-        List<BodySpec> bodies = List.of();
+        List<BodySpec> bodies;
         try {
             bodies = ModelCapturer.captureEntityParts(request.look()).bodies();
         } catch (RuntimeException e) {
+            // No answer, rather than an empty one: that would say nothing of the entity can be seen, and it would
+            // vanish. Without an answer the server lets it fall as one piece.
             MeshCut.LOGGER.warn("Couldn't take a {} apart for the server", request.look().type(), e);
+            return;
         }
         PacketDistributor.sendToServer(new EntityPartsNet.PartsReply(request.id(), bodies));
     }
@@ -90,10 +96,6 @@ public final class EntityParts {
         final Quaternionf rotation = new Quaternionf();
         final Vector3f origin = new Vector3f();
         final Map<Object, double[]> boxes = new LinkedHashMap<>();
-        /** Its faces in its own frame, as triangles with their normal, by the closed piece (cube) they belong to. */
-        final Map<Object, List<float[]>> triangles = new LinkedHashMap<>();
-        /** The size of the voxels it is made of. */
-        double voxel = VOXEL;
         final Map<RenderType, List<MeshPoly>> faces = new LinkedHashMap<>();
 
         Limb(String name, Role role, PartTags.DrawnPart frame, int parent) {
@@ -125,55 +127,70 @@ public final class EntityParts {
             }
         }
 
-        // 1. which parts are limbs
+        // 1. which parts are limbs. A part is looked at each time it is drawn: drawn again where it was (by a layer
+        // over the body), it is the same; drawn somewhere else (the ender dragon's neck, five times), it is another.
         List<Limb> limbs = new ArrayList<>();
-        Map<ModelPart, Integer> limbOf = new IdentityHashMap<>();
-        List<PartTags.DrawnPart> orphans = new ArrayList<>();
-        Set<ModelPart> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        Map<PartTags.DrawnPart, Integer> limbOf = new IdentityHashMap<>();
+        Map<ModelPart, List<PartTags.DrawnPart>> draws = new IdentityHashMap<>();
         for (PartTags.DrawnPart d : drawn) {
             ModelPart part = d.part();
-            if (!base.contains(part) || !seen.add(part)) {
+            if (!base.contains(part)) {
                 continue;
             }
+            List<PartTags.DrawnPart> earlier = draws.computeIfAbsent(part, k -> new ArrayList<>());
+            PartTags.DrawnPart same = null;
+            for (PartTags.DrawnPart e : earlier) {
+                if (e.pose().equals(d.pose(), 1e-4f)) {
+                    same = e;
+                    break;
+                }
+            }
+            if (same != null) {
+                if (limbOf.containsKey(same)) {
+                    limbOf.put(d, limbOf.get(same));
+                }
+                continue;
+            }
+            earlier.add(d);
             String name = names.getOrDefault(part, "part");
             Role role = roleOf(name);
             Set<ModelPart.Cube> cubes = visibleCubes.getOrDefault(part, Set.of());
             double volume = volumeOf(cubes);
+            if (volume <= 0) {
+                continue; // nothing of it to see (a "root"): its children look past it
+            }
+            // a part drawn again further along (the dragon draws its neck and its tail with one part) hangs from
+            // nothing here; it is hung from the nearest limb later, so the segments chain up from the body
             int parent = ancestorLimb(d, limbOf);
             boolean attachment = role == Role.ATTACHMENT || cubes.size() == 1 && volume <= ATTACHMENT_VOLUME;
-            if (role.limb() && !attachment && (parent < 0 || limbs.get(parent).role != role)) {
-                limbOf.put(part, limbs.size());
+            int join; // the limb it goes with, or -1 for a limb of its own
+            if (attachment) {
+                join = parent >= 0 ? parent : samePivot(d, limbs);
+            } else if (role.limb()) {
+                // a limb, unless it only goes on with the limb it hangs from (a wing's tip)
+                join = parent >= 0 && limbs.get(parent).role == role ? parent : -1;
+            } else {
+                // The name tells nothing. Drawn where a limb that hangs from nothing is drawn, it is a layer of that
+                // limb (a player's sleeves); otherwise it is a limb of its own, hanging where it is drawn.
+                join = parent < 0 ? samePivot(d, limbs) : -1;
+            }
+            if (join >= 0) {
+                limbOf.put(d, join);
+                limbs.get(join).volume += volume;
+            } else {
+                limbOf.put(d, limbs.size());
                 Limb limb = new Limb(name, role, d, parent);
                 limb.volume = volume;
                 limbs.add(limb);
-            } else if (parent >= 0) {
-                limbOf.put(part, parent);
-                limbs.get(parent).volume += volume;
-            } else {
-                orphans.add(d);
             }
         }
         if (limbs.isEmpty()) {
             return single(entity, faces, drawn, whole);
         }
-        // a part hanging from nothing goes with the limb drawn at the same place (a player's hat, sleeves, jacket)
-        for (PartTags.DrawnPart d : orphans) {
-            int at = samePivot(d, limbs);
-            if (at >= 0) {
-                limbOf.put(d.part(), at);
-                limbs.get(at).volume += volumeOf(visibleCubes.getOrDefault(d.part(), Set.of()));
-            }
-        }
 
-        // 2. the body everything hangs from; empty and tiny limbs go with what they hang from
+        // 2. the body; tiny limbs go with what they hang from (a body that weighs nothing makes the physics unstable)
         int torso = torsoOf(limbs);
         limbs.get(torso).parent = -1;
-        for (PartTags.DrawnPart d : orphans) {
-            if (!limbOf.containsKey(d.part())) {
-                limbOf.put(d.part(), torso);
-                limbs.get(torso).volume += volumeOf(visibleCubes.getOrDefault(d.part(), Set.of()));
-            }
-        }
         for (int i = 0; i < limbs.size(); i++) {
             if (i != torso && limbs.get(i).volume < MIN_LIMB_VOLUME) {
                 merge(limbs, i, parentOf(limbs, i, torso));
@@ -197,7 +214,7 @@ public final class EntityParts {
         // 4. faces and boxes
         Map<String, Integer> byName = new HashMap<>();
         for (var e : limbOf.entrySet()) {
-            String name = names.get(e.getKey());
+            String name = names.get(e.getKey().part());
             if (name != null) {
                 byName.putIfAbsent(name, e.getValue());
             }
@@ -211,7 +228,7 @@ public final class EntityParts {
                     continue;
                 }
                 Limb limb = limbs.get(resolve(limbs, li));
-                add(limb, entry.getKey(), t.poly(), t.tag().cube() == null ? limb : List.of(t.tag().part(), t.tag().cube()));
+                add(limb, entry.getKey(), t.poly(), t.tag().part());
             }
         }
         for (Object[] f : loose) {
@@ -220,7 +237,11 @@ public final class EntityParts {
             add(limb, (RenderType) f[0], poly, limb);
         }
 
-        // 5. what goes to the server, and what each limb draws
+        // 5. a limb with nothing to hang from hangs from the nearest limb that hangs from the body, one after another
+        //    (the dragon's head from the last of its neck, not from its body)
+        attach(limbs, torso);
+
+        // 6. what goes to the server, and what each limb draws
         List<Integer> alive = new ArrayList<>();
         Map<Integer, Integer> index = new HashMap<>();
         for (int i = 0; i < limbs.size(); i++) {
@@ -259,8 +280,10 @@ public final class EntityParts {
     }
 
     /**
-     * The limbs as the server is to build them, made of voxels. If that is more boxes than the server takes
-     * ({@link BodySpec#MAX_BOXES}), the limb with the most gets bigger voxels, until it fits.
+     * The limbs as the server is to build them: each made of one box per model part, the box around the part as it
+     * lies in the limb (a part turned with the limb lies straight in it, and its box is exactly its cubes). If that is
+     * more boxes than the server takes ({@link BodySpec#MAX_BOXES}), the nearest boxes of the limb with the most are
+     * joined.
      */
     private static List<BodySpec> specs(List<Limb> limbs, List<String> names, List<Integer> parents) {
         List<BodySpec> out = new ArrayList<>(limbs.size());
@@ -274,17 +297,10 @@ public final class EntityParts {
                     most = i;
                 }
             }
-            Limb limb = limbs.get(most);
-            if (limb.voxel < 1) {
-                limb.voxel *= 2;
-                out.set(most, spec(names.get(most), limb, parents.get(most)));
-            } else {
-                // whole-block voxels and still too many: the nearest boxes are joined
-                BodySpec b = out.get(most);
-                int excess = out.stream().mapToInt(x -> x.boxes().size()).sum() - BodySpec.MAX_BOXES;
-                List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, b.boxes().size() - excess));
-                out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
-            }
+            BodySpec b = out.get(most);
+            int excess = out.stream().mapToInt(x -> x.boxes().size()).sum() - BodySpec.MAX_BOXES;
+            List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, b.boxes().size() - excess));
+            out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
         }
         return out;
     }
@@ -348,7 +364,7 @@ public final class EntityParts {
         limb.origin.zero();
         for (var entry : faces.entrySet()) {
             for (RecordingBufferSource.Tagged t : entry.getValue()) {
-                add(limb, entry.getKey(), t.poly(), t.tag() == null || t.tag().cube() == null ? limb : List.of(t.tag().part(), t.tag().cube()));
+                add(limb, entry.getKey(), t.poly(), t.tag() == null ? limb : t.tag().part());
             }
         }
         if (limb.boxes.isEmpty()) {
@@ -360,10 +376,7 @@ public final class EntityParts {
     }
 
     private static BodySpec spec(String name, Limb limb, int parent) {
-        List<double[]> boxes = Voxelizer.boxes(new ArrayList<>(limb.triangles.values()), limb.voxel);
-        if (boxes.isEmpty()) {
-            boxes = new ArrayList<>(limb.boxes.values());
-        }
+        List<double[]> boxes = new ArrayList<>(limb.boxes.values());
         List<double[]> out = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {
             double[] t = b.clone();
@@ -381,25 +394,9 @@ public final class EntityParts {
         return new BodySpec(name, new double[]{q.x, q.y, q.z, q.w}, origin, out, parent, origin.clone());
     }
 
-    /**
-     * Adds a face to the limb: to what it draws, to the closed piece it belongs to (by its cube, or the limb's loose
-     * faces) for the voxels, and to that piece's box.
-     */
+    /** Adds a face to the limb: to what it draws, and to the box of the part that drew it (or the limb's loose faces). */
     private static void add(Limb limb, RenderType type, MeshPoly poly, Object box) {
         limb.faces.computeIfAbsent(type, k -> new ArrayList<>()).add(poly);
-        List<float[]> tris = limb.triangles.computeIfAbsent(box, k -> new ArrayList<>());
-        Quaternionf toFrame = new Quaternionf(limb.rotation).conjugate();
-        Vector3f n = toFrame.transform(new Vector3f(poly.nx(), poly.ny(), poly.nz()));
-        float[] pv = poly.verts();
-        Vector3f[] local = new Vector3f[poly.vertexCount()];
-        for (int i = 0; i < local.length; i++) {
-            local[i] = toFrame.transform(new Vector3f(pv[i * MeshPoly.STRIDE], pv[i * MeshPoly.STRIDE + 1], pv[i * MeshPoly.STRIDE + 2])
-                    .sub(limb.origin));
-        }
-        for (int i = 1; i + 1 < local.length; i++) {
-            tris.add(new float[]{local[0].x, local[0].y, local[0].z, local[i].x, local[i].y, local[i].z,
-                    local[i + 1].x, local[i + 1].y, local[i + 1].z, n.x, n.y, n.z});
-        }
         double[] b = limb.boxes.computeIfAbsent(box,
                 k -> new double[]{Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE});
         float[] v = poly.verts();
@@ -455,9 +452,9 @@ public final class EntityParts {
     }
 
     /** Which limb a face drawn by some model part belongs to, or -1 if that can't be told. */
-    private static int limbFor(PartTags.Tag tag, Map<ModelPart, Integer> limbOf, Map<String, Integer> byName,
+    private static int limbFor(PartTags.Tag tag, Map<PartTags.DrawnPart, Integer> limbOf, Map<String, Integer> byName,
                                Map<ModelPart, String> names, List<PartTags.DrawnPart> drawn) {
-        Integer direct = limbOf.get(tag.part().part());
+        Integer direct = limbOf.get(tag.part());
         if (direct != null) {
             return direct;
         }
@@ -470,7 +467,7 @@ public final class EntityParts {
         int best = -1;
         double bestDistance = SAME_PIVOT;
         for (PartTags.DrawnPart d : drawn) {
-            Integer li = limbOf.get(d.part());
+            Integer li = limbOf.get(d);
             if (li != null) {
                 double dist = d.pose().getTranslation(new Vector3f()).distance(pivot);
                 if (dist < bestDistance) {
@@ -483,7 +480,7 @@ public final class EntityParts {
             return best;
         }
         for (PartTags.DrawnPart p = tag.part().parent(); p != null; p = p.parent()) {
-            Integer li = limbOf.get(p.part());
+            Integer li = limbOf.get(p);
             if (li != null) {
                 return li;
             }
@@ -501,9 +498,84 @@ public final class EntityParts {
         m.getNormalizedRotation(rotation);
     }
 
-    private static int ancestorLimb(PartTags.DrawnPart d, Map<ModelPart, Integer> limbOf) {
+    /**
+     * Gives every limb that hangs from nothing (other than the body) a limb to hang from: of all such limbs, the one
+     * whose pivot is nearest a limb already hanging from the body hangs from that limb, and so on until all hang.
+     */
+    private static void attach(List<Limb> limbs, int torso) {
+        Set<Integer> hanging = new HashSet<>();
+        Set<Integer> loose = new HashSet<>();
+        for (int i = 0; i < limbs.size(); i++) {
+            if (limbs.get(i).mergedInto < 0) {
+                (rootOf(limbs, i, torso) == torso ? hanging : loose).add(i);
+            }
+        }
+        while (!loose.isEmpty()) {
+            int bestRoot = -1, bestTo = torso;
+            double bestDistance = Double.MAX_VALUE;
+            for (int r : loose) {
+                if (rootOf(limbs, r, torso) != r) {
+                    continue; // hangs from another loose limb: it comes along with that one
+                }
+                Vector3f pivot = limbs.get(r).frame.pose().getTranslation(new Vector3f());
+                for (int t : hanging) {
+                    double d = distanceToBoxes(limbs.get(t), pivot);
+                    if (d < bestDistance) {
+                        bestDistance = d;
+                        bestRoot = r;
+                        bestTo = t;
+                    }
+                }
+            }
+            if (bestRoot < 0) {
+                break;
+            }
+            limbs.get(bestRoot).parent = bestTo;
+            for (int i : new ArrayList<>(loose)) {
+                if (rootOf(limbs, i, torso) == torso) {
+                    loose.remove(i);
+                    hanging.add(i);
+                }
+            }
+        }
+    }
+
+    /** Where following the limbs it hangs from ends: the body, or a limb that hangs from nothing. */
+    private static int rootOf(List<Limb> limbs, int i, int torso) {
+        int at = resolve(limbs, i);
+        for (int steps = 0; steps <= limbs.size(); steps++) {
+            if (at == torso) {
+                return torso;
+            }
+            int p = limbs.get(at).parent;
+            if (p < 0) {
+                return at;
+            }
+            p = resolve(limbs, p);
+            if (p == at) {
+                return at;
+            }
+            at = p;
+        }
+        return at;
+    }
+
+    /** Squared distance from a point (where the entity was drawn) to the limb's boxes. */
+    private static double distanceToBoxes(Limb limb, Vector3f point) {
+        Vector3f local = new Quaternionf(limb.rotation).conjugate().transform(new Vector3f(point).sub(limb.origin));
+        double best = limb.boxes.isEmpty() ? local.lengthSquared() : Double.MAX_VALUE;
+        for (double[] b : limb.boxes.values()) {
+            double dx = Math.max(0, Math.max(b[0] - local.x, local.x - b[3]));
+            double dy = Math.max(0, Math.max(b[1] - local.y, local.y - b[4]));
+            double dz = Math.max(0, Math.max(b[2] - local.z, local.z - b[5]));
+            best = Math.min(best, dx * dx + dy * dy + dz * dz);
+        }
+        return best;
+    }
+
+    private static int ancestorLimb(PartTags.DrawnPart d, Map<PartTags.DrawnPart, Integer> limbOf) {
         for (PartTags.DrawnPart p = d.parent(); p != null; p = p.parent()) {
-            Integer li = limbOf.get(p.part());
+            Integer li = limbOf.get(p);
             if (li != null) {
                 return li;
             }

@@ -126,6 +126,11 @@ public final class MimicColliders {
         }
     }
 
+    /** Forgets the blocks waiting to be refreshed: they belong to a server that has stopped. */
+    public static void clear() {
+        PENDING.clear();
+    }
+
     /** Total volume of the boxes, for diagnostics. */
     public static double volumeOf(MimicShapes.Key key) {
         return VoxelBoxes.volume(MimicShapes.boxes(key));

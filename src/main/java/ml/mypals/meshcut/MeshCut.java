@@ -83,6 +83,14 @@ public class MeshCut {
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
         NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerTick);
+        NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onInvulnerabilityCheck);
+        // what is queued refers to the levels of the server that is stopping (in single player, the next world
+        // would run it against them)
+        NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerStopping);
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> {
+            SlashService.clear();
+            MimicColliders.clear();
+        });
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.ChunkEvent.Unload e) -> {
             if (e.getLevel() instanceof net.minecraft.server.level.ServerLevel server) {
                 ml.mypals.meshcut.cut.graph.WorldGraphs.onChunkUnload(server, e.getChunk().getPos().x, e.getChunk().getPos().z);

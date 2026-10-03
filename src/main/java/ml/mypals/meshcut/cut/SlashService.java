@@ -18,6 +18,7 @@ import ml.mypals.meshcut.geom.CellGrid;
 import ml.mypals.meshcut.geom.Patch;
 import ml.mypals.meshcut.geom.PieceFit;
 import ml.mypals.meshcut.geom.Polytope;
+import ml.mypals.meshcut.geom.VoxelBoxes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -267,7 +268,6 @@ public final class SlashService {
 
         int[] created = {0};
         var container = SubLevelContainer.getContainer(level);
-        Vec3 representative = sweeps.get(0).n();
 
         Map<BlockPos, List<StrokeFit.Fragment>> worldFragments = new LinkedHashMap<>();
         for (Sweep sweep : sweeps) {
@@ -280,7 +280,7 @@ public final class SlashService {
             collect(worldFragments, n, center, quad, sweep.samples(), null,
                     cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell)));
         }
-        int staticBlocks = process(level, null, StrokeFit.fitPatches(worldFragments), representative, mode, created);
+        int staticBlocks = process(level, null, StrokeFit.fitPatches(worldFragments), mode, created);
 
         int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
         return new CutService.Result(staticBlocks, cutLevels, created[0]);
@@ -290,7 +290,6 @@ public final class SlashService {
     private static int cutSubLevels(ServerLevel level, List<Sweep> sweeps, List<ServerSubLevel> subLevels, CapMode mode,
                                     int[] created) {
         var container = SubLevelContainer.getContainer(level);
-        Vec3 representative = sweeps.get(0).n();
         int cutLevels = 0;
         for (ServerSubLevel sub : subLevels) {
             if (sub.isRemoved()) {
@@ -314,7 +313,7 @@ public final class SlashService {
                 collect(fragments, nl, center, quad, sweep.samples(), pose,
                         cell -> container != null && container.inBounds(cell) && !level.getBlockState(cell).isAir());
             }
-            if (process(level, sub, StrokeFit.fitPatches(fragments), representative, mode, created) > 0) {
+            if (process(level, sub, StrokeFit.fitPatches(fragments), mode, created) > 0) {
                 cutLevels++;
             }
         }
@@ -430,7 +429,7 @@ public final class SlashService {
      * @return the number of blocks the cut passed through
      */
     private static int process(ServerLevel level, @Nullable ServerSubLevel sub, Map<BlockPos, List<Patch>> cells,
-                               Vec3 nWorld, CapMode mode, int[] created) {
+                               CapMode mode, int[] created) {
         Domain dom = new Domain(level, mode, sub);
 
         // 1. every block a patch passes through remembers it
@@ -453,12 +452,13 @@ public final class SlashService {
                 if (!straddles(piece.cutBoxes(), patch.plane())) {
                     continue; // passes through where the block has nothing (a torch is only a thin stick)
                 }
-                Polytope.Side side = Polytope.classify(planes, patch.plane(), MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);
+                Polytope.Side side = Polytope.classify(planes, piece.excluded(), patch.plane(), piece.cutBoxes(),
+                        MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);
                 if (side != Polytope.Side.SPLIT) {
                     // A cut right through that leaves only a thin layer on one side (or just clips a corner) does
                     // not divide the block: the layer is burnt away.
                     CutPlane burn = patch.through() ? (side == Polytope.Side.ALL_KEPT ? patch.plane() : patch.plane().flipped()) : null;
-                    if (burn != null && Polytope.volume(with(planes, burn.flipped())) > MIN_BURN_VOLUME
+                    if (burn != null && burntVolume(planes, piece.excluded(), burn) > MIN_BURN_VOLUME
                             && Polytope.volume(with(planes, burn)) >= Polytope.MIN_VOLUME) {
                         planes.add(burn);
                         changed = burned = true;
@@ -473,7 +473,7 @@ public final class SlashService {
                     continue;
                 }
                 List<Patch> before = new ArrayList<>(merged);
-                StrokeFit.mergeInto(merged, patch);
+                StrokeFit.mergeInto(merged, patch, planes, piece.excluded(), piece.cutBoxes());
                 if (!merged.equals(before)) {
                     changed = true;
                     if (nl == null) { // which way the parts are pushed apart is judged by the first cut
@@ -497,7 +497,10 @@ public final class SlashService {
         if (hits.isEmpty()) {
             return 0;
         }
-        return resolve(level, sub, dom, hits, nl, dl, nWorld, created, true);
+        // the pieces are pushed apart along the plane that tells which side they are on (with several swipes in one
+        // swing, it need not be the first swipe's)
+        Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
+        return resolve(level, sub, dom, hits, nl, dl, new Vec3(world.x, world.y, world.z), created, true);
     }
 
     /** Who moves out of the structure, and which of the blocks that were cut are severed. */
@@ -541,13 +544,21 @@ public final class SlashService {
 
         final Plan plan = attempted;
 
+        // A real block entity (a chest, a furnace) the cut only scratched stays the real block: as a mimic it would
+        // lose its contents and stop working. Only one that comes apart, or loses a layer, becomes a mimic.
+        List<Info> mimics = new ArrayList<>();
+        for (Info hit : hits) {
+            if (!hit.piece.undetachedBe() || hit.burned || plan.severed().containsKey(hit)) {
+                mimics.add(hit);
+            }
+        }
         // Spill the contents of real block entities before they are replaced by mimics.
-        Map<BlockPos, CompoundTag> beTags = detachBlockEntities(level, hits);
+        Map<BlockPos, CompoundTag> beTags = detachBlockEntities(level, mimics);
 
         if (plan.severed().isEmpty() && plan.movers().isEmpty()) {
             // Nothing came apart: the blocks just remember the cut.
             if (applyUnsevered) {
-                for (Info hit : hits) {
+                for (Info hit : mimics) {
                     place(level, hit, hit.piece.planes(), hit.piece.excluded(), hit.patches, beTags);
                 }
             }
@@ -589,7 +600,7 @@ public final class SlashService {
                         .add(new Spec(info.pos, info, info.piece.planes(), holes, kept));
             }
         }
-        for (Info hit : hits) {
+        for (Info hit : mimics) {
             if (!plan.severed().containsKey(hit) && !hit.nodes().isEmpty()) {
                 Integer id = comp.get(new Node(hit.pos, hit.nodes().get(0)));
                 if (id != null) {
@@ -640,7 +651,23 @@ public final class SlashService {
             }
         }
 
-        // 6. move the groups out, then put the pieces that stay in place
+        try {
+            moveOut(level, sub, dom, plan, specs, beTags, nl, dl, nWorld, created);
+        } finally {
+            if (placeholder != null) {
+                level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
+            }
+        }
+        if (sub != null && !sub.isRemoved()) {
+            refreshMass(level, sub);
+        }
+        return hits.size();
+    }
+
+    /** 6. Moves the groups out, then puts the pieces that stay in place. */
+    private static void moveOut(ServerLevel level, @Nullable ServerSubLevel sub, Domain dom, Plan plan,
+                                Map<Integer, List<Spec>> specs, Map<BlockPos, CompoundTag> beTags,
+                                Vector3d nl, double dl, Vec3 nWorld, int[] created) {
         for (int id : plan.movers()) {
             StructureGraph.Closure closure = plan.closures().get(id);
             long[] packed = closure.positions();
@@ -656,8 +683,9 @@ public final class SlashService {
                 place(level, spec.info(), spec.planes(), spec.excluded(), spec.patches(), beTags);
             }
             if (sub != null && sub.isRemoved()) {
+                // what stays would be put into the plot of a sub-level that is gone
                 MeshCut.LOGGER.warn("The sub-level being cut was removed while its pieces were moved out; {} blocks could not follow", positions.size());
-                break;
+                return;
             }
             positions.removeIf(p -> level.getBlockState(p).isAir());
             if (positions.isEmpty()) {
@@ -677,13 +705,6 @@ public final class SlashService {
                 }
             }
         }
-        if (placeholder != null) {
-            level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
-        }
-        if (sub != null && !sub.isRemoved()) {
-            refreshMass(level, sub);
-        }
-        return hits.size();
     }
 
     /** Which blocks are severed (their pieces are in different groups), and which groups leave the structure. */
@@ -826,6 +847,13 @@ public final class SlashService {
         RECHECKS.add(new Recheck(level, pos.immutable()));
     }
 
+    /** Forgets what was queued: it belongs to a server that has stopped. */
+    public static void clear() {
+        RECHECKS.clear();
+        LAST_SPLIT.clear();
+        createdThisTick = 0;
+    }
+
     public static void onServerTick(ServerTickEvent.Post event) {
         createdThisTick = 0;
         LAST_SPLIT.entrySet().removeIf(e -> e.getKey().level().getGameTime() - e.getValue() > SPLIT_COOLDOWN);
@@ -963,6 +991,13 @@ public final class SlashService {
             }
         }
         return min < -0.01 && max > 0.01;
+    }
+
+    /** How much of the block a burn along {@code burn} would take: the layer beyond it, less what was cut out already. */
+    private static double burntVolume(List<CutPlane> planes, List<List<CutPlane>> excluded, CutPlane burn) {
+        List<CutPlane> layer = with(planes, burn.flipped());
+        return excluded.isEmpty() ? Polytope.volume(layer)
+                : VoxelBoxes.remainingVolume(List.of(new double[]{0, 0, 0, 1, 1, 1}), layer, excluded);
     }
 
     private static List<CutPlane> with(List<CutPlane> planes, CutPlane extra) {

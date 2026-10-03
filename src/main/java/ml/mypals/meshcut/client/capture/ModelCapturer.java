@@ -126,7 +126,14 @@ public final class ModelCapturer {
      */
     public record EntityCapture(CapturedMesh whole, Map<String, CapturedMesh> limbs, List<ml.mypals.meshcut.cut.BodySpec> bodies) {}
 
-    private static final Map<EntityAppearance.Look, EntityCapture> ENTITY_CACHE = new HashMap<>();
+    /** Recordings of the entities whose bodies were drawn last; every body is a new entity, so the oldest go. */
+    private static final int MAX_ENTITIES = 64;
+    private static final Map<EntityAppearance.Look, EntityCapture> ENTITY_CACHE = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<EntityAppearance.Look, EntityCapture> eldest) {
+            return size() > MAX_ENTITIES;
+        }
+    };
     private static final ResourceLocation FLESH = ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "block/flesh");
     private static boolean warnedAboutEntity;
 

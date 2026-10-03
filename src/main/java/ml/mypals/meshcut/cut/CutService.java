@@ -57,6 +57,8 @@ public final class CutService {
     public static final int MAX_RADIUS = 16;
     /** Speed (blocks/s) with which the two halves are pushed apart, so overlapping colliders separate gently. */
     private static final double SEPARATION_SPEED = 1.5;
+    /** At most this many items are spilled from a block that is cut (a double chest holds 3456). */
+    private static final int MAX_SPILLED = 4096;
 
     public record Result(int staticBlocks, int subLevelsCut, int subLevelsCreated) {}
 
@@ -85,7 +87,7 @@ public final class CutService {
             return null;
         }
         Vec3 n = normal.normalize();
-        radius = Math.min(Math.max(radius, 0.5), MAX_RADIUS);
+        radius = Math.clamp(radius, 0.5, MAX_RADIUS);
 
         List<ServerSubLevel> targets = new ArrayList<>();
         for (SubLevel s : Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(
@@ -281,30 +283,36 @@ public final class CutService {
             level.setBlock(placeholder, Blocks.STONE.defaultBlockState(), 2);
         }
 
-        detachBlockEntities(level, splits);
-        // 1. the removed half of split blocks takes the block's place so it can be moved out with the rest
-        for (var e : splits.entrySet()) {
-            Split s = e.getValue();
-            MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep().flipped()),
-                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
-        }
-        // 2. every connected group on the normal side becomes its own sub-level
         Vec3 push = n.scale(SEPARATION_SPEED);
-        for (List<BlockPos> comp : components(plus)) {
-            ServerSubLevel created1 = assemble(level, comp);
-            if (created1 != null) {
-                created[0]++;
-                push(created1, push);
+        try {
+            detachBlockEntities(level, splits);
+            // 1. the removed half of split blocks takes the block's place so it can be moved out with the rest
+            for (var e : splits.entrySet()) {
+                Split s = e.getValue();
+                MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep().flipped()),
+                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
             }
-        }
-        // 3. the kept half of split blocks goes back into the original sub-level
-        for (var e : splits.entrySet()) {
-            Split s = e.getValue();
-            MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep()),
-                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
-        }
-        if (placeholder != null) {
-            level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
+            // 2. every connected group on the normal side becomes its own sub-level
+            for (List<BlockPos> comp : components(plus)) {
+                ServerSubLevel created1 = assemble(level, comp);
+                if (created1 != null) {
+                    created[0]++;
+                    push(created1, push);
+                }
+            }
+            if (sub.isRemoved()) {
+                return true; // the kept halves would go into the plot of a sub-level that is gone
+            }
+            // 3. the kept half of split blocks goes back into the original sub-level
+            for (var e : splits.entrySet()) {
+                Split s = e.getValue();
+                MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep()),
+                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
+            }
+        } finally {
+            if (placeholder != null) {
+                level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
+            }
         }
         // 4. the other side may itself have fallen apart; the biggest piece stays, the rest are split off
         List<List<BlockPos>> rest = new ArrayList<>(components(minus));
@@ -354,7 +362,36 @@ public final class CutService {
         if (state.getBlock() instanceof LiquidBlock || state.getRenderShape() == RenderShape.INVISIBLE) {
             return null;
         }
+        if (state.hasBlockEntity() && !canSpill(level, pos)) {
+            return null; // holds more than can be spilled (a drawer of thousands): it is not cut
+        }
         return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity(), null);
+    }
+
+    /** Whether what the block holds can all be spilled when it is cut (see {@link #MAX_SPILLED}). */
+    private static boolean canSpill(ServerLevel level, BlockPos pos) {
+        BlockEntity be = level.getBlockEntity(pos);
+        if (be == null) {
+            return true;
+        }
+        long items = 0;
+        if (be instanceof Container container) {
+            for (int i = 0; i < container.getContainerSize() && items <= MAX_SPILLED; i++) {
+                items += container.getItem(i).getCount();
+            }
+            return items <= MAX_SPILLED;
+        }
+        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
+        if (handler == null) {
+            return true;
+        }
+        if (handler.getSlots() > MAX_SPILLED) {
+            return false;
+        }
+        for (int slot = 0; slot < handler.getSlots() && items <= MAX_SPILLED; slot++) {
+            items += handler.getStackInSlot(slot).getCount();
+        }
+        return items <= MAX_SPILLED;
     }
 
     /**
@@ -380,6 +417,7 @@ public final class CutService {
     static void spillContents(ServerLevel level, BlockPos pos, BlockEntity be) {
         List<ItemStack> stacks = new ArrayList<>();
         if (be instanceof Container container) {
+            // only the block's own slots: the item handler of half a double chest is the whole chest's
             for (int i = 0; i < container.getContainerSize(); i++) {
                 ItemStack stack = container.getItem(i);
                 if (!stack.isEmpty()) {
@@ -387,13 +425,20 @@ public final class CutService {
                 }
             }
             container.clearContent();
-        }
-        IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
-        if (handler != null) {
-            for (int slot = 0; slot < handler.getSlots(); slot++) {
-                ItemStack taken;
-                while (!(taken = handler.extractItem(slot, 64, false)).isEmpty()) {
-                    stacks.add(taken);
+        } else {
+            IItemHandler handler = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
+            if (handler != null) {
+                // a bounded number of tries: a handler that never runs out (a creative crate) would never stop
+                int spilled = 0;
+                for (int slot = 0; slot < handler.getSlots() && spilled < MAX_SPILLED; slot++) {
+                    for (int tries = 0; tries < MAX_SPILLED / 64 && spilled < MAX_SPILLED; tries++) {
+                        ItemStack taken = handler.extractItem(slot, Math.min(64, MAX_SPILLED - spilled), false);
+                        if (taken.isEmpty()) {
+                            break;
+                        }
+                        spilled += taken.getCount();
+                        stacks.add(taken);
+                    }
                 }
             }
         }
@@ -438,12 +483,12 @@ public final class CutService {
 
     static ServerSubLevel assemble(ServerLevel level, List<BlockPos> blocks) {
         // limbs joined to the sub-level the blocks leave may have to follow them; see RagdollJoints
-        ServerSubLevel source = Sable.HELPER.getContaining(level, blocks.get(0)) instanceof ServerSubLevel s ? s : null;
+        ServerSubLevel source = Sable.HELPER.getContaining(level, blocks.getFirst()) instanceof ServerSubLevel s ? s : null;
         if (source != null) {
             ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, null);
         }
         try {
-            ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.get(0), blocks, BoundingBox3i.from(blocks));
+            ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.getFirst(), blocks, BoundingBox3i.from(blocks));
             if (source != null && made != null) {
                 ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, made);
             }

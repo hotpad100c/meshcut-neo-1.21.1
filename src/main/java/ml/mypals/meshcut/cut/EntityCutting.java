@@ -11,9 +11,12 @@ import ml.mypals.meshcut.physics.RagdollJoints;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
@@ -25,6 +28,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.event.entity.EntityInvulnerabilityCheckEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
@@ -33,7 +38,9 @@ import org.joml.Vector3d;
 import org.joml.Vector3dc;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -63,6 +70,17 @@ public final class EntityCutting {
     private static final int MAX_BOXES_PER_BLOCK = 6;
     /** At most this many blocks for one body (a client could ask for anything). */
     private static final int MAX_CELLS = 65536;
+    /**
+     * No part of a body is further than this (in blocks) from the entity's feet. The biggest bodies (the ender dragon)
+     * reach a few blocks; numbers beyond it would only come from a client sending nonsense, and would make the cells
+     * counted below overflow, or the loops over them run for ever.
+     */
+    private static final double MAX_REACH = 64;
+    /** Saved data of an entity that are never needed to draw it. */
+    private static final Set<String> NOT_DRAWN = Set.of("EnderItems", "recipeBook", "Brain", "Gossips", "Offers",
+            "Passengers", "Items", "LastDeathLocation", "warden_spawn_tracker", "enteredNetherPosition", "abilities");
+    /** At most this much of an entity's saved data goes into its body (every block of which holds it). */
+    private static final int MAX_LOOK_BYTES = 8 * 1024;
     /** How long a client may take to answer (ticks). */
     private static final int ANSWER_TICKS = 20;
     /** Things of these types are never cut. */
@@ -83,7 +101,6 @@ public final class EntityCutting {
         final long deadline;
         final Consumer<List<ServerSubLevel>> cut;
         final boolean wasNoAi;
-        final boolean wasInvulnerable;
         final Vec3 velocity;
 
         Pending(ServerLevel level, Entity entity, EntityAppearance.Look look, @Nullable UUID wielder, UUID asked,
@@ -96,12 +113,13 @@ public final class EntityCutting {
             this.deadline = level.getGameTime() + ANSWER_TICKS;
             this.cut = cut;
             this.wasNoAi = entity instanceof Mob mob && mob.isNoAi();
-            this.wasInvulnerable = entity.isInvulnerable();
             this.velocity = entity.getDeltaMovement().scale(20);
         }
     }
 
     private static final Map<Integer, Pending> PENDING = new HashMap<>();
+    /** The entities held still while a client is asked about them; see {@link #freeze}. */
+    private static final Map<Entity, Pending> FROZEN = Collections.synchronizedMap(new IdentityHashMap<>());
     private static int nextId;
 
     /**
@@ -199,15 +217,52 @@ public final class EntityCutting {
         }
     }
 
+    /**
+     * Holds the entity still while a client is asked about it. None of it is saved with the entity: saved meanwhile
+     * (its chunk unloads, a player leaves, the server stops), it is saved as it was (see {@link #saved}), or it would
+     * stand frozen and unkillable for good.
+     */
     private static void freeze(Entity entity, boolean on, Pending pending) {
+        if (on) {
+            FROZEN.put(entity, pending);
+        } else {
+            FROZEN.remove(entity);
+        }
         if (entity instanceof Mob mob) {
             mob.setNoAi(on || pending.wasNoAi);
         }
-        // nothing else may kill it meanwhile: it would die a second time
-        entity.setInvulnerable(on || pending.wasInvulnerable);
         if (on && !(entity instanceof Player)) {
             entity.setDeltaMovement(Vec3.ZERO);
         }
+    }
+
+    /** Nothing else may kill a frozen entity: it would die a second time. */
+    public static void onInvulnerabilityCheck(EntityInvulnerabilityCheckEvent event) {
+        if (!FROZEN.isEmpty() && FROZEN.containsKey(event.getEntity())
+                && !event.getSource().is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
+            event.setInvulnerable(true);
+        }
+    }
+
+    /** What a frozen entity was just saved as is put back to how it was before it was frozen. */
+    public static void saved(Entity entity, CompoundTag tag) {
+        Pending pending = FROZEN.isEmpty() ? null : FROZEN.get(entity);
+        if (pending != null && entity instanceof Mob) {
+            if (pending.wasNoAi) {
+                tag.putBoolean("NoAI", true);
+            } else {
+                tag.remove("NoAI");
+            }
+        }
+    }
+
+    /** The server is stopping: what is frozen is let go before the world is saved, and nothing waits any more. */
+    public static void onServerStopping(ServerStoppingEvent event) {
+        for (Pending pending : new ArrayList<>(PENDING.values())) {
+            freeze(pending.entity, false, pending);
+        }
+        PENDING.clear();
+        FROZEN.clear();
     }
 
     /**
@@ -285,12 +340,50 @@ public final class EntityCutting {
     }
 
     private static EntityAppearance.Look lookOf(Entity entity) {
-        CompoundTag data = entity.saveWithoutId(new CompoundTag());
+        CompoundTag data = drawnData(entity);
         float bodyYaw = entity instanceof LivingEntity living ? living.yBodyRot : entity.getYRot();
         return new EntityAppearance.Look(EntityType.getKey(entity.getType()).toString(), data, bodyYaw,
                 entity.getYHeadRot(), entity.getXRot(),
                 entity instanceof Player p ? p.getGameProfile().getId() : null,
                 entity instanceof Player p ? p.getGameProfile().getName() : null);
+    }
+
+    /**
+     * What of the entity's saved data its body keeps: enough to draw it, nothing private or bulky. The body's every
+     * block holds a copy, which is saved with the chunk and sent to every client nearby: a player's inventory and
+     * ender chest, or a villager's memories and trades, have no place there.
+     */
+    private static CompoundTag drawnData(Entity entity) {
+        CompoundTag data = entity.saveWithoutId(new CompoundTag());
+        NOT_DRAWN.forEach(data::remove);
+        if (entity instanceof Player) {
+            // only what a player is seen wearing and holding
+            int selected = data.getInt("SelectedItemSlot");
+            ListTag worn = new ListTag();
+            for (Tag t : data.getList("Inventory", Tag.TAG_COMPOUND)) {
+                int slot = ((CompoundTag) t).getByte("Slot");
+                if (slot >= 100 && slot <= 103 || slot == -106 || slot == selected) {
+                    worn.add(t);
+                }
+            }
+            data.put("Inventory", worn);
+        } else {
+            data.remove("Inventory"); // a villager's, an allay's, a piglin's: not seen
+        }
+        // whatever is still too big (a book in its hand, a modded entity's data) goes, biggest first
+        while (data.sizeInBytes() > MAX_LOOK_BYTES && !data.isEmpty()) {
+            String biggest = null;
+            int size = -1;
+            for (String key : data.getAllKeys()) {
+                Tag t = data.get(key);
+                if (t != null && t.sizeInBytes() > size) {
+                    size = t.sizeInBytes();
+                    biggest = key;
+                }
+            }
+            data.remove(biggest);
+        }
+        return data;
     }
 
     /** Who to ask for the entity's limbs: the wielder, or the nearest player that sees it. */
@@ -361,7 +454,8 @@ public final class EntityCutting {
 
     /**
      * Why what a client sent cannot be built, or null if it can. Only its shape is checked (limbs that hang from
-     * limbs that exist, numbers that are numbers); where the model reaches is the model's business.
+     * limbs that exist, numbers that are numbers and stay within {@link #MAX_REACH}); what the model looks like is
+     * the model's business.
      */
     @Nullable
     private static String problemWith(List<BodySpec> bodies) {
@@ -375,8 +469,8 @@ public final class EntityCutting {
             if (b.parent() < -1 || b.parent() >= bodies.size() || b.parent() == i) {
                 return "limb " + i + " hangs from " + b.parent();
             }
-            if (b.boxes().isEmpty() || !finite(b.rotation()) || !finite(b.origin()) || !finite(b.anchor())) {
-                return "limb " + i + " is empty or not a number";
+            if (b.boxes().isEmpty() || !finite(b.rotation()) || !within(b.origin()) || !within(b.anchor())) {
+                return "limb " + i + " is empty, not a number, or out of reach";
             }
             double length = Math.sqrt(b.rotation()[0] * b.rotation()[0] + b.rotation()[1] * b.rotation()[1]
                     + b.rotation()[2] * b.rotation()[2] + b.rotation()[3] * b.rotation()[3]);
@@ -388,8 +482,8 @@ public final class EntityCutting {
             }
             for (double[] box : b.boxes()) {
                 boxes++;
-                if (box.length != 6 || !finite(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
-                    return "limb " + i + " has a box inside out";
+                if (box.length != 6 || !within(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
+                    return "limb " + i + " has a box inside out or out of reach";
                 }
                 cells += (long) (Math.floor(box[3]) - Math.floor(box[0]) + 1) * (long) (Math.floor(box[4]) - Math.floor(box[1]) + 1)
                         * (long) (Math.floor(box[5]) - Math.floor(box[2]) + 1);
@@ -407,6 +501,16 @@ public final class EntityCutting {
             }
         }
         return null;
+    }
+
+    /** Finite, and no further than {@link #MAX_REACH}: a box in a limb's frame, or a limb's place relative to the feet. */
+    private static boolean within(double[] values) {
+        for (double v : values) {
+            if (!(Math.abs(v) <= MAX_REACH)) { // also false for NaN
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean finite(double[] values) {

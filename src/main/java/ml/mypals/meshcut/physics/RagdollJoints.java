@@ -71,7 +71,12 @@ public final class RagdollJoints extends SavedData {
     private static final int CHECK_EVERY = 10;
     /** Ghost pairs whose bounds are further apart than this (in blocks) have come apart. */
     private static final double APART = 0.25;
-    /** At most this many ghost pairs; each is a constraint the physics engine keeps. */
+    /** How long (ticks) the two sides of a cut pass through each other at most. */
+    private static final int CUT_GHOST_TICKS = 40;
+    /**
+     * At most this many ghost pairs; each is a constraint the physics engine keeps. Overlapping limbs keep theirs for
+     * good, so bodies lying about fill this up; then the oldest pairs make room (see {@link #makeRoom}).
+     */
     private static final int MAX_GHOSTS = 2048;
 
     /** One end of a joint. */
@@ -136,15 +141,21 @@ public final class RagdollJoints extends SavedData {
         }
     }
 
-    /** Two bodies that do not collide until they have come apart. */
+    /**
+     * Two bodies that do not collide until they have come apart. Limbs of a body may overlap for good (the model's
+     * parts do); two sides of a cut only touch, and collide again after a while even if they are still touching.
+     */
     private static final class Ghost {
         final UUID a, b;
+        /** Game time after which the two collide whatever, or {@link Long#MAX_VALUE}. */
+        final long until;
         @Nullable
         PhysicsConstraintHandle handle;
 
-        Ghost(UUID a, UUID b) {
+        Ghost(UUID a, UUID b, long until) {
             this.a = a;
             this.b = b;
+            this.until = until;
         }
 
         boolean touches(UUID id) {
@@ -208,7 +219,7 @@ public final class RagdollJoints extends SavedData {
         RagdollJoints data = of(level);
         for (int i = 0; i < limbs.size(); i++) {
             for (int j = i + 1; j < limbs.size(); j++) {
-                data.ghostIfOverlapping(level, limbs.get(i), limbs.get(j));
+                data.ghostIfOverlapping(level, limbs.get(i), limbs.get(j), Long.MAX_VALUE);
             }
         }
     }
@@ -221,11 +232,10 @@ public final class RagdollJoints extends SavedData {
     public static void noteSplit(ServerLevel level, ServerSubLevel source, @Nullable ServerSubLevel made) {
         RagdollJoints data = of(level);
         UUID id = source.getUniqueId();
-        if (data.joints.stream().noneMatch(j -> j.touches(id)) && data.ghosts.stream().noneMatch(g -> g.touches(id))
-                && !data.madeFrom.containsKey(id)) {
-            return; // not part of a body
+        // any sub-level's cut sides pass through each other for a moment; only a body's joints need looking at
+        if (data.joints.stream().anyMatch(j -> j.touches(id)) || data.ghosts.stream().anyMatch(g -> g.touches(id))) {
+            data.touched.putIfAbsent(id, copy(source.logicalPose()));
         }
-        data.touched.putIfAbsent(id, copy(source.logicalPose()));
         if (made != null) {
             data.madeFrom.computeIfAbsent(id, k -> new LinkedHashSet<>()).add(made.getUniqueId());
         }
@@ -274,7 +284,7 @@ public final class RagdollJoints extends SavedData {
     }
 
     private void tick(ServerLevel level, SubLevelContainer container) {
-        if (joints.isEmpty() && ghosts.isEmpty()) {
+        if (joints.isEmpty() && ghosts.isEmpty() && madeFrom.isEmpty()) {
             touched.clear();
             madeFrom.clear();
             removed.clear();
@@ -299,12 +309,21 @@ public final class RagdollJoints extends SavedData {
                     partners.add(g.a.equals(entry.getKey()) ? g.b : g.a);
                 }
             }
-            partners.addAll(entry.getValue()); // pieces of the same cut may overlap one another too
+            // the pieces cut off it (and one another), whose colliders reach right up to the cut: they would shove each
+            // other away. They pass through each other until they have come apart, or for a moment at most.
+            Set<UUID> cutFrom = new LinkedHashSet<>(entry.getValue());
+            cutFrom.add(entry.getKey());
+            long until = level.getGameTime() + CUT_GHOST_TICKS;
             for (UUID made : entry.getValue()) {
                 if (container.getSubLevel(made) instanceof ServerSubLevel piece && !piece.isRemoved()) {
                     for (UUID p : partners) {
                         if (!p.equals(made) && container.getSubLevel(p) instanceof ServerSubLevel other && !other.isRemoved()) {
-                            ghostIfOverlapping(level, piece, other);
+                            ghostIfOverlapping(level, piece, other, Long.MAX_VALUE);
+                        }
+                    }
+                    for (UUID p : cutFrom) {
+                        if (!p.equals(made) && container.getSubLevel(p) instanceof ServerSubLevel other && !other.isRemoved()) {
+                            ghostIfOverlapping(level, piece, other, until);
                         }
                     }
                 }
@@ -333,7 +352,7 @@ public final class RagdollJoints extends SavedData {
         if (all || !removed.isEmpty()) {
             for (Ghost ghost : new ArrayList<>(ghosts)) {
                 SubLevel a = container.getSubLevel(ghost.a), b = container.getSubLevel(ghost.b);
-                boolean gone = removed.containsKey(ghost.a) || removed.containsKey(ghost.b);
+                boolean gone = removed.containsKey(ghost.a) || removed.containsKey(ghost.b) || level.getGameTime() > ghost.until;
                 boolean apart = a instanceof ServerSubLevel sa && !sa.isRemoved() && b instanceof ServerSubLevel sb && !sb.isRemoved()
                         && !grown(worldBounds(sa), APART).intersects(worldBounds(sb));
                 if (gone || apart) {
@@ -510,17 +529,37 @@ public final class RagdollJoints extends SavedData {
         return best;
     }
 
-    private void ghostIfOverlapping(ServerLevel level, ServerSubLevel a, ServerSubLevel b) {
+    private void ghostIfOverlapping(ServerLevel level, ServerSubLevel a, ServerSubLevel b, long until) {
         UUID x = a.getUniqueId(), y = b.getUniqueId();
-        if (ghosts.size() >= MAX_GHOSTS || ghosts.stream().anyMatch(g -> g.is(x, y))
+        if (ghosts.stream().anyMatch(g -> g.is(x, y))
                 || joints.stream().anyMatch(j -> j.parent.body.equals(x) && j.child.body.equals(y) || j.parent.body.equals(y) && j.child.body.equals(x))
                 || !worldBounds(a).intersects(worldBounds(b))) {
             return;
         }
-        Ghost ghost = new Ghost(x, y);
+        makeRoom();
+        Ghost ghost = new Ghost(x, y, until);
         ghosts.add(ghost);
         setDirty();
         connect(level, ghost);
+    }
+
+    /**
+     * Drops the oldest ghost pair if there are too many: one whose bodies are not loaded if there is one (it costs
+     * nothing until they are, and they may never be), else the oldest of all, most likely a body long at rest.
+     */
+    private void makeRoom() {
+        if (ghosts.size() < MAX_GHOSTS) {
+            return;
+        }
+        int victim = 0;
+        for (int i = 0; i < ghosts.size(); i++) {
+            if (ghosts.get(i).handle == null) {
+                victim = i;
+                break;
+            }
+        }
+        ghosts.remove(victim).drop();
+        setDirty();
     }
 
     /** Where the sub-level's blocks are in the world, roughly (its plot box, turned and moved as the body is). */
@@ -656,6 +695,7 @@ public final class RagdollJoints extends SavedData {
             CompoundTag g = new CompoundTag();
             g.putUUID("a", ghost.a);
             g.putUUID("b", ghost.b);
+            g.putBoolean("cut", ghost.until != Long.MAX_VALUE);
             pairs.add(g);
         }
         tag.put("ghosts", pairs);
@@ -671,7 +711,10 @@ public final class RagdollJoints extends SavedData {
         }
         for (Tag t : tag.getList("ghosts", Tag.TAG_COMPOUND)) {
             CompoundTag g = (CompoundTag) t;
-            data.ghosts.add(new Ghost(g.getUUID("a"), g.getUUID("b")));
+            // the two sides of a cut have long been apart, or come to rest touching, by the time the world is loaded
+            if (!g.getBoolean("cut")) {
+                data.ghosts.add(new Ghost(g.getUUID("a"), g.getUUID("b"), Long.MAX_VALUE));
+            }
         }
         return data;
     }

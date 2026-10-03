@@ -2,6 +2,9 @@ package ml.mypals.meshcut.item;
 
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.SaberAim;
+import ml.mypals.meshcut.cut.SaberControl;
+import ml.mypals.meshcut.network.LightsaberNet;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Player;
@@ -42,6 +45,9 @@ public final class LightsaberMotion {
         final ResourceKey<Level> dimension;
         Vec3 position;
         int tick;
+        float yawOffset;
+        float pitchOffset;
+        Vector2f remoteTarget;
 
         State(Player player) {
             aim = new SaberAim(player.getYRot(), player.getXRot());
@@ -68,9 +74,28 @@ public final class LightsaberMotion {
         }
         if (state.tick == player.tickCount) return;
         // Missing callbacks should advance elapsed simulation time, rather than snap to the target.
-        state.aim.advance(player.getYRot(), player.getXRot(), (player.tickCount - state.tick) / 20f);
+        float yaw = state.remoteTarget == null ? player.getYRot() + state.yawOffset : state.remoteTarget.x;
+        float pitch = state.remoteTarget == null ? player.getXRot() + state.pitchOffset : state.remoteTarget.y;
+        state.aim.advance(yaw, pitch, (player.tickCount - state.tick) / 20f);
         state.position = player.position();
         state.tick = player.tickCount;
+        if (player instanceof ServerPlayer serverPlayer) LightsaberNet.broadcast(serverPlayer, yaw, pitch);
+    }
+
+    public static Object session(Player player) {
+        return player.getExistingDataOrNull(STATE);
+    }
+
+    public static void setOffsets(Player player, float yaw, float pitch) {
+        if (!Float.isFinite(yaw) || !Float.isFinite(pitch) || !LightsaberItem.isActive(player)) return;
+        State state = player.getData(STATE);
+        state.yawOffset = Mth.clamp(yaw, -SaberControl.YAW_LIMIT, SaberControl.YAW_LIMIT);
+        state.pitchOffset = Mth.clamp(pitch, -SaberControl.PITCH_LIMIT, SaberControl.PITCH_LIMIT);
+    }
+
+    public static void setRemoteTarget(Player player, float yaw, float pitch) {
+        if (!Float.isFinite(yaw) || !Float.isFinite(pitch)) return;
+        player.getData(STATE).remoteTarget = new Vector2f(Mth.wrapDegrees(yaw), Mth.clamp(pitch, -90, 90));
     }
 
     public static Vector2f angles(Player player, float partialTick) {

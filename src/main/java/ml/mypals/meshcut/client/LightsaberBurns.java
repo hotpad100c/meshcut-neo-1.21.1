@@ -4,21 +4,19 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.companion.math.Pose3dc;
+import dev.ryanhcode.sable.companion.math.BoundingBox3d;
 import dev.ryanhcode.sable.sublevel.ClientSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
+import ml.mypals.meshcut.geom.SaberScorch;
 import ml.mypals.meshcut.item.LightsaberItem;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.RenderType;
-import net.minecraft.core.Direction;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.ClipContext;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -27,134 +25,149 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
+import org.joml.Vector3d;
 
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Scorches the surface where a lightsaber blade passes through it.
- * <p>
- * Cuts are applied when a swing is over, so while swinging this is the feedback: wherever the moving blade meets a
- * block, a line is burnt into its surface — a charred streak that lingers, with a hot ember in the middle that cools
- * and goes out quickly. On a sub-level the line is remembered in the sub-level's own coordinates and moves with it.
- */
+/** Scorches every model face intersected by the blade's sweep, including faces on both sides of a corner. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberBurns {
-    /** Ticks the charring stays visible, fading slowly. */
     private static final double CHAR_LIFETIME = 200;
-    /** Ticks the glowing ember in it lasts. */
     private static final double EMBER_LIFETIME = 50;
-    /** Tip movement per tick below which the blade is held still and burns nothing. */
-    private static final double MIN_TIP_MOVEMENT = 0.02;
-    /** Hits closer together than this add nothing new to the line. */
-    private static final double MIN_SPACING = 0.1;
-    /** Hits further apart in time, in space, or on different faces are separate lines. */
-    private static final long MAX_GAP_TICKS = 3;
-    private static final double MAX_JOIN_DISTANCE = 3.0;
-    /** How far a mark sits off the surface, to keep it from fighting the block's own face. */
-    private static final double LIFT = 0.012;
-    private static final double CHAR_HALF_WIDTH = 0.075;
-    private static final double EMBER_HALF_WIDTH = 0.035;
-    private static final int MAX_SEGMENTS = 800;
-
-    /**
-     * A short stretch of burnt line on a face, from {@code from} to {@code to}. For a sub-level these are in its plot
-     * space and {@code subLevel} says which one; otherwise they are world coordinates.
-     */
-    private record Segment(long time, Vec3 from, Vec3 to, Direction face, @Nullable UUID subLevel) {}
-
-    private record Hit(long time, Vec3 pos, Direction face, @Nullable UUID subLevel) {}
-
-    private static final ArrayDeque<Segment> SEGMENTS = new ArrayDeque<>();
-    private static final Map<UUID, Hit> LAST_HIT = new HashMap<>();
+    private static final double CHAR_HALF_WIDTH = 0.040;
+    private static final double EMBER_HALF_WIDTH = 0.014;
+    private static final double LIFT = 0.0025;
+    private static final int MAX_MARKS = 1800;
+    private static final int MAX_CANDIDATE_BLOCKS = 1024;
+    private static final int[][] SWEEP_TRIANGLES = {{0, 1, 2}, {0, 2, 3}};
+    private static final ArrayDeque<Mark> MARKS = new ArrayDeque<>();
     private static final Map<UUID, Blade> LAST_BLADE = new HashMap<>();
     @Nullable private static ClientLevel burnLevel;
 
+    private record Mark(long time, float[] charred, float[] ember, Vec3 normal, BlockPos block, Object version,
+                        @Nullable UUID subLevel) {}
+    private record Contact(Vec3 position, Vec3 normal) {}
+
+    static void clear() {
+        MARKS.clear();
+        LAST_BLADE.clear();
+        LightsaberSurfaces.clear();
+    }
+
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
-        ClientLevel level = Minecraft.getInstance().level;
+        Minecraft minecraft = Minecraft.getInstance();
+        ClientLevel level = minecraft.level;
         if (level != burnLevel) {
-            SEGMENTS.clear();
-            LAST_HIT.clear();
-            LAST_BLADE.clear();
+            clear();
             burnLevel = level;
         }
         if (level == null) return;
         long now = level.getGameTime();
-        while (!SEGMENTS.isEmpty() && now - SEGMENTS.peekFirst().time() > CHAR_LIFETIME) {
-            SEGMENTS.pollFirst();
-        }
+        while (!MARKS.isEmpty() && now - MARKS.peekFirst().time() > CHAR_LIFETIME) MARKS.pollFirst();
+        // Geometry invalidation needs a tick check, not thousands of block-entity lookups per render frame.
+        MARKS.removeIf(mark -> LightsaberSurfaces.version(level, mark.block) != mark.version);
+        LAST_BLADE.keySet().removeIf(id -> level.getPlayerByUUID(id) == null);
         var container = SubLevelContainer.getContainer(level);
         for (Player player : level.players()) {
-            UUID id = player.getUUID();
             if (!LightsaberItem.isActive(player)) {
-                LAST_BLADE.remove(id);
-                LAST_HIT.remove(id);
+                LAST_BLADE.remove(player.getUUID());
                 continue;
             }
             Blade blade = Blade.of(player, 1f);
-            Blade before = LAST_BLADE.put(id, blade);
-            if (before == null || before.tip().distanceTo(blade.tip()) < MIN_TIP_MOVEMENT) {
-                continue; // held still
-            }
-            // Sable's clip also tests sub-levels; a hit on one comes back in that sub-level's plot space
-            BlockHitResult hit = level.clip(new ClipContext(blade.base(), blade.tip(),
-                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
-            if (hit.getType() != HitResult.Type.BLOCK || hit.isInside()) {
-                LAST_HIT.remove(id);
+            Blade before = LAST_BLADE.put(player.getUUID(), blade);
+            if (before == null || player.distanceToSqr(minecraft.gameRenderer.getMainCamera().getPosition()) > 48 * 48)
                 continue;
+            double movement = Math.max(before.tip().distanceTo(blade.tip()), before.base().distanceTo(blade.base()));
+            if (movement < 0.01 || movement > 8) continue;
+            Vec3[] sweep = {before.base(), before.tip(), blade.tip(), blade.base()};
+            Contact contact = collect(level, container, sweep, now, null, null);
+            BoundingBox3d bounds = bounds(sweep);
+            for (SubLevel sub : Sable.HELPER.getAllIntersecting(level, bounds)) {
+                if (!(sub instanceof ClientSubLevel client) || client.isRemoved()) continue;
+                Pose3dc pose = client.renderPose(1f);
+                Vec3[] inPlot = new Vec3[4];
+                for (int i = 0; i < 4; i++) inPlot[i] = pose.transformPositionInverse(sweep[i]);
+                Contact next = collect(level, container, inPlot, now, client.getUniqueId(), pose);
+                if (next != null && (contact == null || next.position.distanceToSqr(blade.base())
+                        < contact.position.distanceToSqr(blade.base()))) contact = next;
             }
-            UUID subLevel = null;
-            if (container != null && container.inBounds(hit.getBlockPos())) {
-                SubLevel sub = Sable.HELPER.getContaining(level, hit.getBlockPos());
-                if (sub == null) {
-                    LAST_HIT.remove(id);
-                    continue;
+            if (contact != null) emitContactParticles(level, contact, blade.tip().subtract(before.tip()));
+        }
+    }
+
+    @Nullable
+    private static Contact collect(ClientLevel level, @Nullable SubLevelContainer container, Vec3[] sweep,
+                                    long time, @Nullable UUID subLevel, @Nullable Pose3dc pose) {
+        double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
+        for (Vec3 p : sweep) {
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+            maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+        }
+        BlockPos min = BlockPos.containing(minX - CHAR_HALF_WIDTH, minY - CHAR_HALF_WIDTH, minZ - CHAR_HALF_WIDTH);
+        BlockPos max = BlockPos.containing(maxX + CHAR_HALF_WIDTH, maxY + CHAR_HALF_WIDTH, maxZ + CHAR_HALF_WIDTH);
+        long cells = (long) (max.getX() - min.getX() + 1) * (max.getY() - min.getY() + 1) * (max.getZ() - min.getZ() + 1);
+        if (cells > MAX_CANDIDATE_BLOCKS) return null;
+        Contact closest = null;
+        Vec3 origin = pose == null ? sweep[0] : pose.transformPosition(sweep[0]);
+        for (BlockPos cursor : BlockPos.betweenClosed(min, max)) {
+            boolean inPlot = container != null && container.inBounds(cursor);
+            if (inPlot != (subLevel != null) || !level.hasChunkAt(cursor) || level.getBlockState(cursor).isAir()) continue;
+            if (subLevel != null) {
+                SubLevel owner = Sable.HELPER.getContaining(level, cursor);
+                if (owner == null || !subLevel.equals(owner.getUniqueId())) continue;
+            }
+            BlockPos block = cursor.immutable();
+            Vector3d[] quad = new Vector3d[4];
+            for (int i = 0; i < 4; i++) quad[i] = new Vector3d(sweep[i].x - block.getX(),
+                    sweep[i].y - block.getY(), sweep[i].z - block.getZ());
+            Object version = LightsaberSurfaces.version(level, block);
+            for (var face : LightsaberSurfaces.at(level, block)) {
+                for (int[] indices : SWEEP_TRIANGLES) {
+                    Vector3d[] triangle = {quad[indices[0]], quad[indices[1]], quad[indices[2]]};
+                    float[] charred = SaberScorch.project(face, triangle, CHAR_HALF_WIDTH);
+                    if (charred.length < 9) continue;
+                    float[] ember = SaberScorch.project(face, triangle, EMBER_HALF_WIDTH);
+                    Vec3 normal = new Vec3(face.nx(), face.ny(), face.nz()).normalize();
+                    MARKS.addLast(new Mark(time, charred, ember, normal, block, version, subLevel));
+                    while (MARKS.size() > MAX_MARKS) MARKS.pollFirst();
+                    Vec3 position = centroid(charred).add(block.getX(), block.getY(), block.getZ());
+                    if (pose != null) {
+                        position = pose.transformPosition(position);
+                        normal = pose.transformNormal(normal).normalize();
+                    }
+                    if (closest == null || position.distanceToSqr(origin) < closest.position.distanceToSqr(origin))
+                        closest = new Contact(position, normal);
                 }
-                subLevel = sub.getUniqueId();
-            }
-            Hit contact = new Hit(now, hit.getLocation(), hit.getDirection(), subLevel);
-            if (addHit(id, contact)) {
-                emitContactParticles(level, container, contact, blade.tip().subtract(before.tip()));
             }
         }
+        return closest;
     }
 
-    private static boolean addHit(UUID id, Hit hit) {
-        Hit last = LAST_HIT.get(id);
-        if (last != null && sameSurface(last, hit)
-                && hit.time() - last.time() <= MAX_GAP_TICKS
-                && last.pos().distanceToSqr(hit.pos()) < MIN_SPACING * MIN_SPACING) {
-            return false;
+    private static BoundingBox3d bounds(Vec3[] points) {
+        double minX = Double.POSITIVE_INFINITY, minY = minX, minZ = minX;
+        double maxX = Double.NEGATIVE_INFINITY, maxY = maxX, maxZ = maxX;
+        for (Vec3 p : points) {
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+            maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
         }
-        if (last != null && sameSurface(last, hit) && hit.time() - last.time() <= MAX_GAP_TICKS
-                && last.pos().distanceTo(hit.pos()) <= MAX_JOIN_DISTANCE) {
-            SEGMENTS.addLast(new Segment(hit.time(), last.pos(), hit.pos(), hit.face(), hit.subLevel()));
-            if (SEGMENTS.size() > MAX_SEGMENTS) {
-                SEGMENTS.pollFirst();
-            }
-        }
-        LAST_HIT.put(id, hit);
-        return true;
+        return new BoundingBox3d(minX - CHAR_HALF_WIDTH, minY - CHAR_HALF_WIDTH, minZ - CHAR_HALF_WIDTH,
+                maxX + CHAR_HALF_WIDTH, maxY + CHAR_HALF_WIDTH, maxZ + CHAR_HALF_WIDTH);
     }
 
-    /** One small burst per moving contact per tick, independent of render frame rate. */
-    private static void emitContactParticles(ClientLevel level, @Nullable SubLevelContainer container,
-                                             Hit hit, Vec3 swing) {
-        Vec3 position = hit.pos();
-        Vec3 normal = Vec3.atLowerCornerOf(hit.face().getNormal());
-        if (hit.subLevel() != null) {
-            SubLevel sub = container == null ? null : container.getSubLevel(hit.subLevel());
-            if (!(sub instanceof ClientSubLevel client)) return;
-            Pose3dc pose = client.renderPose(1f);
-            position = pose.transformPosition(position);
-            normal = pose.transformNormal(normal).normalize();
-        }
-        // Lift off the collision face so the first particle frame is visible instead of buried in the block.
-        position = position.add(normal.scale(0.06));
+    private static Vec3 centroid(float[] vertices) {
+        Vec3 sum = Vec3.ZERO;
+        for (int i = 0; i < vertices.length; i += 3) sum = sum.add(vertices[i], vertices[i + 1], vertices[i + 2]);
+        return sum.scale(3.0 / vertices.length);
+    }
+
+    private static void emitContactParticles(ClientLevel level, Contact contact, Vec3 swing) {
+        Vec3 normal = contact.normal;
+        Vec3 position = contact.position.add(normal.scale(0.06));
         Vec3 drag = swing.subtract(normal.scale(swing.dot(normal))).normalize().scale(0.035);
         var random = level.random;
         int sparks = 4 + random.nextInt(3);
@@ -166,98 +179,50 @@ public final class LightsaberBurns {
             level.addParticle(ParticleTypes.ELECTRIC_SPARK, position.x, position.y, position.z,
                     velocity.x * 4, velocity.y * 4, velocity.z * 4);
         }
-        if (random.nextFloat() < 0.4f) {
-            // LAVA supplies its own upward pop and gravity; its provider ignores velocity arguments.
+        if (random.nextFloat() < 0.4f)
             level.addParticle(ParticleTypes.LAVA, position.x, position.y, position.z, 0, 0, 0);
-        }
-    }
-
-    private static boolean sameSurface(Hit a, Hit b) {
-        return a.face() == b.face() && Objects.equals(a.subLevel(), b.subLevel());
     }
 
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES || SEGMENTS.isEmpty()) {
-            return;
-        }
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_PARTICLES || MARKS.isEmpty()) return;
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft.level;
-        if (level == null) {
-            return;
-        }
+        if (level == null) return;
         float partial = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         double time = level.getGameTime() + partial;
         Vec3 camera = event.getCamera().getPosition();
         Matrix4f matrix = event.getPoseStack().last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         var container = SubLevelContainer.getContainer(level);
-
-        VertexConsumer charring = buffers.getBuffer(RenderType.debugQuads());
-        for (Segment s : SEGMENTS) {
-            float alpha = (float) Math.pow(Math.max(0, 1 - (time - s.time()) / CHAR_LIFETIME), 1.5);
-            if (alpha > 0) {
-                strip(charring, matrix, camera, container, partial, s, CHAR_HALF_WIDTH, 0.05f, 0.03f, 0.025f, alpha * 0.85f, false);
+        VertexConsumer consumer = buffers.getBuffer(LightsaberRenderTypes.SCORCH);
+        for (Mark mark : MARKS) {
+            Pose3dc pose = null;
+            if (mark.subLevel != null) {
+                SubLevel sub = container == null ? null : container.getSubLevel(mark.subLevel);
+                if (!(sub instanceof ClientSubLevel client) || client.isRemoved()) continue;
+                pose = client.renderPose(partial);
             }
+            float fade = (float) Math.pow(Math.max(0, 1 - (time - mark.time) / CHAR_LIFETIME), 1.5);
+            polygon(consumer, matrix, camera, pose, mark, mark.charred, LIFT, 0.05f, 0.03f, 0.025f, fade * 0.85f);
+            float cooling = (float) Math.max(0, 1 - (time - mark.time) / EMBER_LIFETIME);
+            if (cooling > 0) polygon(consumer, matrix, camera, pose, mark, mark.ember, LIFT * 1.5,
+                    1, 0.25f + 0.55f * cooling, 0.05f + 0.35f * cooling * cooling, cooling * cooling * 0.9f);
         }
-        buffers.endBatch(RenderType.debugQuads());
-
-        VertexConsumer ember = null;
-        for (Segment s : SEGMENTS) {
-            float cooling = (float) Math.max(0, 1 - (time - s.time()) / EMBER_LIFETIME);
-            if (cooling > 0) {
-                if (ember == null) {
-                    ember = buffers.getBuffer(RenderType.lightning());
-                }
-                // from white-hot through orange to a dull red as it cools
-                strip(ember, matrix, camera, container, partial, s, EMBER_HALF_WIDTH, 1f, 0.25f + 0.55f * cooling,
-                        0.05f + 0.35f * cooling * cooling, cooling * cooling * 0.9f, true);
-            }
-        }
-        if (ember != null) {
-            buffers.endBatch(RenderType.lightning());
-        }
+        buffers.endBatch(LightsaberRenderTypes.SCORCH);
     }
 
-    /** A flat strip lying on the face the segment is on, lifted slightly off it. */
-    private static void strip(VertexConsumer c, Matrix4f m, Vec3 camera, @Nullable SubLevelContainer container, float partial,
-                              Segment s, double halfWidth, float r, float g, float b, float a, boolean doubleSided) {
-        Vec3 from = s.from();
-        Vec3 to = s.to();
-        Vec3 normal = new Vec3(s.face().getStepX(), s.face().getStepY(), s.face().getStepZ());
-        if (s.subLevel() != null) {
-            // follow the sub-level: from its plot space to where it is drawn right now
-            SubLevel sub = container == null ? null : container.getSubLevel(s.subLevel());
-            if (!(sub instanceof ClientSubLevel client)) {
-                return;
+    private static void polygon(VertexConsumer consumer, Matrix4f matrix, Vec3 camera, @Nullable Pose3dc pose,
+                                 Mark mark, float[] vertices, double lift, float r, float g, float b, float alpha) {
+        for (int i = 1; i + 1 < vertices.length / 3; i++) {
+            for (int j : new int[]{0, i, i + 1}) {
+                Vec3 p = new Vec3(vertices[j * 3] + mark.block.getX(), vertices[j * 3 + 1] + mark.block.getY(),
+                        vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(lift));
+                if (pose != null) p = pose.transformPosition(p);
+                p = p.subtract(camera);
+                consumer.addVertex(matrix, (float) p.x, (float) p.y, (float) p.z).setColor(r, g, b, alpha);
             }
-            Pose3dc pose = client.renderPose(partial);
-            from = pose.transformPosition(from);
-            to = pose.transformPosition(to);
-            normal = pose.transformNormal(normal);
         }
-        Vec3 along = to.subtract(from);
-        if (along.lengthSqr() < 1e-8) {
-            return;
-        }
-        Vec3 side = normal.cross(along).normalize().scale(halfWidth);
-        Vec3 lift = normal.scale(LIFT).subtract(camera);
-        Vec3 p0 = from.add(lift).subtract(side), p1 = from.add(lift).add(side);
-        Vec3 p2 = to.add(lift).add(side), p3 = to.add(lift).subtract(side);
-        vertex(c, m, p0, r, g, b, a);
-        vertex(c, m, p1, r, g, b, a);
-        vertex(c, m, p2, r, g, b, a);
-        vertex(c, m, p3, r, g, b, a);
-        if (doubleSided) {
-            vertex(c, m, p3, r, g, b, a);
-            vertex(c, m, p2, r, g, b, a);
-            vertex(c, m, p1, r, g, b, a);
-            vertex(c, m, p0, r, g, b, a);
-        }
-    }
-
-    private static void vertex(VertexConsumer c, Matrix4f m, Vec3 p, float r, float g, float b, float a) {
-        c.addVertex(m, (float) p.x, (float) p.y, (float) p.z).setColor(r, g, b, a);
     }
 
     private LightsaberBurns() {}

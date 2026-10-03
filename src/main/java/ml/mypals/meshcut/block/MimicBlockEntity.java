@@ -80,9 +80,14 @@ public class MimicBlockEntity extends BlockEntity {
     @Nullable
     private MassSnapshot transitionMass;
 
-    private int shapeVersion = -1;
-    private VoxelShape shape;
-    private double volumeFraction = 1;
+    /**
+     * The block's collision geometry as of one version of its data, replaced as a whole: the shape is asked for from
+     * other threads too (chunk meshing), which must never see one version's key with another's shape.
+     */
+    private record ShapeData(int version, MimicShapes.Key key, VoxelShape shape, double volumeFraction) {}
+
+    @Nullable
+    private volatile ShapeData shapeData;
 
     public MimicBlockEntity(BlockPos pos, BlockState state) {
         super(MeshCut.MIMIC_BE.get(), pos, state);
@@ -132,21 +137,19 @@ public class MimicBlockEntity extends BlockEntity {
         return appearance != null ? appearance.boxes() : MimicShapes.cutBoxes(targetState);
     }
 
-    /** The key of this block's collision geometry. */
+    /** The key of this block's collision geometry, cached per version. */
     public MimicShapes.Key shapeKey() {
-        return MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
+        return shapeData().key();
     }
 
     /** Collision / selection shape of what is left of the block, cached per version. */
     public VoxelShape getShape() {
-        refreshShape();
-        return shape;
+        return shapeData().shape();
     }
 
     /** Fraction of the imitated block that survives the cuts; scales the physics mass. */
     public double getVolumeFraction() {
-        refreshShape();
-        return volumeFraction;
+        return shapeData().volumeFraction();
     }
 
     /**
@@ -190,13 +193,15 @@ public class MimicBlockEntity extends BlockEntity {
         transitionMass = null;
     }
 
-    private void refreshShape() {
-        if (shapeVersion != version || shape == null) {
-            var key = shapeKey();
-            shape = MimicShapes.shape(MimicShapes.boxes(key));
-            volumeFraction = MimicShapes.volumeFraction(key);
-            shapeVersion = version;
+    private ShapeData shapeData() {
+        int v = version; // read first: a change made meanwhile bumps it, and the next call works it out again
+        ShapeData data = shapeData;
+        if (data == null || data.version() != v) {
+            var key = MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
+            data = new ShapeData(v, key, MimicShapes.shape(key), MimicShapes.volumeFraction(key));
+            shapeData = data;
         }
+        return data;
     }
 
     /** Replaces the whole configuration with a single sync to clients. */
