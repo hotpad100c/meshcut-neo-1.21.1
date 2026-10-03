@@ -53,6 +53,7 @@ public class LightsaberItem extends Item {
 
     @Override
     public void releaseUsing(ItemStack stack, Level level, LivingEntity entity, int timeLeft) {
+        if (entity instanceof Player player) LightsaberHandler.release(player);
         level.playSound(null, entity.getX(), entity.getY(), entity.getZ(),
                 SoundEvents.BEACON_DEACTIVATE, SoundSource.PLAYERS, 0.6f, 1.3f);
     }

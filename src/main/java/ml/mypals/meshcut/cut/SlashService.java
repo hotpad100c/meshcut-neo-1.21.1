@@ -188,6 +188,17 @@ public final class SlashService {
     /** @param wielder who swung (creatures the blade passes through die and are cut too; the wielder never is) */
     public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                @Nullable net.minecraft.world.entity.Entity wielder) {
+        return slashSwing(level, swipes, mode, wielder, true);
+    }
+
+    /** Entity contact was already handled while holding the saber; release only applies the recorded world stroke. */
+    public static CutService.Result slashBlocks(ServerLevel level, List<Swipe> swipes, CapMode mode,
+                                                @Nullable net.minecraft.world.entity.Entity wielder) {
+        return slashSwing(level, swipes, mode, wielder, false);
+    }
+
+    private static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
+                                                @Nullable net.minecraft.world.entity.Entity wielder, boolean entities) {
         List<Sweep> sweeps = new ArrayList<>();
         for (Swipe swipe : swipes) {
             Sweep sweep = sweepOf(swipe.from(), swipe.to());
@@ -201,7 +212,7 @@ public final class SlashService {
 
         MimicBlock.setGlowingCuts(true); // what this swing cuts open glows; see MimicBlockEntity#configure
         try {
-            return cutWith(level, sweeps, mode, wielder);
+            return cutWith(level, sweeps, mode, wielder, entities);
         } finally {
             MimicBlock.setGlowingCuts(false);
         }
@@ -209,18 +220,13 @@ public final class SlashService {
 
     private static CutService.Result cutWith(ServerLevel level, List<Sweep> sweeps, CapMode mode,
                                                 @Nullable net.minecraft.world.entity.Entity wielder) {
-        // creatures first: their bodies become sub-levels, which the cut below then goes through like any other
-        List<EntityCutting.Swept> swept = new ArrayList<>(sweeps.size());
-        sweeps.forEach(sweep -> swept.add(new EntityCutting.Swept(sweep.quad())));
-        // bodies built later (once a client has said what their limbs are) are cut by the same swing then
-        EntityCutting.cut(level, swept, wielder, bodies -> {
-            MimicBlock.setGlowingCuts(true);
-            try {
-                cutSubLevels(level, sweeps, bodies, mode, new int[1]);
-            } finally {
-                MimicBlock.setGlowingCuts(false);
-            }
-        });
+        return cutWith(level, sweeps, mode, wielder, true);
+    }
+
+    private static CutService.Result cutWith(ServerLevel level, List<Sweep> sweeps, CapMode mode,
+                                             @Nullable net.minecraft.world.entity.Entity wielder, boolean entities) {
+        java.util.Set<ServerSubLevel> alreadyCutBodies = entities ? cutEntities(level, sweeps, mode, wielder)
+                : java.util.Set.of();
 
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
@@ -237,7 +243,7 @@ public final class SlashService {
         List<ServerSubLevel> subLevels = new ArrayList<>();
         for (SubLevel s : Sable.HELPER.getAllIntersecting(level,
                 new BoundingBox3d(minX - 1, minY - 1, minZ - 1, maxX + 1, maxY + 1, maxZ + 1))) {
-            if (s instanceof ServerSubLevel ss && !ss.isRemoved()) {
+            if (s instanceof ServerSubLevel ss && !ss.isRemoved() && !alreadyCutBodies.contains(ss)) {
                 subLevels.add(ss);
             }
         }
@@ -260,6 +266,43 @@ public final class SlashService {
 
         int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
         return new CutService.Result(staticBlocks, cutLevels, created[0]);
+    }
+
+    /** Immediate entity-only contact, including a motionless blade. Never processes world blocks. */
+    public static void touchEntities(ServerLevel level, Blade before, Blade now,
+                                     net.minecraft.world.entity.Entity wielder) {
+        if (now.direction().lengthSqr() < 1e-4) return;
+        Sweep sweep = before == null ? null : sweepOf(before, now);
+        List<Sweep> sweeps = new ArrayList<>();
+        if (sweep != null) sweeps.add(sweep);
+        Vec3 direction = now.direction().normalize();
+        Vec3 helper = Math.abs(direction.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+        // The finite ribbon is as thin as the visible core and also supplies a plane for a stationary contact.
+        Vec3 side = direction.cross(helper).normalize().scale(0.008);
+        Sweep contact = sweepOf(new Blade(now.base().subtract(side), now.tip().subtract(side)),
+                new Blade(now.base().add(side), now.tip().add(side)));
+        if (contact != null) sweeps.add(contact);
+        if (!sweeps.isEmpty()) cutEntities(level, sweeps, CapMode.LAVA, wielder);
+    }
+
+    private static java.util.Set<ServerSubLevel> cutEntities(ServerLevel level, List<Sweep> sweeps, CapMode mode,
+                                     @Nullable net.minecraft.world.entity.Entity wielder) {
+        // Without a capture client the fallback body is built synchronously. Do not cut it again in cutWith.
+        java.util.Set<ServerSubLevel> builtNow = new java.util.HashSet<>();
+        // creatures first: their bodies become sub-levels, which the cut below then goes through like any other
+        List<EntityCutting.Swept> swept = new ArrayList<>(sweeps.size());
+        sweeps.forEach(sweep -> swept.add(new EntityCutting.Swept(sweep.quad())));
+        // bodies built later (once a client has said what their limbs are) are cut by the same swing then
+        EntityCutting.cut(level, swept, wielder, bodies -> {
+            builtNow.addAll(bodies);
+            MimicBlock.setGlowingCuts(true);
+            try {
+                cutSubLevels(level, sweeps, bodies, mode, new int[1]);
+            } finally {
+                MimicBlock.setGlowingCuts(false);
+            }
+        });
+        return builtNow;
     }
 
     /** Cuts the sub-levels with the swing. @return how many of them it went through */

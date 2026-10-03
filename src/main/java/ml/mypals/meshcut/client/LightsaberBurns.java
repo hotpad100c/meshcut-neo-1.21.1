@@ -81,11 +81,22 @@ public final class LightsaberBurns {
             }
             Blade blade = Blade.of(player, 1f);
             Blade before = LAST_BLADE.put(player.getUUID(), blade);
-            if (before == null || player.distanceToSqr(minecraft.gameRenderer.getMainCamera().getPosition()) > 48 * 48)
-                continue;
-            double movement = Math.max(before.tip().distanceTo(blade.tip()), before.base().distanceTo(blade.base()));
-            if (movement < 0.01 || movement > 8) continue;
-            Vec3[] sweep = {before.base(), before.tip(), blade.tip(), blade.base()};
+            if (player.distanceToSqr(minecraft.gameRenderer.getMainCamera().getPosition()) > 48 * 48
+                    || blade.direction().lengthSqr() < 1e-4) continue;
+            double movement = before == null ? 0 : Math.max(before.tip().distanceTo(blade.tip()), before.base().distanceTo(blade.base()));
+            if (movement > 8) continue;
+            Vec3[] sweep;
+            if (movement < 0.01) {
+                // A stationary contact still chars the surface. Refresh it at 5 Hz without accumulating every tick.
+                if (before != null && now % 4 != 0) continue;
+                Vec3 direction = blade.direction().normalize();
+                Vec3 helper = Math.abs(direction.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+                Vec3 side = direction.cross(helper).normalize().scale(0.008);
+                sweep = new Vec3[]{blade.base().subtract(side), blade.tip().subtract(side),
+                        blade.tip().add(side), blade.base().add(side)};
+            } else {
+                sweep = new Vec3[]{before.base(), before.tip(), blade.tip(), blade.base()};
+            }
             Contact contact = collect(level, container, sweep, now, null, null);
             BoundingBox3d bounds = bounds(sweep);
             for (SubLevel sub : Sable.HELPER.getAllIntersecting(level, bounds)) {
@@ -97,7 +108,7 @@ public final class LightsaberBurns {
                 if (next != null && (contact == null || next.position.distanceToSqr(blade.base())
                         < contact.position.distanceToSqr(blade.base()))) contact = next;
             }
-            if (contact != null) emitContactParticles(level, contact, blade.tip().subtract(before.tip()));
+            if (contact != null) emitContactParticles(level, contact, before == null ? Vec3.ZERO : blade.tip().subtract(before.tip()));
         }
     }
 

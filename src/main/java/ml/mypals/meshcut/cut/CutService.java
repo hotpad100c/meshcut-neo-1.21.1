@@ -62,6 +62,10 @@ public final class CutService {
 
     public record Result(int staticBlocks, int subLevelsCut, int subLevelsCreated) {}
 
+    /** Blocks that are never cut (command blocks, bedrock, barriers, ...). */
+    public static final net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> UNCUTTABLE = net.minecraft.tags.TagKey.create(
+            net.minecraft.core.registries.Registries.BLOCK, net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "uncuttable"));
+
     /**
      * What a block position currently holds: the imitated block and the cuts already applied to it.
      * {@code beTag} is the saved data of the original block entity; {@code undetachedBe} marks a real block entity
@@ -359,7 +363,8 @@ public final class CutService {
                     new ArrayList<>(be.getPatches()), be.getCapMode(), be.getTargetBeTag(), false, be.getAppearance())
                     : null;
         }
-        if (state.getBlock() instanceof LiquidBlock || state.getRenderShape() == RenderShape.INVISIBLE) {
+        if (state.getBlock() instanceof LiquidBlock || state.getRenderShape() == RenderShape.INVISIBLE
+                || state.is(UNCUTTABLE)) {
             return null;
         }
         if (state.hasBlockEntity() && !canSpill(level, pos)) {

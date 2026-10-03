@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
 import ml.mypals.meshcut.cut.SaberPose;
+import ml.mypals.meshcut.cut.SaberGesture;
 import ml.mypals.meshcut.item.LightsaberItem;
 import ml.mypals.meshcut.item.LightsaberMotion;
 import net.minecraft.client.Minecraft;
@@ -48,10 +49,13 @@ public final class LightsaberHands {
     public static void poseArms(Player player, float partial, ModelPart right, ModelPart left) {
         var aim = LightsaberMotion.angles(player, partial);
         float relativeYaw = Mth.wrapDegrees(aim.x - Mth.rotLerp(partial, player.yBodyRotO, player.yBodyRot));
+        Vector3f translation = LightsaberMotion.handOffset(player, partial)
+                .rotateY((float) Math.toRadians(Mth.rotLerp(partial, player.yBodyRotO, player.yBodyRot)))
+                .div(SaberPose.PLAYER_MODEL_SCALE);
         pose(right, SaberPose.armPose(relativeYaw, aim.y, false, player.getMainArm() == HumanoidArm.RIGHT,
-                player.isCrouching()), false, player.isCrouching());
+                player.isCrouching(), translation), false, player.isCrouching());
         pose(left, SaberPose.armPose(relativeYaw, aim.y, true, player.getMainArm() == HumanoidArm.LEFT,
-                player.isCrouching()), true, player.isCrouching());
+                player.isCrouching(), translation), true, player.isCrouching());
     }
 
     private static void pose(ModelPart arm, SaberPose.ArmPose pose, boolean left, boolean crouching) {
@@ -101,14 +105,17 @@ public final class LightsaberHands {
                 180 - Mth.rotLerp(partial, player.yBodyRotO, player.yBodyRot))));
         arms.scale(-SaberPose.PLAYER_MODEL_SCALE, -SaberPose.PLAYER_MODEL_SCALE, SaberPose.PLAYER_MODEL_SCALE);
         arms.translate(0, -1.501, 0);
-        var skin = RenderType.entitySolid(player.getSkin().texture());
-        model.rightArm.render(arms, buffers.getBuffer(skin), light, OverlayTexture.NO_OVERLAY);
-        model.leftArm.render(arms, buffers.getBuffer(skin), light, OverlayTexture.NO_OVERLAY);
-        var sleeves = RenderType.entityCutoutNoCull(player.getSkin().texture());
+        float opacity = SaberGesture.handOpacity(Mth.lerp(partial, player.xRotO, player.getXRot()));
+        int tint = ((int) (opacity * 255) << 24) | 0xffffff;
+        var skin = opacity > 0.999f ? RenderType.entitySolid(player.getSkin().texture())
+                : LightsaberRenderTypes.FADED_HANDS.apply(player.getSkin().texture());
+        model.rightArm.render(arms, buffers.getBuffer(skin), light, OverlayTexture.NO_OVERLAY, tint);
+        model.leftArm.render(arms, buffers.getBuffer(skin), light, OverlayTexture.NO_OVERLAY, tint);
+        var sleeves = opacity > 0.999f ? RenderType.entityCutoutNoCull(player.getSkin().texture()) : skin;
         if (player.isModelPartShown(PlayerModelPart.RIGHT_SLEEVE))
-            model.rightSleeve.render(arms, buffers.getBuffer(sleeves), light, OverlayTexture.NO_OVERLAY);
+            model.rightSleeve.render(arms, buffers.getBuffer(sleeves), light, OverlayTexture.NO_OVERLAY, tint);
         if (player.isModelPartShown(PlayerModelPart.LEFT_SLEEVE))
-            model.leftSleeve.render(arms, buffers.getBuffer(sleeves), light, OverlayTexture.NO_OVERLAY);
+            model.leftSleeve.render(arms, buffers.getBuffer(sleeves), light, OverlayTexture.NO_OVERLAY, tint);
         buffers.endBatch(skin);
         buffers.endBatch(sleeves);
     }

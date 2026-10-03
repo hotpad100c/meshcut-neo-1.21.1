@@ -31,6 +31,14 @@ public final class SaberPose {
                 (float) -Math.sin(p), (float) (Math.cos(y) * Math.cos(p)));
     }
 
+    /** Positive X/Y mean screen-right/up, including when the camera looks straight down. */
+    public static Vector3f screenTranslation(float yaw, float pitch, float x, float y) {
+        double angle = Math.toRadians(yaw);
+        Vector3f right = new Vector3f((float) -Math.cos(angle), 0, (float) -Math.sin(angle));
+        Vector3f up = new Vector3f(right).cross(direction(yaw, pitch));
+        return right.mul(x).add(up.mul(y));
+    }
+
     /** Both hands meet on the hilt in front of the chest; the wrist moves slightly with the blade. */
     public static Vector3f grip(float relativeYaw, float pitch, boolean crouching) {
         float shoulderY = crouching ? 5.2f / 16f : 2f / 16f;
@@ -40,8 +48,13 @@ public final class SaberPose {
 
     public static ArmPose armPose(float relativeYaw, float pitch, boolean leftArm,
                                   boolean mainArm, boolean crouching) {
+        return armPose(relativeYaw, pitch, leftArm, mainArm, crouching, new Vector3f());
+    }
+
+    public static ArmPose armPose(float relativeYaw, float pitch, boolean leftArm,
+                                  boolean mainArm, boolean crouching, Vector3f translation) {
         float shoulderY = crouching ? 5.2f / 16f : 2f / 16f;
-        Vector3f hand = grip(relativeYaw, pitch, crouching);
+        Vector3f hand = grip(relativeYaw, pitch, crouching).add(translation);
         if (!mainArm) hand.sub(direction(relativeYaw, pitch).mul(SUPPORT_GRIP_DISTANCE));
         // PlayerRenderer flips Y/Z between the model's coordinates and this body-relative frame.
         Vector3f arm = hand.sub(leftArm ? SHOULDER_SIDE : -SHOULDER_SIDE, 1.501f - shoulderY, 0);

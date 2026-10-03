@@ -99,6 +99,7 @@ public final class LightsaberRenderer {
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,
                                   double time, UUID owner) {
+        if (base.distanceToSqr(tip) < 1e-4) return;
         // Continuous game-time oscillation avoids frame-dependent random jumps and freezes when paused.
         double phase = (owner.hashCode() & 0xffff) * (Math.PI * 2 / 65536);
         double pulse = Math.sin(time * 1.7 + phase) * 0.035 + Math.sin(time * 2.9 + phase) * 0.015;

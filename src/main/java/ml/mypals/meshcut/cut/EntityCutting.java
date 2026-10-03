@@ -150,7 +150,7 @@ public final class EntityCutting {
                 EntityAppearance.Look look = lookOf(entity);
                 ServerPlayer client = clientFor(level, entity, wielder);
                 if (client == null) {
-                    finish(level, entity, look, wielder, entity.getDeltaMovement().scale(20), null);
+                    cutLater.accept(finish(level, entity, look, wielder, entity.getDeltaMovement().scale(20), null));
                     continue;
                 }
                 int id = nextId++;

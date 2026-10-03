@@ -6,6 +6,8 @@
     "EntitySaveMixin",
     "LevelChunkMixin",
     "MassTrackerMixin",
+    "PistonBaseBlockMixin",
+    "PistonMovingBlockEntityMixin",
     "PhysicsBlockPropertyHelperMixin",
     "RapierPhysicsPipelineMixin",
     "VoxelNeighborhoodStateMixin"
@@ -13,6 +15,7 @@
   "client": [
     "FlywheelVisualizationMixin",
     "CitadelModelBoxMixin",
+    "PistonHeadRendererMixin",
     "PoseStackMixin",
     "ModelPartAccessor",
     "ModelPartCubeMixin",

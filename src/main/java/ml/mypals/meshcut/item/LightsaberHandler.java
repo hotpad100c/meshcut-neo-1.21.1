@@ -22,7 +22,7 @@ import java.util.UUID;
  * Cuts with the surfaces a lit lightsaber's blade sweeps.
  * <p>
  * The saber is lit while right-click is held, and a cut lasts exactly that long: it begins the moment the blade is
- * lit and ends when it is put out. Nothing is changed while it is going on: each tick's sweep is only recorded, and
+ * lit and ends when it is put out. World blocks stay intact while holding: each tick's sweep is recorded, and
  * the whole cut is applied at once at the end. Replacing blocks as the blade passes would, for example, turn the
  * upper half of a door into a mimic before the lower half had been reached, and the door would break apart.
  */
@@ -32,15 +32,17 @@ public final class LightsaberHandler {
     private static final double MAX_TIP_SPEED = 30;
     /** Slower than this the blade is standing still and sweeps nothing. */
     private static final double MIN_TIP_SPEED = 0.01;
-    /** A cut longer than this is applied early (and carries on), so the work is not left to pile up. */
-    private static final int MAX_SWIPES = 200;
+    /** The item's maximum use duration bounds storage without applying blocks before release. */
+    private static final int MAX_SWIPES = 72000;
 
     private static final class Swing {
         final ResourceKey<Level> dimension;
+        final Object session;
         final List<SlashService.Swipe> swipes = new ArrayList<>();
 
-        Swing(ResourceKey<Level> dimension) {
+        Swing(ResourceKey<Level> dimension, Object session) {
             this.dimension = dimension;
+            this.session = session;
         }
     }
 
@@ -61,27 +63,28 @@ public final class LightsaberHandler {
         Blade now = Blade.of(player, 1f);
         Blade before = LAST.put(id, now);
         Swing swing = SWINGS.get(id);
-        if (swing != null && swing.dimension != player.level().dimension()) {
+        if (swing != null && (swing.dimension != player.level().dimension() || swing.session != LightsaberMotion.session(player))) {
             SWINGS.remove(id); // changed dimension mid-cut
             swing = null;
+            before = null;
         }
         if (swing == null) {
-            swing = new Swing(player.level().dimension());
+            swing = new Swing(player.level().dimension(), LightsaberMotion.session(player));
             SWINGS.put(id, swing);
         }
-        if (before == null) {
-            return;
-        }
+        if (before != null && now.tip().distanceTo(before.tip()) > MAX_TIP_SPEED) return;
+        SlashService.touchEntities(player.serverLevel(), before, now, player);
+        if (before == null) return;
         double speed = now.tip().distanceTo(before.tip());
-        if (speed > MAX_TIP_SPEED) {
-            finish(player); // a teleport, not a swing
-            return;
-        }
-        if (speed >= MIN_TIP_SPEED) {
+        if (speed >= MIN_TIP_SPEED && swing.swipes.size() < MAX_SWIPES) {
             swing.swipes.add(new SlashService.Swipe(before, now));
-            if (swing.swipes.size() >= MAX_SWIPES) {
-                finish(player);
-            }
+        }
+    }
+
+    public static void release(net.minecraft.world.entity.player.Player player) {
+        if (player instanceof ServerPlayer serverPlayer) {
+            LAST.remove(player.getUUID());
+            finish(serverPlayer);
         }
     }
 
@@ -92,7 +95,7 @@ public final class LightsaberHandler {
             return;
         }
         try {
-            var result=SlashService.slashSwing(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
+            var result=SlashService.slashBlocks(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
             if(result!=null) {
                 MeshCut.LOGGER.info("Applied saber stroke: {} swipes, {} static blocks, {} sub-levels cut, {} sub-levels created",
                         swing.swipes.size(),result.staticBlocks(),result.subLevelsCut(),result.subLevelsCreated());

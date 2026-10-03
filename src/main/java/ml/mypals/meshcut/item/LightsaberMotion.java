@@ -3,6 +3,10 @@ package ml.mypals.meshcut.item;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.SaberAim;
 import ml.mypals.meshcut.cut.SaberControl;
+import ml.mypals.meshcut.cut.SaberGesture;
+import ml.mypals.meshcut.cut.SaberTranslation;
+import ml.mypals.meshcut.cut.SaberPose;
+import org.joml.Vector3f;
 import ml.mypals.meshcut.network.LightsaberNet;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.resources.ResourceKey;
@@ -42,6 +46,11 @@ public final class LightsaberMotion {
 
     private static final class State {
         final SaberAim aim;
+        final SaberTranslation hand = new SaberTranslation();
+        final int started;
+        int gestureStarted = Integer.MIN_VALUE / 2;
+        int preset, seed;
+        float handX, handY;
         final ResourceKey<Level> dimension;
         Vec3 position;
         int tick;
@@ -53,7 +62,7 @@ public final class LightsaberMotion {
             aim = new SaberAim(player.getYRot(), player.getXRot());
             dimension = player.level().dimension();
             position = player.position();
-            tick = player.tickCount;
+            tick = started = player.tickCount;
         }
     }
 
@@ -76,10 +85,18 @@ public final class LightsaberMotion {
         // Missing callbacks should advance elapsed simulation time, rather than snap to the target.
         float yaw = state.remoteTarget == null ? player.getYRot() + state.yawOffset : state.remoteTarget.x;
         float pitch = state.remoteTarget == null ? player.getXRot() + state.pitchOffset : state.remoteTarget.y;
-        state.aim.advance(yaw, pitch, (player.tickCount - state.tick) / 20f);
+        SaberGesture.Sample gesture = state.remoteTarget == null
+                ? SaberGesture.sample(state.preset, state.seed, player.tickCount - state.gestureStarted)
+                : new SaberGesture.Sample(0, 0, 0, 0);
+        yaw += gesture.yaw();
+        pitch += gesture.pitch();
+        float x = state.handX + gesture.x(), y = state.handY + gesture.y();
+        float seconds = (player.tickCount - state.tick) / 20f;
+        state.aim.advance(yaw, pitch, seconds);
+        state.hand.advance(x, y, seconds);
         state.position = player.position();
         state.tick = player.tickCount;
-        if (player instanceof ServerPlayer serverPlayer) LightsaberNet.broadcast(serverPlayer, yaw, pitch);
+        if (player instanceof ServerPlayer serverPlayer) LightsaberNet.broadcast(serverPlayer, yaw, pitch, x, y);
     }
 
     public static Object session(Player player) {
@@ -103,6 +120,45 @@ public final class LightsaberMotion {
         return state != null ? state.aim.angles(partialTick) : new Vector2f(
                 Mth.rotLerp(partialTick, player.yRotO, player.getYRot()),
                 Mth.lerp(partialTick, player.xRotO, player.getXRot()));
+    }
+
+    public static void setHandTarget(Player player, float x, float y) {
+        if (!LightsaberItem.isActive(player) || !Float.isFinite(x) || !Float.isFinite(y)) return;
+        State state = player.getData(STATE);
+        state.handX = Math.clamp(x, -SaberTranslation.LIMIT_X, SaberTranslation.LIMIT_X);
+        state.handY = Math.clamp(y, -SaberTranslation.LIMIT_Y, SaberTranslation.LIMIT_Y);
+    }
+
+    public static void setRemoteHandTarget(Player player, float x, float y) {
+        if (!Float.isFinite(x) || !Float.isFinite(y)) return;
+        State state = player.getData(STATE);
+        state.handX = Math.clamp(x, -0.42f, 0.42f);
+        state.handY = Math.clamp(y, -0.36f, 0.36f);
+    }
+
+    public static boolean startGesture(Player player, int preset, int seed) {
+        if (!LightsaberItem.isActive(player) || preset < 0 || preset >= SaberGesture.COUNT) return false;
+        State state = player.getData(STATE);
+        if (player.tickCount - state.gestureStarted < SaberGesture.DURATION_TICKS) return false;
+        state.gestureStarted = player.tickCount;
+        state.preset = preset;
+        state.seed = seed;
+        return true;
+    }
+
+    /** Translation in world coordinates before entity scale, shared by the grip and the cutting emitter. */
+    public static Vector3f handOffset(Player player, float partial) {
+        State state = player.getExistingDataOrNull(STATE);
+        if (state == null) return new Vector3f();
+        Vector2f offset = state.hand.position(partial);
+        float yaw = Mth.rotLerp(partial, player.yRotO, player.getYRot());
+        float pitch = Mth.lerp(partial, player.xRotO, player.getXRot());
+        return SaberPose.screenTranslation(yaw, pitch, offset.x, offset.y).mul(SaberPose.PLAYER_MODEL_SCALE);
+    }
+
+    public static float extension(Player player, float partial) {
+        State state = player.getExistingDataOrNull(STATE);
+        return state == null ? 1 : SaberGesture.extension(player.tickCount - state.started - 1 + partial);
     }
 
     private LightsaberMotion() {}

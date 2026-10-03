@@ -4,8 +4,8 @@ import org.joml.Vector2f;
 
 /** Critically damped aim lag, shared by rendering and cutting. Angles are in degrees. */
 public final class SaberAim {
-    /** Time to complete 95% of a turn from rest: 2.5 times the previous 0.24-second response. */
-    public static final float SETTLE_SECONDS = 0.6f;
+    /** Time to complete 95% of a turn from rest, retaining continuous position and velocity. */
+    public static final float SETTLE_SECONDS = 0.22f;
     private static final float FREQUENCY = 4.743865f / SETTLE_SECONDS;
     private float previousYaw;
     private float previousPitch;

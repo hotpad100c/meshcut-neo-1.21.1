@@ -11,6 +11,7 @@ public final class LightsaberRemoteAim {
         if (minecraft.level != null && minecraft.level.getEntity(target.id()) instanceof Player player
                 && player != minecraft.player) {
             LightsaberMotion.setRemoteTarget(player, target.yaw(), target.pitch());
+            LightsaberMotion.setRemoteHandTarget(player, target.x(), target.y());
         }
     }
 
