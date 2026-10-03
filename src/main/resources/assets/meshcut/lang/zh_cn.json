@@ -1,5 +1,9 @@
 {
   "key.meshcut.saber_swing": "随机挥剑",
   "key.categories.meshcut": "网格切割",
-  "subtitles.meshcut.saber": "光剑嗡鸣"
+  "subtitles.meshcut.saber": "光剑嗡鸣",
+  "key.meshcut.saber_reposition": "调整光剑位置",
+  "block.meshcut.mimic": "断裂的方块",
+  "item.meshcut.lightsaber": "激光剑",
+  "block.meshcut.entity_body": "尸体"
 }

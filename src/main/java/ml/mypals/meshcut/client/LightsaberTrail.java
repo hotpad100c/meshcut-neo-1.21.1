@@ -24,7 +24,8 @@ import java.util.UUID;
 
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberTrail {
-    private static final double LIFETIME = 2;
+    /** The airborne blade wake lasts one tick; block-surface scorch has its own, longer lifetime. */
+    private static final double LIFETIME = 1;
     private static final double MIN_SAMPLE_MOVEMENT = 0.12;
     private static final long MAX_GAP_TICKS = 3;
     private static final float[] BASE_COLOR = {0.15f, 0.55f, 1f};
@@ -69,7 +70,10 @@ public final class LightsaberTrail {
         }
         float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
         double time = level.getGameTime() + partialTick;
-        blades.forEach((id, blade) -> recordBlade(id, blade, time));
+        blades.forEach((id, blade) -> {
+            Player player = level.getPlayerByUUID(id);
+            if (player != null && LightsaberItem.isActive(player)) recordBlade(id, blade, time);
+        });
         Vec3 camera = event.getCamera().getPosition();
         Matrix4f matrix = event.getPoseStack().last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
@@ -85,7 +89,8 @@ public final class LightsaberTrail {
                                    Matrix4f matrix, Vec3 camera, double time, float intensity) {
         for (Map.Entry<UUID, ArrayDeque<Sample>> entry : TRAILS.entrySet()) {
             if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
-                    && !minecraft.options.hideGui && LightsaberItem.isActive(minecraft.player)
+                    && !minecraft.options.hideGui
+                    && ml.mypals.meshcut.item.LightsaberMotion.isVisible(minecraft.player)
                     && entry.getKey().equals(minecraft.player.getUUID())) continue;
             renderTrail(consumer, matrix, camera, entry.getValue(), blades.get(entry.getKey()), time, intensity);
         }
@@ -95,7 +100,7 @@ public final class LightsaberTrail {
     static void renderFirstPerson(Player player, Blade blade, float partialTick, Matrix4f matrix, Vec3 camera,
                                   MultiBufferSource.BufferSource buffers) {
         double time = player.level().getGameTime() + partialTick;
-        recordBlade(player.getUUID(), blade, time);
+        if (LightsaberItem.isActive(player)) recordBlade(player.getUUID(), blade, time);
         renderTrail(buffers.getBuffer(LightsaberRenderTypes.TRAIL), matrix, camera,
                 TRAILS.get(player.getUUID()), blade, time);
         buffers.endBatch(LightsaberRenderTypes.TRAIL);
@@ -124,21 +129,37 @@ public final class LightsaberTrail {
     /** @param intensity scales the opacity: the glow of the trail is faint, the trail itself translucent */
     private static void renderTrail(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,
                                     ArrayDeque<Sample> trail, @Nullable Blade current, double time, float intensity) {
+        if (trail == null || trail.isEmpty()) return;
         Sample previous = null;
         for (Sample sample : trail) {
             if (previous != null && sample.time() - previous.time() <= MAX_GAP_TICKS) {
                 float alpha = (float) (1 - (time - sample.time()) / LIFETIME);
                 if (alpha > 0) {
-                    ribbon(consumer, matrix, camera, previous.blade(), sample.blade(), alpha * alpha * MAX_ALPHA * intensity);
+                    float previousAlpha = (float) Math.clamp(1 - (time - previous.time()) / LIFETIME, 0, 1);
+                    ribbon(consumer, matrix, camera,
+                            shorten(previous.blade(), tailLength(previousAlpha)),
+                            shorten(sample.blade(), tailLength(alpha)),
+                            alpha * alpha * MAX_ALPHA * intensity);
                 }
             }
             previous = sample;
         }
-        if (previous != null && current != null && time - previous.time() <= MAX_GAP_TICKS
+        if (previous != null && current != null && time - previous.time() <= LIFETIME
                 && (current.tip().distanceToSqr(previous.blade().tip()) > 1e-8
                 || current.base().distanceToSqr(previous.blade().base()) > 1e-8)) {
-            ribbon(consumer, matrix, camera, previous.blade(), current, MAX_ALPHA * intensity);
+            float previousAlpha = (float) Math.clamp(1 - (time - previous.time()) / LIFETIME, 0, 1);
+            ribbon(consumer, matrix, camera, shorten(previous.blade(), tailLength(previousAlpha)), current,
+                    MAX_ALPHA * intensity);
         }
+    }
+
+    /** The far end of the wake tapers towards the hilt, producing a pointed rather than rectangular tail. */
+    private static float tailLength(float alpha) {
+        return 0.12f + 0.88f * (float) Math.sqrt(Math.clamp(alpha, 0, 1));
+    }
+
+    private static Blade shorten(Blade blade, float length) {
+        return new Blade(blade.base(), blade.base().add(blade.direction().scale(length)));
     }
 
     private static void ribbon(VertexConsumer c, Matrix4f m, Vec3 camera, Blade a, Blade b, float alpha) {

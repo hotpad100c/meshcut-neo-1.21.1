@@ -60,7 +60,9 @@ public final class LightsaberNet {
     }
 
     public static void broadcast(ServerPlayer player, float yaw, float pitch, float x, float y) {
-        PacketDistributor.sendToPlayersTrackingEntity(player, new Target(player.getId(), yaw, pitch, x, y));
+        Target target = new Target(player.getId(), yaw, pitch, x, y);
+        PacketDistributor.sendToPlayersTrackingEntity(player, target);
+        PacketDistributor.sendToPlayer(player, target); // so that its burn marks follow the cut the server makes
     }
 
     private LightsaberNet() {}

@@ -4,7 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
-import ml.mypals.meshcut.item.LightsaberItem;
+import ml.mypals.meshcut.item.LightsaberMotion;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
@@ -45,14 +45,14 @@ public final class LightsaberRenderer {
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         Map<UUID, Blade> blades = new HashMap<>();
         for (Player player : minecraft.level.players()) {
-            if (!LightsaberItem.isActive(player)) {
+            if (!LightsaberMotion.isVisible(player)) {
                 continue;
             }
             blades.put(player.getUUID(), Blade.of(player, partialTick));
         }
         // with bloom the hands are drawn after it, so that its glow does not lie over them (see renderHands)
         if (!Bloom.usable() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
-                && !minecraft.options.hideGui && LightsaberItem.isActive(minecraft.player)) {
+                && !minecraft.options.hideGui && LightsaberMotion.isVisible(minecraft.player)) {
             LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
                     camera, matrix, buffers);
         }
@@ -89,7 +89,7 @@ public final class LightsaberRenderer {
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level == null || minecraft.player == null || !minecraft.options.getCameraType().isFirstPerson()
-                || minecraft.options.hideGui || !LightsaberItem.isActive(minecraft.player)) {
+                || minecraft.options.hideGui || !LightsaberMotion.isVisible(minecraft.player)) {
             return;
         }
         float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);

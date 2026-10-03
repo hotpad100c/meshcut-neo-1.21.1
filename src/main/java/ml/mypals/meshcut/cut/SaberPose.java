@@ -14,6 +14,8 @@ public final class SaberPose {
     public static final float SHOULDER_SIDE = 5f / 16f;
     public static final float MOUTH_FROM_HAND = (EMITTER_Y - GRIP_Y) * HILT_SCALE;
     public static final float SUPPORT_GRIP_DISTANCE = 0.12f;
+    /** How much longer than natural an arm may be drawn: the hand is held back where the arms would stretch more. */
+    public static final float MAX_STRETCH = 1.2f;
 
     public record ArmPose(float pitch, float yaw, float lengthScale) {}
 
@@ -63,6 +65,36 @@ public final class SaberPose {
         float length = arm.length();
         return new ArmPose((float) -Math.acos(Math.clamp(arm.y / length, -1, 1)),
                 (float) Math.atan2(-arm.x, -arm.z), length / HAND_REACH);
+    }
+
+    /**
+     * The hand translation (in the world, before entity scale) drawn back towards the rest position as far as it takes
+     * for both arms to reach it without stretching past {@link #MAX_STRETCH}. Shared by the cutting blade and the
+     * model, so the blade is never held where the arms do not reach.
+     */
+    public static Vector3f reachable(Vector3f offset, float aimYaw, float aimPitch, float bodyYaw,
+                                     boolean crouching, boolean rightHanded) {
+        float relativeYaw = aimYaw - bodyYaw;
+        relativeYaw -= (float) Math.floor((relativeYaw + 180f) / 360f) * 360f;
+        Vector3f body = new Vector3f(offset).rotateY((float) Math.toRadians(bodyYaw)).div(PLAYER_MODEL_SCALE);
+        if (stretch(body, relativeYaw, aimPitch, crouching, rightHanded) <= MAX_STRETCH) {
+            return offset;
+        }
+        float low = 0, high = 1;
+        for (int i = 0; i < 14; i++) {
+            float middle = (low + high) / 2;
+            if (stretch(new Vector3f(body).mul(middle), relativeYaw, aimPitch, crouching, rightHanded) <= MAX_STRETCH) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return new Vector3f(offset).mul(low);
+    }
+
+    private static float stretch(Vector3f translation, float relativeYaw, float pitch, boolean crouching, boolean rightHanded) {
+        return Math.max(armPose(relativeYaw, pitch, false, rightHanded, crouching, translation).lengthScale(),
+                armPose(relativeYaw, pitch, true, !rightHanded, crouching, translation).lengthScale());
     }
 
     /** Offset from the player's feet: shared front grip, then the mouth along the blade. */

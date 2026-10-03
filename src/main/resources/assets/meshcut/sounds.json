@@ -1,0 +1,20 @@
+{
+  "saber_hum": {
+    "subtitle": "subtitles.meshcut.saber",
+    "sounds": [
+      { "name": "meshcut:saber_hum", "stream": true }
+    ]
+  },
+  "saber_ignition": {
+    "subtitle": "subtitles.meshcut.saber",
+    "sounds": [
+      { "name": "meshcut:saber_ignition", "stream": true }
+    ]
+  },
+  "saber_swing": {
+    "subtitle": "subtitles.meshcut.saber",
+    "sounds": [
+      { "name": "meshcut:saber_swing", "stream": true }
+    ]
+  }
+}

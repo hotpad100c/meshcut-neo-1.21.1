@@ -29,7 +29,7 @@ public final class LightsaberControls {
             return new SaberControl.Turn(yawDelta, pitchDelta);
         }
         ensureOwner(player);
-        if (Minecraft.getInstance().options.keyAttack.isDown()) {
+        if (LightsaberKeys.REPOSITION.isDown()) {
             handX = (float) Math.clamp(handX + yawDelta * 0.012, -SaberTranslation.LIMIT_X, SaberTranslation.LIMIT_X);
             handY = (float) Math.clamp(handY - pitchDelta * 0.012, -SaberTranslation.LIMIT_Y, SaberTranslation.LIMIT_Y);
             LightsaberMotion.setHandTarget(player, handX, handY);
@@ -52,7 +52,10 @@ public final class LightsaberControls {
             while (LightsaberKeys.RANDOM_SWING.consumeClick()) {}
             return;
         }
-        while (LightsaberKeys.RANDOM_SWING.consumeClick()) {
+        boolean swingRequested = false;
+        while (LightsaberKeys.RANDOM_SWING.consumeClick()) swingRequested = true;
+        // consumeClick keeps taps responsive; isDown turns a hold into a continuous random combo.
+        if (swingRequested || LightsaberKeys.RANDOM_SWING.isDown()) {
             int preset = player.getRandom().nextInt(SaberGesture.COUNT), seed = player.getRandom().nextInt();
             if (LightsaberMotion.startGesture(player, preset, seed))
                 PacketDistributor.sendToServer(new LightsaberNet.Gesture(preset, seed));

@@ -1,8 +1,6 @@
 package ml.mypals.meshcut.item;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.LivingEntity;
@@ -36,8 +34,6 @@ public class LightsaberItem extends Item {
         }
         player.startUsingItem(hand);
         LightsaberMotion.begin(player);
-        level.playSound(null, player.getX(), player.getY(), player.getZ(),
-                SoundEvents.BEACON_ACTIVATE, SoundSource.PLAYERS, 0.6f, 1.7f);
         return InteractionResultHolder.consume(stack);
     }
 
@@ -53,9 +49,10 @@ public class LightsaberItem extends Item {
 
     @Override
     public void releaseUsing(ItemStack stack, Level level, LivingEntity entity, int timeLeft) {
-        if (entity instanceof Player player) LightsaberHandler.release(player);
-        level.playSound(null, entity.getX(), entity.getY(), entity.getZ(),
-                SoundEvents.BEACON_DEACTIVATE, SoundSource.PLAYERS, 0.6f, 1.3f);
+        if (entity instanceof Player player) {
+            LightsaberMotion.end(player);
+            LightsaberHandler.release(player);
+        }
     }
 
     /** Swinging it at blocks should not also mine them. */

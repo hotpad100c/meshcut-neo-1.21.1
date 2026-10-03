@@ -1,8 +1,9 @@
 {
-  "block.meshcut.mimic": "Mimic Block",
+  "block.meshcut.mimic": "Cutten Block",
   "item.meshcut.lightsaber": "Lightsaber",
   "block.meshcut.entity_body": "Body",
   "key.meshcut.saber_swing": "Random lightsaber swing",
   "key.categories.meshcut": "MeshCut",
-  "subtitles.meshcut.saber": "Lightsaber hum"
+  "subtitles.meshcut.saber": "Lightsaber hum",
+  "key.meshcut.saber_reposition": "Reposition lightsaber"
 }

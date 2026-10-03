@@ -5,7 +5,6 @@ import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
 import ml.mypals.meshcut.cut.SaberPose;
 import ml.mypals.meshcut.cut.SaberGesture;
-import ml.mypals.meshcut.item.LightsaberItem;
 import ml.mypals.meshcut.item.LightsaberMotion;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.PlayerModel;
@@ -43,7 +42,7 @@ public final class LightsaberHands {
     @SubscribeEvent
     public static void hideVanillaHands(RenderHandEvent event) {
         Player player = Minecraft.getInstance().player;
-        if (player != null && LightsaberItem.isActive(player)) event.setCanceled(true);
+        if (player != null && LightsaberMotion.isVisible(player)) event.setCanceled(true);
     }
 
     public static void poseArms(Player player, float partial, ModelPart right, ModelPart left) {

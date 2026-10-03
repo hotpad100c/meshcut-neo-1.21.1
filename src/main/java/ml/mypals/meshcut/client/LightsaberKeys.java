@@ -12,7 +12,12 @@ import org.lwjgl.glfw.GLFW;
 public final class LightsaberKeys {
     public static final KeyMapping RANDOM_SWING = new KeyMapping("key.meshcut.saber_swing",
             GLFW.GLFW_KEY_G, "key.categories.meshcut");
+    public static final KeyMapping REPOSITION = new KeyMapping("key.meshcut.saber_reposition",
+            GLFW.GLFW_KEY_V, "key.categories.meshcut");
     @SubscribeEvent
-    public static void register(RegisterKeyMappingsEvent event) { event.register(RANDOM_SWING); }
+    public static void register(RegisterKeyMappingsEvent event) {
+        event.register(RANDOM_SWING);
+        event.register(REPOSITION);
+    }
     private LightsaberKeys() {}
 }

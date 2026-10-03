@@ -11,6 +11,7 @@ import ml.mypals.meshcut.network.LightsaberNet;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.HumanoidArm;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
@@ -44,10 +45,20 @@ public final class LightsaberMotion {
         player.setData(STATE, new State(player));
     }
 
+    public static void end(Player player) {
+        State state = player.getExistingDataOrNull(STATE);
+        if (state != null && state.stopped == Integer.MIN_VALUE) {
+            state.stopped = player.tickCount;
+            state.stoppedExtension = SaberGesture.extension(player.tickCount - state.started);
+        }
+    }
+
     private static final class State {
         final SaberAim aim;
         final SaberTranslation hand = new SaberTranslation();
         final int started;
+        int stopped = Integer.MIN_VALUE;
+        float stoppedExtension;
         int gestureStarted = Integer.MIN_VALUE / 2;
         int preset, seed;
         float handX, handY;
@@ -71,7 +82,12 @@ public final class LightsaberMotion {
     public static void onPlayerTick(PlayerTickEvent.Post event) {
         Player player = event.getEntity();
         if (!LightsaberItem.isActive(player)) {
-            player.removeData(STATE);
+            State state = player.getExistingDataOrNull(STATE);
+            if (state == null) return;
+            if (state.stopped == Integer.MIN_VALUE) end(player);
+            else if (player.tickCount - state.stopped > 8) {
+                player.removeData(STATE);
+            }
             return;
         }
         State state = player.getData(STATE);
@@ -132,8 +148,8 @@ public final class LightsaberMotion {
     public static void setRemoteHandTarget(Player player, float x, float y) {
         if (!Float.isFinite(x) || !Float.isFinite(y)) return;
         State state = player.getData(STATE);
-        state.handX = Math.clamp(x, -0.42f, 0.42f);
-        state.handY = Math.clamp(y, -0.36f, 0.36f);
+        state.handX = Math.clamp(x, -0.52f, 0.52f);
+        state.handY = Math.clamp(y, -0.46f, 0.46f);
     }
 
     public static boolean startGesture(Player player, int preset, int seed) {
@@ -150,15 +166,37 @@ public final class LightsaberMotion {
     public static Vector3f handOffset(Player player, float partial) {
         State state = player.getExistingDataOrNull(STATE);
         if (state == null) return new Vector3f();
-        Vector2f offset = state.hand.position(partial);
+        return handOffset(player, partial, state.hand.position(partial), angles(player, partial));
+    }
+
+    /** As {@link #handOffset(Player, float)}, for a hand position and aim given (the server's, as the client sees it). */
+    public static Vector3f handOffset(Player player, float partial, Vector2f hand, Vector2f aim) {
         float yaw = Mth.rotLerp(partial, player.yRotO, player.getYRot());
         float pitch = Mth.lerp(partial, player.xRotO, player.getXRot());
-        return SaberPose.screenTranslation(yaw, pitch, offset.x, offset.y).mul(SaberPose.PLAYER_MODEL_SCALE);
+        Vector3f offset = SaberPose.screenTranslation(yaw, pitch, hand.x, hand.y).mul(SaberPose.PLAYER_MODEL_SCALE);
+        // never further than the arms reach: they are not stretched to follow
+        return SaberPose.reachable(offset, aim.x, aim.y, Mth.rotLerp(partial, player.yBodyRotO, player.yBodyRot),
+                player.isCrouching(), player.getMainArm() == HumanoidArm.RIGHT);
     }
 
     public static float extension(Player player, float partial) {
         State state = player.getExistingDataOrNull(STATE);
         return state == null ? 1 : SaberGesture.extension(player.tickCount - state.started - 1 + partial);
+    }
+
+    public static boolean isVisible(Player player) {
+        State state = player.getExistingDataOrNull(STATE);
+        return LightsaberItem.isActive(player) || state != null && state.stopped != Integer.MIN_VALUE
+                && player.tickCount - state.stopped <= 8;
+    }
+
+    public static float visualExtension(Player player, float partial) {
+        State state = player.getExistingDataOrNull(STATE);
+        if (state == null) return 0;
+        if (state.stopped == Integer.MIN_VALUE) {
+            return SaberGesture.extension(player.tickCount - state.started - 1 + partial);
+        }
+        return state.stoppedExtension * SaberGesture.retraction(player.tickCount - state.stopped + partial);
     }
 
     private LightsaberMotion() {}

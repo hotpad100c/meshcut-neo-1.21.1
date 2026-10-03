@@ -35,7 +35,8 @@ import java.util.UUID;
 /** Scorches every model face intersected by the blade's sweep, including faces on both sides of a corner. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberBurns {
-    private static final double CHAR_LIFETIME = 200;
+    /** The scorch drawn on block/model surfaces cools and darkens over five seconds. */
+    private static final double CHAR_LIFETIME = 100;
     private static final double EMBER_LIFETIME = 50;
     private static final double CHAR_HALF_WIDTH = 0.040;
     private static final double EMBER_HALF_WIDTH = 0.014;
@@ -77,9 +78,12 @@ public final class LightsaberBurns {
         for (Player player : level.players()) {
             if (!LightsaberItem.isActive(player)) {
                 LAST_BLADE.remove(player.getUUID());
+                if (player == minecraft.player) LightsaberServerView.reset();
                 continue;
             }
-            Blade blade = Blade.of(player, 1f);
+            // the marks lie where the server cuts: its blade, as it has told this player
+            Blade told = player == minecraft.player ? LightsaberServerView.blade(player) : null;
+            Blade blade = told != null ? told : Blade.of(player, 1f);
             Blade before = LAST_BLADE.put(player.getUUID(), blade);
             if (player.distanceToSqr(minecraft.gameRenderer.getMainCamera().getPosition()) > 48 * 48
                     || blade.direction().lengthSqr() < 1e-4) continue;

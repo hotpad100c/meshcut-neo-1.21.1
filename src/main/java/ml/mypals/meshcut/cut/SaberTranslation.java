@@ -4,8 +4,8 @@ import org.joml.Vector2f;
 
 /** Critically damped hand translation with velocity-continuous interpolation across ticks. */
 public final class SaberTranslation {
-    public static final float LIMIT_X = 0.28f;
-    public static final float LIMIT_Y = 0.22f;
+    public static final float LIMIT_X = 0.52f;
+    public static final float LIMIT_Y = 0.46f;
     private final Vector2f position = new Vector2f(), velocity = new Vector2f();
     private final Vector2f previous = new Vector2f(), previousVelocity = new Vector2f();
     private float interval = 0.05f;
