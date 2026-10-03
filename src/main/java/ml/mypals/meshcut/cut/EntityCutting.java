@@ -482,8 +482,9 @@ public final class EntityCutting {
             }
             for (double[] box : b.boxes()) {
                 boxes++;
-                if (box.length != 6 || !within(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
-                    return "limb " + i + " has a box inside out or out of reach";
+                // a model may reach far past its collision box, so only numbers and the total size (MAX_CELLS) are limited
+                if (box.length != 6 || !finite(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
+                    return "limb " + i + " has a box inside out or not a number";
                 }
                 cells += (long) (Math.floor(box[3]) - Math.floor(box[0]) + 1) * (long) (Math.floor(box[4]) - Math.floor(box[1]) + 1)
                         * (long) (Math.floor(box[5]) - Math.floor(box[2]) + 1);

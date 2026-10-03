@@ -54,6 +54,8 @@ public final class SmoothFragments {
     private final Piece[][] cells = new Piece[CellGrid.CELLS][];
     /** Cells that are kept whole and are not divided by any plane: they are merged into boxes when clipping. */
     private final boolean[] whole = new boolean[CellGrid.CELLS];
+    /** Grid planes the fragments change across: what lies beyond the block is divided along their extensions. */
+    private final List<CutPlane> transitions = new ArrayList<>();
 
     public SmoothFragments(boolean[] mask, List<Patch> patches, List<CutPlane> real) {
         this.mask = mask;
@@ -65,6 +67,26 @@ public final class SmoothFragments {
         }
         for (int cell = 0; cell < CellGrid.CELLS; cell++) {
             cells[cell] = divide(cell);
+        }
+        for (int axis = 0; axis < 3; axis++) {
+            for (int at = 1; at < N; at++) {
+                boolean changes = false;
+                for (int a = 0; a < N && !changes; a++) {
+                    for (int b = 0; b < N && !changes; b++) {
+                        int[] lo = new int[3], hi = new int[3];
+                        lo[axis] = at - 1;
+                        hi[axis] = at;
+                        lo[(axis + 1) % 3] = hi[(axis + 1) % 3] = a;
+                        lo[(axis + 2) % 3] = hi[(axis + 2) % 3] = b;
+                        changes = mask[(lo[0] * N + lo[1]) * N + lo[2]] != mask[(hi[0] * N + hi[1]) * N + hi[2]];
+                    }
+                }
+                if (changes) {
+                    double[] normal = new double[3];
+                    normal[axis] = 1;
+                    transitions.add(new CutPlane(normal[0], normal[1], normal[2], at / (double) N));
+                }
+            }
         }
     }
 
@@ -435,7 +457,168 @@ public final class SmoothFragments {
                 out.addAll(MeshClipper.clip(overlapping(source, bounds(cell)), bounds));
             }
         }
+        if (extendsOutside(source)) {
+            out.addAll(keptOutside(outsideOf(source)));
+        }
         return out;
+    }
+
+    // ---------------------------------------------------------------- what lies beyond the block
+
+    private static boolean extendsOutside(List<MeshPoly> source) {
+        for (MeshPoly poly : source) {
+            float[] v = poly.verts();
+            for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
+                for (int a = 0; a < 3; a++) {
+                    if (v[i + a] < -1e-5f || v[i + a] > 1 + 1e-5f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** The parts of the polygons that lie beyond the unit cube, as disjoint pieces (one slab at a time). */
+    private static List<MeshPoly> outsideOf(List<MeshPoly> source) {
+        List<MeshPoly> out = new ArrayList<>();
+        List<MeshPoly> rest = source;
+        for (int axis = 0; axis < 3; axis++) {
+            double[] n = new double[3];
+            n[axis] = 1;
+            for (int side = 0; side < 2; side++) {
+                CutPlane beyond = side == 0 ? new CutPlane(n[0], n[1], n[2], 0) : new CutPlane(-n[0], -n[1], -n[2], -1);
+                for (MeshPoly part : MeshClipper.clip(rest, List.of(beyond))) {
+                    float[] v = part.verts();
+                    float reach = 0;
+                    for (int i = axis; i < v.length; i += MeshPoly.STRIDE) { // a face in the cube's own plane is not beyond it
+                        reach = Math.max(reach, side == 0 ? -v[i] : v[i] - 1);
+                    }
+                    if (reach > 1e-5f) {
+                        out.add(part);
+                    }
+                }
+                rest = MeshClipper.clip(rest, List.of(beyond.flipped()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The pieces of what lies beyond the block that go with a fragment. Each is divided along the planes and the
+     * grid planes the fragments change across, then goes with whichever fragment the nearest point of the block is
+     * in, on the same side of every plane.
+     */
+    private List<MeshPoly> keptOutside(List<MeshPoly> pieces) {
+        List<CutPlane> divide = new ArrayList<>(transitions);
+        divide.addAll(planes);
+        List<MeshPoly> out = new ArrayList<>();
+        for (MeshPoly part : splitAll(pieces, divide)) {
+            if (keptAt(centre(part))) {
+                out.add(part);
+            }
+        }
+        return out;
+    }
+
+    private static double[] centre(MeshPoly poly) {
+        double[] c = new double[3];
+        float[] v = poly.verts();
+        int n = poly.vertexCount();
+        for (int i = 0; i < n; i++) {
+            for (int a = 0; a < 3; a++) {
+                c[a] += v[i * MeshPoly.STRIDE + a];
+            }
+        }
+        for (int a = 0; a < 3; a++) {
+            c[a] /= n;
+        }
+        return c;
+    }
+
+    private boolean keptAt(double[] p) {
+        if (p[0] >= 0 && p[0] <= 1 && p[1] >= 0 && p[1] <= 1 && p[2] >= 0 && p[2] <= 1) {
+            return belongs(p);
+        }
+        double[] q = {Math.clamp(p[0], 0, 1), Math.clamp(p[1], 0, 1), Math.clamp(p[2], 0, 1)};
+        for (int pass = 0; pass < 3; pass++) { // keep the nearest point on the same side of every plane as the point
+            for (CutPlane plane : planes) {
+                double sp = plane.signedDistance(p[0], p[1], p[2]), sq = plane.signedDistance(q[0], q[1], q[2]);
+                if ((sp >= 0) != (sq >= 0)) {
+                    double delta = (sp >= 0 ? 1e-3 : -1e-3) - sq;
+                    q[0] = Math.clamp(q[0] - plane.nx() * delta, 0, 1);
+                    q[1] = Math.clamp(q[1] - plane.ny() * delta, 0, 1);
+                    q[2] = Math.clamp(q[2] - plane.nz() * delta, 0, 1);
+                }
+            }
+        }
+        return belongs(q);
+    }
+
+    /** The faces where a cut passes through what lies beyond the block, which the faces inside it do not reach. */
+    private List<MeshPoly> outsideCaps(List<MeshPoly> source, float[] uv, Object sprite) {
+        List<MeshPoly> out = new ArrayList<>();
+        for (int k = 0; k < planes.size(); k++) {
+            CutPlane plane = planes.get(k);
+            List<MeshPoly> section = CapBuilder.face(source, plane, List.of(), uv, sprite);
+            if (section.isEmpty()) {
+                continue;
+            }
+            List<CutPlane> others = new ArrayList<>(transitions);
+            for (int j = 0; j < planes.size(); j++) {
+                if (j != k) {
+                    others.add(planes.get(j));
+                }
+            }
+            for (MeshPoly piece : splitAll(outsideOf(section), others)) {
+                double[] c = centre(piece);
+                double e = 1e-3;
+                boolean inner = keptAt(new double[]{c[0] - plane.nx() * e, c[1] - plane.ny() * e, c[2] - plane.nz() * e});
+                boolean outer = keptAt(new double[]{c[0] + plane.nx() * e, c[1] + plane.ny() * e, c[2] + plane.nz() * e});
+                if (inner == outer) {
+                    continue;
+                }
+                MeshPoly face = piece;
+                double sign = 1;
+                if (outer) { // the fragment is on the far side: seen from its side the face turns round
+                    float[] v = piece.verts();
+                    int n = piece.vertexCount();
+                    float[] flipped = new float[v.length];
+                    for (int i = 0; i < n; i++) {
+                        System.arraycopy(v, (n - 1 - i) * MeshPoly.STRIDE, flipped, i * MeshPoly.STRIDE, MeshPoly.STRIDE);
+                    }
+                    face = piece.withVerts(flipped);
+                    sign = -1;
+                }
+                out.add(textured(null, new Boundary(null, sign * plane.nx(), sign * plane.ny(), sign * plane.nz(), ""),
+                        uv, sprite, face));
+            }
+        }
+        return out;
+    }
+
+    private static List<MeshPoly> splitAll(List<MeshPoly> pieces, List<CutPlane> divide) {
+        List<MeshPoly> parts = pieces;
+        for (CutPlane plane : divide) {
+            List<MeshPoly> next = new ArrayList<>(parts.size());
+            for (MeshPoly part : parts) {
+                float[] v = part.verts();
+                boolean above = false, below = false;
+                for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
+                    double d = plane.signedDistance(v[i], v[i + 1], v[i + 2]);
+                    above |= d > 1e-6;
+                    below |= d < -1e-6;
+                }
+                if (above && below) {
+                    next.addAll(MeshClipper.clip(List.of(part), List.of(plane)));
+                    next.addAll(MeshClipper.clip(List.of(part), List.of(plane.flipped())));
+                } else {
+                    next.add(part);
+                }
+            }
+            parts = next;
+        }
+        return parts;
     }
 
     private static double[] bounds(int cell) {
@@ -578,6 +761,9 @@ public final class SmoothFragments {
             for (MeshPoly part : MeshClipper.clip(section, edges)) {
                 out.add(textured(null, face, uv, sprite, part));
             }
+        }
+        if (!cube && extendsOutside(source)) {
+            out.addAll(outsideCaps(source, uv, sprite));
         }
         return out;
     }

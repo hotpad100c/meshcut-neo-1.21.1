@@ -257,8 +257,11 @@ public final class EntityParts {
                 continue;
             }
             earlier.add(n);
+            if (!usable(n.pose)) {
+                continue; // drawn scaled to nothing (a hidden bone): its faces go to the nearest limb
+            }
             double volume = volumeIn(n.pose, byNode.get(n));
-            if (volume <= 0) {
+            if (!(volume > 0) || !Double.isFinite(volume)) {
                 continue;
             }
             String name = n.name != null ? n.name : "part";
@@ -382,6 +385,19 @@ public final class EntityParts {
             MeshPoly poly = (MeshPoly) f[1];
             Limb limb = nearest(limbs, poly);
             add(limb, (RenderType) f[0], poly, limb);
+        }
+
+        // a limb whose frame is not a number or lies far away (a bone a model hides by moving it out of sight) cannot
+        // be built: it is left out, which is what the model does with it too
+        for (int i = 0; i < limbs.size(); i++) {
+            Limb limb = limbs.get(i);
+            if (i != torso && limb.mergedInto < 0 && !limb.boxes.isEmpty() && !sane(limb)) {
+                MeshCut.LOGGER.warn("Limb {} of {} is not part of the visible body (frame {} {}); left out", limb.name,
+                        entity.getType(), limb.origin, limb.rotation);
+                limb.boxes.clear();
+                limb.faces.clear();
+                limb.mergedInto = torso;
+            }
         }
 
         // 5. a limb with nothing to hang from hangs from the nearest limb that hangs from the body, one after another
@@ -636,6 +652,24 @@ public final class EntityParts {
     }
 
     /** The pivot and the rotation (without scale, or a mirroring) a part was drawn with. */
+    private static boolean usable(Matrix4f pose) {
+        float det = new Matrix3f(pose).determinant();
+        return Float.isFinite(det) && Math.abs(det) > 1e-9f && Float.isFinite(pose.m30()) && Float.isFinite(pose.m31())
+                && Float.isFinite(pose.m32());
+    }
+
+    /** What the server takes of a limb (see {@code EntityCutting.problemWith}): numbers, within reach. */
+    private static boolean sane(Limb limb) {
+        double[] values = {limb.origin.x, limb.origin.y, limb.origin.z, limb.rotation.x, limb.rotation.y, limb.rotation.z,
+                limb.rotation.w};
+        for (double v : values) {
+            if (!(Math.abs(v) <= 64)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static void frameOf(org.joml.Matrix4f pose, Quaternionf rotation, Vector3f origin) {
         pose.getTranslation(origin);
         Matrix3f m = new Matrix3f(pose);
