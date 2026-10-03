@@ -6,7 +6,6 @@ import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.block.MimicShapes;
 import ml.mypals.meshcut.client.render.MimicMesh;
-import ml.mypals.meshcut.geom.Outline;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
@@ -40,8 +39,7 @@ public final class MimicOutline {
         }
         Cached cached = CACHE.get(be);
         if (cached == null || cached.version() != be.getVersion()) {
-            List<double[]> edges = Outline.edges(MimicMesh.regionPlanes(be.renderData()), be.getExcluded(),
-                    be.cutBoxes());
+            List<double[]> edges = MimicMesh.outline(be.renderData(), be.cutBoxes());
             cached = new Cached(be.getVersion(), edges);
             CACHE.put(be, cached);
         }

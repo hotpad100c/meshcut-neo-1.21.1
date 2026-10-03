@@ -6,15 +6,7 @@ import ml.mypals.meshcut.block.MimicRenderData;
 import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.cut.CapMode;
 import ml.mypals.meshcut.cut.CutPlane;
-import ml.mypals.meshcut.geom.Polytope;
-import ml.mypals.meshcut.geom.Arrangement;
-import ml.mypals.meshcut.geom.CapBuilder;
-import ml.mypals.meshcut.geom.VoxelFragments;
-import ml.mypals.meshcut.geom.FragmentMesh;
-import ml.mypals.meshcut.geom.SmoothFragments;
-import ml.mypals.meshcut.geom.Patch;
-import ml.mypals.meshcut.geom.MeshClipper;
-import ml.mypals.meshcut.geom.MeshPoly;
+import ml.mypals.meshcut.geom.*;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.block.model.BakedQuad;
@@ -62,6 +54,12 @@ public final class MimicMesh {
             .weakKeys().maximumSize(MAX_CACHED).build();
     private static final Cache<MimicRenderData, List<MeshPoly>> GLOW_BY_IDENTITY = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(MAX_CACHED).build();
+    /**
+     * The fragment geometry of a block, by identity like the caches above: the chunk mesh and the lava glow both
+     * need it, and it is the expensive part of cutting up a block.
+     */
+    private static final Cache<MimicRenderData, SmoothFragments> FRAGMENTS = CacheBuilder.newBuilder()
+            .weakKeys().maximumSize(512).build();
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -200,6 +198,30 @@ public final class MimicMesh {
         GLOW.clear();
         BY_IDENTITY.invalidateAll();
         GLOW_BY_IDENTITY.invalidateAll();
+        FRAGMENTS.invalidateAll();
+    }
+
+    /** The fragments of a block cut into cells, or null if its cut-out parts are not a lattice (legacy geometry). */
+    @Nullable
+    public static SmoothFragments fragments(MimicRenderData data) {
+        boolean[] mask = VoxelFragments.latticeMask(data.excluded());
+        if (mask == null) {
+            return null;
+        }
+        try {
+            return FRAGMENTS.get(data, () -> new SmoothFragments(mask, data.patches(), data.planes()));
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException(e.getCause());
+        }
+    }
+
+    /** The edges of a cut block for its selection outline, following the real shape of its fragments. */
+    public static List<double[]> outline(MimicRenderData data, List<double[]> shape) {
+        SmoothFragments fragments = fragments(data);
+        if (fragments != null) {
+            return fragments.outline(shape);
+        }
+        return Outline.edges(regionPlanes(data), data.excluded(), shape);
     }
 
     /**
@@ -334,9 +356,8 @@ public final class MimicMesh {
             withScars.addAll(FragmentMesh.scorches(polys,data.patches()));
             surfaces.put(type,withScars);
         });
-        boolean[] mask = VoxelFragments.latticeMask(data.excluded());
-        if (mask != null) {
-            SmoothFragments fragment=new SmoothFragments(mask,data.patches(),data.planes());
+        SmoothFragments fragment = fragments(data);
+        if (fragment != null) {
             List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
             surfaces.forEach((type, polys) -> {
                 List<MeshPoly> clipped=fragment.clip(polys);
@@ -520,9 +541,8 @@ public final class MimicMesh {
             opaque = capBase(opaque, data);
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
-            boolean[] mask=VoxelFragments.latticeMask(data.excluded());
-            if(mask!=null) {
-                SmoothFragments fragment=new SmoothFragments(mask,data.patches(),data.planes());
+            SmoothFragments fragment=fragments(data);
+            if(fragment!=null) {
                 List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
                 List<MeshPoly> caps=fragment.caps(opaque,uv,lava);
                 for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
