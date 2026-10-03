@@ -108,6 +108,9 @@ public final class Bloom {
         }
         haveDepth = false;
         if (usable() && recent > 0) {
+            // what block entities were given to draw (the bodies of cut-up entities, in sub-levels too) is drawn
+            // when its buffers are flushed, which may be after this stage: it must be in the depth
+            Minecraft.getInstance().renderBuffers().bufferSource().endBatch();
             ensureTargets();
             glow.copyDepthFrom(Minecraft.getInstance().getMainRenderTarget());
             Minecraft.getInstance().getMainRenderTarget().bindWrite(false);

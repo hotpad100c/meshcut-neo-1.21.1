@@ -24,7 +24,7 @@ import java.util.UUID;
 
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberTrail {
-    private static final double LIFETIME = 3;
+    private static final double LIFETIME = 2;
     private static final double MIN_SAMPLE_MOVEMENT = 0.12;
     private static final long MAX_GAP_TICKS = 3;
     private static final float[] BASE_COLOR = {0.15f, 0.55f, 1f};

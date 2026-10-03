@@ -67,7 +67,8 @@ public class MeshCut {
     public static final DeferredItem<LightsaberItem> LIGHTSABER = ITEMS.register("lightsaber",
             () -> new LightsaberItem(new Item.Properties().stacksTo(1)));
 
-    public MeshCut(IEventBus modEventBus) {
+    public MeshCut(IEventBus modEventBus, net.neoforged.fml.ModContainer container) {
+        container.registerConfig(net.neoforged.fml.config.ModConfig.Type.SERVER, MeshCutConfig.SPEC);
         BLOCKS.register(modEventBus);
         BLOCK_ENTITIES.register(modEventBus);
         ITEMS.register(modEventBus);
@@ -75,6 +76,7 @@ public class MeshCut {
         LightsaberMotion.register(modEventBus);
         modEventBus.addListener(ml.mypals.meshcut.network.EntityPartsNet::register);
         ml.mypals.meshcut.physics.RagdollJoints.register();
+        ml.mypals.meshcut.physics.Debris.register();
         modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
             if (e.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
                 e.accept(LIGHTSABER);
