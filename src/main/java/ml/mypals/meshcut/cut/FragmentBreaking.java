@@ -51,7 +51,7 @@ public final class FragmentBreaking {
             return true; // handled: nothing is broken
         }
         MimicBlock.place(level, pos, be.getTargetState(), new ArrayList<>(be.getPlanes()), result.excluded(), result.patches(),
-                be.getCapMode(), be.getTargetBeTag());
+                be.getCapMode(), be.getTargetBeTag(), be.getAppearance());
         // what is left may have lost what held it
         SlashService.queueRecheck(level, pos);
         return true;

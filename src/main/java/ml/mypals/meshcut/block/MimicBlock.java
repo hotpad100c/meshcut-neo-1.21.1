@@ -59,6 +59,17 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
      */
     private static final int QUIET = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
 
+    /** Set while a blade is cutting (server thread): only then do the faces a change opens up glow. */
+    private static boolean glowingCuts;
+
+    public static void setGlowingCuts(boolean on) {
+        glowingCuts = on;
+    }
+
+    public static boolean glowingCuts() {
+        return glowingCuts;
+    }
+
     public MimicBlock(Properties properties) {
         super(properties);
         registerDefaultState(stateDefinition.any().setValue(REFRESH, false).setValue(WATERLOGGED, false));
@@ -81,6 +92,13 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
      */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag) {
+        place(level, pos, target, planes, excluded, patches, mode, beTag, null);
+    }
+
+    /** @param entity for a part of a cut-up entity, what it looked like; null for a block */
+    public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
+                             List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
+                             @Nullable EntityAppearance entity) {
         // A block Sable saw being placed had no block entity yet, so it weighed what a default mimic weighs.
         boolean fresh = !(level.getBlockState(pos).getBlock() instanceof MimicBlock);
         if (fresh) {
@@ -91,7 +109,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             boolean slot = level.getBlockState(pos).getValue(REFRESH);
             be.beginMassTransition(fresh, slot);
-            be.configure(target, planes, excluded, patches, mode, beTag);
+            be.configure(target, planes, excluded, patches, mode, beTag, entity);
             refreshPhysics(level, pos); // flips REFRESH: Sable re-reads collider and mass, old slot -> new slot
             be.endMassTransition();
         }

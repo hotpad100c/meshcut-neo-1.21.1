@@ -25,7 +25,9 @@ public final class FragmentRemoval {
         }
         List<CutPlane> hole = new ArrayList<>(fit.subList(real.size(), fit.size()));
         List<List<CutPlane>> holes = new ArrayList<>(excluded);
-        holes.add(hole);
+        if (holes.stream().noneMatch(h -> CutPlane.sameRegion(h, hole))) {
+            holes.add(hole);
+        }
         Set<Integer> staying = new HashSet<>();
         for (int c = 0; c < grid.componentCount(); c++) {
             if (c != fragment) {

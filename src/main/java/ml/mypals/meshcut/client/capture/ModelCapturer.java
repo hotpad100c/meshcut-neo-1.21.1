@@ -3,7 +3,16 @@ package ml.mypals.meshcut.client.capture;
 import com.mojang.blaze3d.vertex.PoseStack;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.geom.MeshPoly;
+import com.mojang.authlib.GameProfile;
+import ml.mypals.meshcut.block.EntityAppearance;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.RemotePlayer;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.Sheets;
 import net.minecraft.client.renderer.block.model.BakedQuad;
@@ -105,6 +114,221 @@ public final class ModelCapturer {
         MODEL_CACHE.clear();
         HAS_RENDERER.clear();
         CACHE.clear();
+        ENTITY_CACHE.clear();
+        ALPHA_CACHE.clear();
+    }
+
+    private static final Map<EntityAppearance.Look, CapturedMesh> ENTITY_CACHE = new HashMap<>();
+    private static final ResourceLocation FLESH = ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "block/flesh");
+    private static boolean warnedAboutEntity;
+
+    /**
+     * What an entity looked like: it is made again on the client from its saved data, turned as it was, and drawn
+     * once by its renderer into a recording, standing at the origin. Cut faces are textured with seared flesh.
+     * Render thread only; cached per look.
+     */
+    public static CapturedMesh captureEntity(EntityAppearance.Look look) {
+        return ENTITY_CACHE.computeIfAbsent(look, ModelCapturer::doCaptureEntity);
+    }
+
+    private static CapturedMesh doCaptureEntity(EntityAppearance.Look look) {
+        Minecraft minecraft = Minecraft.getInstance();
+        TextureAtlasSprite flesh = minecraft.getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(FLESH);
+        float[] uv = {flesh.getU0(), flesh.getV0(), flesh.getU1(), flesh.getV1()};
+        Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
+        if (minecraft.level != null) {
+            try {
+                Entity entity = createEntity(minecraft.level, look);
+                if (entity != null) {
+                    RecordingBufferSource recorder = new RecordingBufferSource();
+                    recording = true;
+                    try {
+                        minecraft.getEntityRenderDispatcher().render(entity, 0, 0, 0, look.bodyYaw(), 0f, new PoseStack(),
+                                recorder, 0xF000F0);
+                    } finally {
+                        recording = false;
+                    }
+                    recorder.finish().forEach((type, polys) -> {
+                        String name = layerName(type);
+                        // the name tag, the shadow and debug boxes are not part of the body
+                        if (!name.startsWith("text") && !name.contains("shadow") && !name.equals("lines")) {
+                            List<MeshPoly> seen = visible(type, polys);
+                            if (!seen.isEmpty()) {
+                                byType.computeIfAbsent(type, k -> new ArrayList<>()).addAll(seen);
+                            }
+                        }
+                    });
+                }
+            } catch (Throwable t) {
+                if (!warnedAboutEntity) {
+                    warnedAboutEntity = true;
+                    MeshCut.LOGGER.warn("Couldn't draw the cut-up {}; its parts will be invisible", look.type(), t);
+                }
+            }
+        }
+        List<MeshPoly> opaque = new ArrayList<>();
+        byType.forEach((type, polys) -> {
+            if (!type.toString().contains("translucent")) {
+                opaque.addAll(polys);
+            }
+        });
+        int faces = byType.values().stream().mapToInt(List::size).sum();
+        MeshCut.LOGGER.info("Recorded the look of a cut-up {}: {} faces in {} layers", look.type(), faces, byType.size());
+        return new CapturedMesh(byType, opaque, uv);
+    }
+
+    /** The alpha channel of a texture, row by row. */
+    private record Alpha(int width, int height, byte[] alpha) {
+        int at(int x, int y) {
+            return alpha[Math.floorMod(y, height) * width + Math.floorMod(x, width)] & 0xFF;
+        }
+    }
+
+    private static final Map<ResourceLocation, java.util.Optional<Alpha>> ALPHA_CACHE = new HashMap<>();
+    private static final java.util.regex.Pattern TEXTURE = java.util.regex.Pattern.compile("texture\\[Optional\\[([^\\]]+?)\\]");
+    /** Below this alpha a cutout shader throws the pixel away (0.1 of 255). */
+    private static final int CUTOUT_ALPHA = 26;
+
+    /**
+     * The faces of which something can be seen. Models are drawn with parts whose texture is wholly transparent
+     * (the villager's hat brim, which only the farmer's texture fills in; the outer layer of a skin); the game
+     * throws those pixels away, but here they would be cut faces and walls with nothing around them.
+     */
+    private static List<MeshPoly> visible(RenderType type, List<MeshPoly> polys) {
+        java.util.regex.Matcher m = TEXTURE.matcher(type.toString());
+        ResourceLocation location = m.find() ? ResourceLocation.tryParse(m.group(1)) : null;
+        Alpha alpha = location == null ? null : ALPHA_CACHE.computeIfAbsent(location, l -> java.util.Optional.ofNullable(readAlpha(l))).orElse(null);
+        if (alpha == null) {
+            return polys; // no texture to go by: keep everything
+        }
+        List<MeshPoly> out = new ArrayList<>(polys.size());
+        for (MeshPoly p : polys) {
+            if (seen(p, alpha)) {
+                out.add(p);
+            }
+        }
+        return out;
+    }
+
+    /** Whether any texel under the face is kept by a cutout shader. */
+    private static boolean seen(MeshPoly p, Alpha alpha) {
+        float[] v = p.verts();
+        int n = p.vertexCount();
+        double[] us = new double[n], vs = new double[n];
+        double minU = Double.MAX_VALUE, minV = Double.MAX_VALUE, maxU = -Double.MAX_VALUE, maxV = -Double.MAX_VALUE;
+        for (int i = 0; i < n; i++) {
+            us[i] = v[i * MeshPoly.STRIDE + 3] * alpha.width();
+            vs[i] = v[i * MeshPoly.STRIDE + 4] * alpha.height();
+            minU = Math.min(minU, us[i]);
+            maxU = Math.max(maxU, us[i]);
+            minV = Math.min(minV, vs[i]);
+            maxV = Math.max(maxV, vs[i]);
+        }
+        boolean tested = false;
+        for (int y = (int) Math.floor(minV); y < Math.ceil(maxV); y++) {
+            for (int x = (int) Math.floor(minU); x < Math.ceil(maxU); x++) {
+                if (inside(us, vs, x + 0.5, y + 0.5)) {
+                    tested = true;
+                    if (alpha.at(x, y) >= CUTOUT_ALPHA) {
+                        return true;
+                    }
+                }
+            }
+        }
+        if (!tested) { // thinner than a texel: go by the texel under its middle
+            double cu = 0, cv = 0;
+            for (int i = 0; i < n; i++) {
+                cu += us[i];
+                cv += vs[i];
+            }
+            return alpha.at((int) Math.floor(cu / n), (int) Math.floor(cv / n)) >= CUTOUT_ALPHA;
+        }
+        return false;
+    }
+
+    /** Whether the point is inside the convex polygon (either winding). */
+    private static boolean inside(double[] us, double[] vs, double u, double v) {
+        int sign = 0;
+        for (int i = 0; i < us.length; i++) {
+            int j = (i + 1) % us.length;
+            double cross = (us[j] - us[i]) * (v - vs[i]) - (vs[j] - vs[i]) * (u - us[i]);
+            if (Math.abs(cross) < 1e-9) {
+                continue;
+            }
+            int s = cross > 0 ? 1 : -1;
+            if (sign != 0 && s != sign) {
+                return false;
+            }
+            sign = s;
+        }
+        return true;
+    }
+
+    /**
+     * Reads the texture back from the graphics card, which covers downloaded skins as well as resource textures.
+     * Render thread only; null if it can't be read.
+     */
+    @Nullable
+    private static Alpha readAlpha(ResourceLocation location) {
+        try {
+            var texture = Minecraft.getInstance().getTextureManager().getTexture(location);
+            com.mojang.blaze3d.systems.RenderSystem.bindTexture(texture.getId());
+            int width = com.mojang.blaze3d.platform.GlStateManager._getTexLevelParameter(
+                    org.lwjgl.opengl.GL11.GL_TEXTURE_2D, 0, org.lwjgl.opengl.GL11.GL_TEXTURE_WIDTH);
+            int height = com.mojang.blaze3d.platform.GlStateManager._getTexLevelParameter(
+                    org.lwjgl.opengl.GL11.GL_TEXTURE_2D, 0, org.lwjgl.opengl.GL11.GL_TEXTURE_HEIGHT);
+            if (width <= 0 || height <= 0 || width * height > 4096 * 4096) {
+                return null;
+            }
+            try (com.mojang.blaze3d.platform.NativeImage image = new com.mojang.blaze3d.platform.NativeImage(width, height, false)) {
+                image.downloadTexture(0, false);
+                byte[] alpha = new byte[width * height];
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        alpha[y * width + x] = (byte) (image.getPixelRGBA(x, y) >>> 24);
+                    }
+                }
+                return new Alpha(width, height, alpha);
+            }
+        } catch (RuntimeException e) {
+            MeshCut.LOGGER.debug("Couldn't read {} back", location, e);
+            return null;
+        }
+    }
+
+    /** The name a render type was registered with ("entity_cutout_no_cull", "text", ...), without its state. */
+    private static String layerName(RenderType type) {
+        String s = type.toString(); // RenderType[name:state...]
+        int open = s.indexOf('['), colon = s.indexOf(':', open + 1);
+        return open >= 0 && colon > open ? s.substring(open + 1, colon) : s;
+    }
+
+    @Nullable
+    private static Entity createEntity(ClientLevel level, EntityAppearance.Look look) {
+        Entity entity;
+        if (look.profileId() != null) {
+            entity = new RemotePlayer(level, new GameProfile(look.profileId(), look.profileName() == null ? "" : look.profileName()));
+        } else {
+            entity = EntityType.byString(look.type()).map(type -> type.create(level)).orElse(null);
+        }
+        if (entity == null) {
+            return null;
+        }
+        entity.load(look.data());
+        entity.setPos(0, 0, 0);
+        entity.xo = entity.yo = entity.zo = 0;
+        entity.setYRot(look.bodyYaw());
+        entity.yRotO = look.bodyYaw();
+        entity.setXRot(look.pitch());
+        entity.xRotO = look.pitch();
+        entity.setRemainingFireTicks(0);
+        if (entity instanceof LivingEntity living) {
+            living.yBodyRot = living.yBodyRotO = look.bodyYaw();
+            living.yHeadRot = living.yHeadRotO = look.headYaw();
+            living.hurtTime = 0;
+            living.deathTime = 0;
+        }
+        return entity;
     }
 
     private static ModelMesh doCaptureModel(BlockState state) {

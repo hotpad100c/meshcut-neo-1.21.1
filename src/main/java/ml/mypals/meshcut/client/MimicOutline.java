@@ -41,7 +41,7 @@ public final class MimicOutline {
         Cached cached = CACHE.get(be);
         if (cached == null || cached.version() != be.getVersion()) {
             List<double[]> edges = Outline.edges(MimicMesh.regionPlanes(be.renderData()), be.getExcluded(),
-                    MimicShapes.cutBoxes(be.getTargetState()));
+                    be.cutBoxes());
             cached = new Cached(be.getVersion(), edges);
             CACHE.put(be, cached);
         }

@@ -52,7 +52,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
         BlockState state = be.getTargetState();
         PoseStack.Pose pose = poseStack.last();
 
-        if (ModelCapturer.hasBlockEntityRenderer(state)) {
+        if (be.getAppearance() != null || ModelCapturer.hasBlockEntityRenderer(state)) {
             CacheEntry entry = cache.get(be);
             if (entry == null || entry.version() != be.getVersion()) {
                 entry = build(be);
@@ -92,7 +92,8 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     }
 
     private static CacheEntry build(MimicBlockEntity be) {
-        var captured = ModelCapturer.capture(be.getTargetState(), be.getTargetBeTag());
+        var captured = be.getAppearance() != null ? MimicMesh.entityPart(be.getAppearance())
+                : ModelCapturer.capture(be.getTargetState(), be.getTargetBeTag());
         // cut exactly as the chunk mesh cuts other blocks: pieces, slits, cut-out parts and their walls
         Map<RenderType, List<MeshPoly>> out = MimicMesh.cutModel(captured.byType(), captured.opaque(), captured.capUv(), null,
                 be.renderData(), Sheets.cutoutBlockSheet());

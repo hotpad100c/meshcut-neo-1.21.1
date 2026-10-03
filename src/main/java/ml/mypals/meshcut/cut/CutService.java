@@ -11,7 +11,9 @@ import dev.ryanhcode.sable.companion.math.Pose3dc;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import ml.mypals.meshcut.MeshCut;
+import ml.mypals.meshcut.block.EntityAppearance;
 import ml.mypals.meshcut.block.MimicBlock;
+import ml.mypals.meshcut.block.MimicShapes;
 import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.geom.Patch;
 import ml.mypals.meshcut.geom.Polytope;
@@ -64,7 +66,12 @@ public final class CutService {
      * that still has to be emptied and saved before the block is replaced by mimics.
      */
     record Piece(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, List<Patch> patches,
-                 CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe) {}
+                 CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe, @Nullable EntityAppearance entity) {
+        /** What there is of it to cut: the part of an entity it holds, or the imitated block's shape. */
+        List<double[]> cutBoxes() {
+            return entity != null ? List.of(entity.bounds()) : MimicShapes.cutBoxes(target);
+        }
+    }
 
     /** A block the plane passes through, with the plane expressed in that block's local frame. */
     record Split(Piece piece, CutPlane keep) {}
@@ -181,7 +188,7 @@ public final class CutService {
             Split s = splits.get(p);
             Piece piece = s.piece();
             CutPlane half = plusSide ? s.keep().flipped() : s.keep();
-            MimicBlock.place(level, p, piece.target(), with(piece.planes(), half), piece.excluded(), piece.patches(), piece.mode(), piece.beTag());
+            MimicBlock.place(level, p, piece.target(), with(piece.planes(), half), piece.excluded(), piece.patches(), piece.mode(), piece.beTag(), piece.entity());
         }
     }
 
@@ -279,7 +286,7 @@ public final class CutService {
         for (var e : splits.entrySet()) {
             Split s = e.getValue();
             MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep().flipped()),
-                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag());
+                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
         }
         // 2. every connected group on the normal side becomes its own sub-level
         Vec3 push = n.scale(SEPARATION_SPEED);
@@ -294,7 +301,7 @@ public final class CutService {
         for (var e : splits.entrySet()) {
             Split s = e.getValue();
             MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep()),
-                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag());
+                    s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
         }
         if (placeholder != null) {
             level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
@@ -341,13 +348,13 @@ public final class CutService {
         if (state.getBlock() instanceof MimicBlock) {
             return level.getBlockEntity(pos) instanceof MimicBlockEntity be
                     ? new Piece(be.getTargetState(), new ArrayList<>(be.getPlanes()), new ArrayList<>(be.getExcluded()),
-                    new ArrayList<>(be.getPatches()), be.getCapMode(), be.getTargetBeTag(), false)
+                    new ArrayList<>(be.getPatches()), be.getCapMode(), be.getTargetBeTag(), false, be.getAppearance())
                     : null;
         }
         if (state.getBlock() instanceof LiquidBlock || state.getRenderShape() == RenderShape.INVISIBLE) {
             return null;
         }
-        return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity());
+        return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity(), null);
     }
 
     /**
@@ -366,7 +373,7 @@ public final class CutService {
                 spillContents(level, pos, be);
                 tag = be.saveWithoutMetadata(level.registryAccess());
             }
-            return new Split(new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false), split.keep());
+            return new Split(new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false, piece.entity()), split.keep());
         });
     }
 

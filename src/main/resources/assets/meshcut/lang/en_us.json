@@ -1,4 +1,5 @@
 {
   "block.meshcut.mimic": "Mimic Block",
-  "item.meshcut.lightsaber": "Lightsaber"
+  "item.meshcut.lightsaber": "Lightsaber",
+  "block.meshcut.entity_body": "Body"
 }

@@ -48,6 +48,13 @@ public class MeshCut {
                     // the shape depends on the block entity; without this vanilla caches one shape per state
                     .dynamicShape());
 
+    /**
+     * What the parts of a cut-up entity imitate: never placed in the world, it gives them their weight (see its
+     * physics properties) and the texture of their cut faces.
+     */
+    public static final DeferredBlock<net.minecraft.world.level.block.Block> ENTITY_BODY = BLOCKS.registerSimpleBlock("entity_body",
+            BlockBehaviour.Properties.of().strength(0.5f).noLootTable().sound(net.minecraft.world.level.block.SoundType.SLIME_BLOCK));
+
     public static final Supplier<BlockEntityType<MimicBlockEntity>> MIMIC_BE = BLOCK_ENTITIES.register("mimic",
             () -> BlockEntityType.Builder.of(MimicBlockEntity::new, MIMIC_BLOCK.get()).build(null));
 

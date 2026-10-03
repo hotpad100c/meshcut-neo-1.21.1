@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3d;
 
 import java.util.ArrayList;
@@ -28,17 +29,44 @@ public final class MimicShapes {
     private static final double MIN_FRACTION = 0.004;
 
     /** Imitated block plus its cuts, quantised so near-identical cuts share one cache entry. */
-    public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+    /**
+     * @param base the box the block is made of instead of the imitated block's collision boxes (a part of an
+     *             entity's body), quantised; null for the imitated block's own shape
+     */
+    public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable List<Double> base) {
         public static Key of(BlockState target, List<CutPlane> planes) {
             return of(target, planes, List.of());
         }
 
         public static Key of(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+            return of(target, planes, excluded, null);
+        }
+
+        public static Key of(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable double[] base) {
             List<List<CutPlane>> regions = new ArrayList<>(excluded.size());
             for (List<CutPlane> region : excluded) {
                 regions.add(quantised(region));
             }
-            return new Key(target, quantised(planes), regions);
+            List<Double> box = null;
+            if (base != null) {
+                box = new ArrayList<>(6);
+                for (double v : base) {
+                    box.add(round(v));
+                }
+            }
+            return new Key(target, quantised(planes), regions, box);
+        }
+
+        /** What the block is made of before it is cut. */
+        public List<double[]> baseBoxes() {
+            if (base == null) {
+                return targetBoxes(target);
+            }
+            double[] b = new double[6];
+            for (int i = 0; i < 6; i++) {
+                b[i] = base.get(i);
+            }
+            return List.of(b);
         }
 
         private static List<CutPlane> quantised(List<CutPlane> planes) {
@@ -63,7 +91,7 @@ public final class MimicShapes {
             if (BOXES.size() >= MAX_CACHED) {
                 BOXES.clear();
             }
-            boxes = VoxelBoxes.cut(targetBoxes(key.target()), key.planes(), key.excluded());
+            boxes = VoxelBoxes.cut(key.baseBoxes(), key.planes(), key.excluded());
             BOXES.put(key, boxes);
         }
         return boxes;
@@ -71,7 +99,8 @@ public final class MimicShapes {
 
     /** Fraction (0..1) of the imitated block's collision volume that survives the cuts. */
     public static double volumeFraction(Key key) {
-        double full = VoxelBoxes.volume(targetBoxes(key.target()));
+        // a part of an entity weighs by how much of the whole block it fills
+        double full = key.base() != null ? 1 : VoxelBoxes.volume(targetBoxes(key.target()));
         // never zero: a body whose blocks all weigh nothing has no centre of mass, which crashes the physics engine
         return full <= 0 ? 1 : Math.max(MIN_FRACTION, Math.min(1, VoxelBoxes.volume(boxes(key)) / full));
     }

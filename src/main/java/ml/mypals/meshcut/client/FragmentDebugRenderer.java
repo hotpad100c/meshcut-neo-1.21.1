@@ -436,7 +436,7 @@ public final class FragmentDebugRenderer {
      * fragments (and the block is whole to begin with, not a thin shape like a torch); otherwise null.
      */
     private static Shape exactShapeOf(BlockPos pos, ClientSubLevel sub, MimicBlockEntity be, CellGrid grid) {
-        var boxes = MimicShapes.cutBoxes(be.getTargetState());
+        var boxes = be.cutBoxes();
         boolean whole = false;
         for (double[] b : boxes) {
             whole |= b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6;

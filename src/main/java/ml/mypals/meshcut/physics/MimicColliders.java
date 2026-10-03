@@ -51,7 +51,7 @@ public final class MimicColliders {
             PENDING.add(new Pending(level, pos.immutable()));
             return fallback.get();
         }
-        return entryFor(MimicShapes.Key.of(mimic.getTargetState(), mimic.getPlanes(), mimic.getExcluded()), fallback);
+        return entryFor(mimic.shapeKey(), fallback);
     }
 
     private static synchronized RapierVoxelColliderData entryFor(MimicShapes.Key key, Supplier<RapierVoxelColliderData> fallback) {

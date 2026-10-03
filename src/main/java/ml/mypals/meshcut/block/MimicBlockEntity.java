@@ -52,9 +52,14 @@ public class MimicBlockEntity extends BlockEntity {
     private CapMode capMode = CapMode.LAVA;
     /** Game time at which the block was last cut; the glow on its cut faces fades from then on. */
     private long glowStart = NEVER;
+    /** The planes of the faces that last cut opened: only those glow (a block broken by hand does not glow at all). */
+    private final List<CutPlane> glowCuts = new ArrayList<>();
     /** Saved data of the original block entity (sign text, banner patterns, ...), used to look like it. */
     @Nullable
     private CompoundTag targetBeTag;
+    /** For a part of a cut-up entity: what the entity looked like and which part of it this block is. */
+    @Nullable
+    private EntityAppearance appearance;
     /** Bumped on every change so client-side mesh caches know when to rebuild. */
     private int version;
 
@@ -117,6 +122,21 @@ public class MimicBlockEntity extends BlockEntity {
         return targetBeTag;
     }
 
+    @Nullable
+    public EntityAppearance getAppearance() {
+        return appearance;
+    }
+
+    /** What there is of this block to cut: the part of an entity it holds, or the imitated block's shape. */
+    public List<double[]> cutBoxes() {
+        return appearance != null ? List.of(appearance.bounds()) : MimicShapes.cutBoxes(targetState);
+    }
+
+    /** The key of this block's collision geometry. */
+    public MimicShapes.Key shapeKey() {
+        return MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.bounds());
+    }
+
     /** Collision / selection shape of what is left of the block, cached per version. */
     public VoxelShape getShape() {
         refreshShape();
@@ -145,7 +165,7 @@ public class MimicBlockEntity extends BlockEntity {
             return transitionMass;
         }
         if (currentMass == null || massVersion != version) {
-            var key = MimicShapes.Key.of(targetState, planes, excluded);
+            var key = shapeKey();
             currentMass = new MassSnapshot(targetState, MimicShapes.volumeFraction(key), MimicShapes.centerOfMass(key));
             massVersion = version;
         }
@@ -172,7 +192,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     private void refreshShape() {
         if (shapeVersion != version || shape == null) {
-            var key = MimicShapes.Key.of(targetState, planes, excluded);
+            var key = shapeKey();
             shape = MimicShapes.shape(MimicShapes.boxes(key));
             volumeFraction = MimicShapes.volumeFraction(key);
             shapeVersion = version;
@@ -182,6 +202,29 @@ public class MimicBlockEntity extends BlockEntity {
     /** Replaces the whole configuration with a single sync to clients. */
     public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
                           List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag) {
+        configure(target, newPlanes, newExcluded, newPatches, mode, beTag, null);
+    }
+
+    /** @param entity for a part of a cut-up entity, what it looked like; null for a block */
+    public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
+                          List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag, @Nullable EntityAppearance entity) {
+        // the cut planes it has now that it did not have before are what this change opened
+        List<CutPlane> before = allCuts(planes, excluded, patches.stream().map(Patch::plane).toList());
+        List<CutPlane> after = allCuts(newPlanes, newExcluded, newPatches.stream().map(Patch::plane).toList());
+        if (MimicBlock.glowingCuts()) {
+            List<CutPlane> fresh = new ArrayList<>();
+            for (CutPlane p : after) {
+                if (before.stream().noneMatch(p::sameAs)) {
+                    fresh.add(p);
+                }
+            }
+            if (!fresh.isEmpty()) {
+                glowCuts.clear();
+                glowCuts.addAll(fresh);
+                glowStart = level == null ? NEVER : level.getGameTime();
+            }
+        }
+        this.appearance = entity;
         this.targetState = target;
         this.targetBeTag = beTag;
         // the arguments may be views of our own lists
@@ -196,8 +239,14 @@ public class MimicBlockEntity extends BlockEntity {
         this.patches.clear();
         this.patches.addAll(patchesCopy);
         this.capMode = mode;
-        this.glowStart = level == null ? NEVER : level.getGameTime();
         changed();
+    }
+
+    private static List<CutPlane> allCuts(List<CutPlane> planes, List<List<CutPlane>> excluded, List<CutPlane> patches) {
+        List<CutPlane> all = new ArrayList<>(planes);
+        excluded.forEach(all::addAll);
+        all.addAll(patches);
+        return all;
     }
 
     public void setTargetState(BlockState targetState) {
@@ -217,7 +266,7 @@ public class MimicBlockEntity extends BlockEntity {
             List<List<CutPlane>> excludedCopy = new ArrayList<>();
             excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
             data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
-                    List.copyOf(patches), capMode);
+                    List.copyOf(patches), capMode, appearance, List.copyOf(glowCuts));
             renderData = data;
         }
         return data;
@@ -278,7 +327,7 @@ public class MimicBlockEntity extends BlockEntity {
     public CellGrid grid() {
         CellGrid g = grid;
         if (g == null) {
-            g = CellGrid.of(planes, excluded, patches, MimicShapes.cutBoxes(targetState));
+            g = CellGrid.of(planes, excluded, patches, cutBoxes());
             grid = g;
         }
         return g;
@@ -312,8 +361,12 @@ public class MimicBlockEntity extends BlockEntity {
         tag.put("patches", patchesTag);
         tag.putByte("cap", (byte) capMode.ordinal());
         tag.putLong("glowStart", glowStart);
+        tag.put("glowCuts", writePlanes(glowCuts));
         if (targetBeTag != null) {
             tag.put("targetBe", targetBeTag);
+        }
+        if (appearance != null) {
+            tag.put("entity", appearance.save());
         }
     }
 
@@ -350,7 +403,9 @@ public class MimicBlockEntity extends BlockEntity {
             old.forEach(plane -> patches.add(Patch.full(plane)));
         }
         targetBeTag = tag.contains("targetBe") ? tag.getCompound("targetBe") : null;
+        appearance = tag.contains("entity") ? EntityAppearance.load(tag.getCompound("entity")) : null;
         glowStart = tag.contains("glowStart") ? tag.getLong("glowStart") : NEVER;
+        readPlanes(tag.getList("glowCuts", Tag.TAG_DOUBLE), glowCuts);
         capMode = CapMode.byOrdinal(tag.contains("cap") ? tag.getByte("cap") : CapMode.LAVA.ordinal());
         renderData = null;
         grid = null;

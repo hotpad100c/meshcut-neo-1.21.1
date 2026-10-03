@@ -101,7 +101,7 @@ public final class SlashService {
             this.pos = pos;
             this.piece = piece;
             this.patches = patches;
-            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, MimicShapes.cutBoxes(piece.target()));
+            this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, piece.cutBoxes());
         }
 
         /** The graph node a cell group belongs to. */
@@ -205,6 +205,12 @@ public final class SlashService {
      * @return {@code null} if the blade never moved across itself, so there was no swept surface
      */
     public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode) {
+        return slashSwing(level, swipes, mode, null);
+    }
+
+    /** @param wielder who swung (creatures the blade passes through die and are cut too; the wielder never is) */
+    public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
+                                               @Nullable net.minecraft.world.entity.Entity wielder) {
         List<Sweep> sweeps = new ArrayList<>();
         for (Swipe swipe : swipes) {
             Sweep sweep = sweepOf(swipe.from(), swipe.to());
@@ -215,6 +221,21 @@ public final class SlashService {
         if (sweeps.isEmpty()) {
             return null;
         }
+
+        MimicBlock.setGlowingCuts(true); // what this swing cuts open glows; see MimicBlockEntity#configure
+        try {
+            return cutWith(level, sweeps, mode, wielder);
+        } finally {
+            MimicBlock.setGlowingCuts(false);
+        }
+    }
+
+    private static CutService.Result cutWith(ServerLevel level, List<Sweep> sweeps, CapMode mode,
+                                                @Nullable net.minecraft.world.entity.Entity wielder) {
+        // creatures first: their bodies become sub-levels, which the cut below then goes through like any other
+        List<EntityCutting.Swept> swept = new ArrayList<>(sweeps.size());
+        sweeps.forEach(sweep -> swept.add(new EntityCutting.Swept(sweep.quad())));
+        EntityCutting.cut(level, swept, wielder);
 
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
@@ -412,7 +433,7 @@ public final class SlashService {
             List<CutPlane> planes = new ArrayList<>(piece.planes());
             boolean changed = false, burned = false;
             for (Patch patch : entry.getValue()) {
-                if (!straddles(MimicShapes.cutBoxes(piece.target()), patch.plane())) {
+                if (!straddles(piece.cutBoxes(), patch.plane())) {
                     continue; // passes through where the block has nothing (a torch is only a thin stick)
                 }
                 Polytope.Side side = Polytope.classify(planes, patch.plane(), MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);
@@ -448,7 +469,7 @@ public final class SlashService {
             if (changed) {
                 BlockPos fixed = cell.immutable();
                 CutService.Piece now = burned
-                        ? new CutService.Piece(piece.target(), planes, piece.excluded(), merged, piece.mode(), piece.beTag(), piece.undetachedBe())
+                        ? new CutService.Piece(piece.target(), planes, piece.excluded(), merged, piece.mode(), piece.beTag(), piece.undetachedBe(), piece.entity())
                         : piece;
                 Info info = new Info(fixed, now, merged);
                 info.burned = burned;
@@ -525,7 +546,9 @@ public final class SlashService {
             List<List<CutPlane>> holes = new ArrayList<>(info.piece.excluded());
             for (Fit fit : blockFits.values()) {
                 if (!fit.extra().isEmpty()) {
-                    holes.add(fit.extra());
+                    if (holes.stream().noneMatch(h -> CutPlane.sameRegion(h, fit.extra()))) {
+                        holes.add(fit.extra());
+                    }
                 }
             }
             Set<Integer> stayingGroups = new LinkedHashSet<>();
@@ -955,7 +978,7 @@ public final class SlashService {
                               List<Patch> patches, Map<BlockPos, CompoundTag> beTags) {
         CutService.Piece piece = info.piece;
         MimicBlock.place(level, info.pos, piece.target(), planes, excluded, patches, piece.mode(),
-                beTags.getOrDefault(info.pos, piece.beTag()));
+                beTags.getOrDefault(info.pos, piece.beTag()), piece.entity());
     }
 
     private SlashService() {}

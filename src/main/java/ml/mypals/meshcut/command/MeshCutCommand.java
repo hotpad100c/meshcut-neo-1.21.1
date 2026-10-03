@@ -141,7 +141,7 @@ public final class MeshCutCommand {
             List<CutPlane> planes = new java.util.ArrayList<>(be.getPlanes());
             planes.add(plane);
             // goes through place() so Sable's collider and mass bookkeeping are updated too
-            MimicBlock.place(source.getLevel(), pos, be.getTargetState(), planes, be.getExcluded(), be.getPatches(), be.getCapMode(), be.getTargetBeTag());
+            MimicBlock.place(source.getLevel(), pos, be.getTargetState(), planes, be.getExcluded(), be.getPatches(), be.getCapMode(), be.getTargetBeTag(), be.getAppearance());
             return 1;
         }
         source.sendFailure(Component.literal("No mimic block at " + pos.toShortString()));

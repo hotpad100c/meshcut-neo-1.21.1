@@ -16,9 +16,12 @@ import java.util.List;
  *
  * @param planes   cuts that really separated this piece: the block is clipped by them
  * @param excluded convex parts of the block that were cut out and went elsewhere
- * @param patches  cuts that took nothing out: slits where they go right through, scratches where they stop midway
+ * @param patches  cuts that took nothing out: slits where they go right through
+ * @param entity   for a part of a cut-up entity, what it looked like and where it is; null for a block
+ * @param glowCuts the planes of the faces the last cut opened, which glow for a while
  */
 public record MimicRenderData(BlockState target, @Nullable CompoundTag beTag, List<CutPlane> planes,
-                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode capMode) {
+                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode capMode,
+                              @Nullable EntityAppearance entity, List<CutPlane> glowCuts) {
     public static final ModelProperty<MimicRenderData> PROPERTY = new ModelProperty<>();
 }

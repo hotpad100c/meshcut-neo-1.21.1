@@ -83,11 +83,29 @@ public final class MimicMesh {
         sb.append("planes ").append(data.planes()).append('\n');
         sb.append("excluded ").append(data.excluded()).append('\n');
         sb.append("patches ").append(data.patches()).append('\n');
+        if (data.entity() != null) {
+            var e = data.entity();
+            sb.append("entity ").append(e.look().type()).append(" origin ").append(java.util.Arrays.toString(e.origin()))
+                    .append(" bounds ").append(java.util.Arrays.toString(e.bounds())).append('\n');
+            ModelCapturer.CapturedMesh whole = ModelCapturer.captureEntity(e.look());
+            whole.byType().forEach((type, polys) -> sb.append("  recorded ").append(polys.size()).append(" faces in ").append(type).append('\n'));
+            ModelCapturer.CapturedMesh part = entityPart(e);
+            part.byType().forEach((type, polys) -> sb.append("  in this block ").append(polys.size()).append(" faces in ").append(type).append('\n'));
+            int i = 0;
+            for (var entry : part.byType().entrySet()) {
+                for (MeshPoly p : entry.getValue()) {
+                    if (i++ < 40) {
+                        describe(sb, "entity face", p);
+                    }
+                }
+            }
+            return sb.toString();
+        }
         if (ModelCapturer.hasBlockEntityRenderer(data.target())) {
             return sb.append("(drawn by a block entity renderer)\n").toString();
         }
         ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
-        List<MeshPoly> capBase = capBase(model.opaque(), data.target());
+        List<MeshPoly> capBase = capBase(model.opaque(), data);
         sb.append("cut faces from ").append(capBase == Polytope.cube() ? "the unit cube" : "the model").append('\n');
         List<List<CutPlane>> regions = regionPlanes(data);
         for (int r = 0; r < regions.size(); r++) {
@@ -180,7 +198,37 @@ public final class MimicMesh {
         return particle;
     }
 
+    /**
+     * The part of a cut-up entity one block holds, as a model to cut: the recorded entity moved to where it stands
+     * relative to this block, its faces kept to the block, and its whole closed body (not kept to the block) to cut
+     * faces from. Render thread only.
+     */
+    public static ModelCapturer.CapturedMesh entityPart(ml.mypals.meshcut.block.EntityAppearance entity) {
+        ModelCapturer.CapturedMesh whole = ModelCapturer.captureEntity(entity.look());
+        double[] o = entity.origin();
+        Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
+        whole.byType().forEach((type, polys) -> byType.put(type, MeshClipper.clip(shift(polys, o), CUBE)));
+        return new ModelCapturer.CapturedMesh(byType, shift(whole.opaque(), o), whole.capUv());
+    }
+
+    private static List<MeshPoly> shift(List<MeshPoly> polys, double[] by) {
+        List<MeshPoly> out = new ArrayList<>(polys.size());
+        for (MeshPoly p : polys) {
+            float[] v = p.verts().clone();
+            for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
+                v[i] += (float) by[0];
+                v[i + 1] += (float) by[1];
+                v[i + 2] += (float) by[2];
+            }
+            out.add(p.withVerts(v));
+        }
+        return out;
+    }
+
     private static MimicMesh build(MimicRenderData data) {
+        if (data.entity() != null) {
+            return EMPTY; // drawn by the block entity renderer: entity textures are not in the block atlas
+        }
         if (ModelCapturer.hasBlockEntityRenderer(data.target())) {
             return EMPTY; // drawn by the block entity renderer instead
         }
@@ -241,7 +289,7 @@ public final class MimicMesh {
     public static Map<RenderType, List<MeshPoly>> cutModel(Map<RenderType, List<MeshPoly>> byType, List<MeshPoly> opaque,
                                                            float[] uv, Object sprite, MimicRenderData data, RenderType capLayer) {
         Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
-        List<MeshPoly> capBase = capBase(opaque, data.target());
+        List<MeshPoly> capBase = capBase(opaque, data);
         for (List<CutPlane> region : regionPlanes(data)) {
             byType.forEach((type, polys) -> {
                 List<MeshPoly> clipped = MeshClipper.clip(polys, region);
@@ -277,13 +325,67 @@ public final class MimicMesh {
      * the section of its model can be unreliable (models made of several shells, or with inner faces, give loops that
      * do not close), and a cube's section is exact. Other blocks use their own model.
      */
-    private static List<MeshPoly> capBase(List<MeshPoly> opaque, net.minecraft.world.level.block.state.BlockState target) {
-        for (double[] b : ml.mypals.meshcut.block.MimicShapes.cutBoxes(target)) {
+    private static List<MeshPoly> capBase(List<MeshPoly> opaque, MimicRenderData data) {
+        if (data.entity() != null) {
+            return opaque; // the body itself: its box says nothing about where its flesh is
+        }
+        for (double[] b : ml.mypals.meshcut.block.MimicShapes.cutBoxes(data.target())) {
             if (b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6) {
                 return Polytope.cube();
             }
         }
         return opaque;
+    }
+
+    /**
+     * Whether there is something behind a wall: just behind its middle (away from the part that was cut out) the
+     * block must be solid, within its piece and not in another cut-out part. Two parts cut out side by side share a
+     * plane, and a wall there would stand alone between two holes.
+     */
+    private static boolean backed(MeshPoly face, List<CutPlane> hole, List<CutPlane> piece, List<List<CutPlane>> excluded) {
+        float[] v = face.verts();
+        int n = face.vertexCount();
+        double x = 0, y = 0, z = 0;
+        for (int i = 0; i < n; i++) {
+            x += v[i * MeshPoly.STRIDE];
+            y += v[i * MeshPoly.STRIDE + 1];
+            z += v[i * MeshPoly.STRIDE + 2];
+        }
+        // the face looks into the hole; behind it is the other way
+        x = x / n - face.nx() * 0.01;
+        y = y / n - face.ny() * 0.01;
+        z = z / n - face.nz() * 0.01;
+        for (CutPlane p : piece) {
+            if (p.signedDistance(x, y, z) < 0) {
+                return false;
+            }
+        }
+        for (List<CutPlane> other : excluded) {
+            boolean inside = true;
+            for (CutPlane p : other) {
+                if (p.signedDistance(x, y, z) <= 0) {
+                    inside = false;
+                    break;
+                }
+            }
+            if (inside) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Whether the face lies in one of the planes (facing either way). */
+    private static boolean onAny(MeshPoly face, List<CutPlane> planes) {
+        float[] v = face.verts();
+        for (CutPlane p : planes) {
+            double dot = p.nx() * face.nx() + p.ny() * face.ny() + p.nz() * face.nz();
+            // a piece is pulled back from a cut by half the slit, so its face is that far from the plane
+            if (Math.abs(dot) > 0.999 && Math.abs(p.signedDistance(v[0], v[1], v[2])) < SLIT_WIDTH) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The six half-spaces of the unit cube. */
@@ -304,7 +406,15 @@ public final class MimicMesh {
     private static List<MeshPoly> holeFaces(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
                                             float[] uv, Object sprite) {
         List<MeshPoly> faces = new ArrayList<>();
-        for (List<CutPlane> region : excluded) {
+        for (int r = 0; r < excluded.size(); r++) {
+            List<CutPlane> region = excluded.get(r);
+            boolean repeated = false;
+            for (int q = 0; q < r && !repeated; q++) {
+                repeated = CutPlane.sameRegion(excluded.get(q), region);
+            }
+            if (repeated) {
+                continue; // the same part cut out twice has one set of walls
+            }
             for (int j = 0; j < region.size(); j++) {
                 List<CutPlane> others = new ArrayList<>(planes);
                 for (int k = 0; k < region.size(); k++) {
@@ -318,7 +428,11 @@ public final class MimicMesh {
                         wall = MeshClipper.subtract(wall, other);
                     }
                 }
-                faces.addAll(wall);
+                for (MeshPoly face : wall) {
+                    if (backed(face, region, planes, excluded)) {
+                        faces.add(face);
+                    }
+                }
             }
         }
         return withinBlock(faces);
@@ -335,18 +449,23 @@ public final class MimicMesh {
         }
         List<MeshPoly> out = new ArrayList<>();
         if (data.capMode() == CapMode.LAVA) {
-            List<MeshPoly> opaque = ModelCapturer.hasBlockEntityRenderer(data.target())
+            List<MeshPoly> opaque = data.entity() != null ? entityPart(data.entity()).opaque()
+                    : ModelCapturer.hasBlockEntityRenderer(data.target())
                     ? ModelCapturer.capture(data.target(), data.beTag()).opaque()
                     : ModelCapturer.captureModel(data.target()).opaque();
-            opaque = capBase(opaque, data.target());
+            opaque = capBase(opaque, data);
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
             for (List<CutPlane> region : regionPlanes(data)) {
                 for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
-                    out.add(glowOf(cap));
+                    if (onAny(cap, data.glowCuts())) { // only what the last cut opened
+                        out.add(glowOf(cap));
+                    }
                 }
                 for (MeshPoly face : holeFaces(opaque, region, data.excluded(), uv, lava)) {
-                    out.add(glowOf(face));
+                    if (onAny(face, data.glowCuts())) {
+                        out.add(glowOf(face));
+                    }
                 }
             }
         }
