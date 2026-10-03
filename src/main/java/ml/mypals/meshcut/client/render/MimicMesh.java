@@ -9,6 +9,9 @@ import ml.mypals.meshcut.cut.CutPlane;
 import ml.mypals.meshcut.geom.Polytope;
 import ml.mypals.meshcut.geom.Arrangement;
 import ml.mypals.meshcut.geom.CapBuilder;
+import ml.mypals.meshcut.geom.VoxelFragments;
+import ml.mypals.meshcut.geom.FragmentMesh;
+import ml.mypals.meshcut.geom.SmoothFragments;
 import ml.mypals.meshcut.geom.Patch;
 import ml.mypals.meshcut.geom.MeshClipper;
 import ml.mypals.meshcut.geom.MeshPoly;
@@ -325,13 +328,34 @@ public final class MimicMesh {
                                                            float[] uv, Object sprite, MimicRenderData data, RenderType capLayer) {
         Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
         List<MeshPoly> capBase = capBase(opaque, data);
+        Map<RenderType,List<MeshPoly>> surfaces=new LinkedHashMap<>();
+        byType.forEach((type,polys)-> {
+            List<MeshPoly> withScars=new ArrayList<>(polys);
+            withScars.addAll(FragmentMesh.scorches(polys,data.patches()));
+            surfaces.put(type,withScars);
+        });
+        boolean[] mask = VoxelFragments.latticeMask(data.excluded());
+        if (mask != null) {
+            SmoothFragments fragment=new SmoothFragments(mask,data.patches(),data.planes());
+            List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
+            surfaces.forEach((type, polys) -> {
+                List<MeshPoly> clipped=fragment.clip(polys);
+                for(List<CutPlane> hole:holes) clipped=MeshClipper.subtract(clipped,hole);
+                out.put(type,FragmentMesh.liftScars(clipped));
+            });
+            List<MeshPoly> caps=fragment.caps(capBase,uv,sprite);
+            for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
+            caps.addAll(fragment.clip(holeFaces(capBase,data.planes(),holes,uv,sprite)));
+            out.computeIfAbsent(capLayer,k->new ArrayList<>()).addAll(caps);
+            return out;
+        }
         for (List<CutPlane> region : regionPlanes(data)) {
-            byType.forEach((type, polys) -> {
+            surfaces.forEach((type, polys) -> {
                 List<MeshPoly> clipped = MeshClipper.clip(polys, region);
                 for (List<CutPlane> hole : data.excluded()) {
                     clipped = MeshClipper.subtract(clipped, hole);
                 }
-                out.computeIfAbsent(type, k -> new ArrayList<>()).addAll(clipped);
+                out.computeIfAbsent(type, k -> new ArrayList<>()).addAll(FragmentMesh.liftScars(clipped));
             });
             List<MeshPoly> caps = new ArrayList<>(cutCaps(capBase, region, data.excluded(), uv, sprite));
             caps.addAll(holeFaces(capBase, region, data.excluded(), uv, sprite));
@@ -496,15 +520,25 @@ public final class MimicMesh {
             opaque = capBase(opaque, data);
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
-            for (List<CutPlane> region : regionPlanes(data)) {
-                for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
-                    if (onAny(cap, data.glowCuts())) { // only what the last cut opened
-                        out.add(glowOf(cap));
+            boolean[] mask=VoxelFragments.latticeMask(data.excluded());
+            if(mask!=null) {
+                SmoothFragments fragment=new SmoothFragments(mask,data.patches(),data.planes());
+                List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
+                List<MeshPoly> caps=fragment.caps(opaque,uv,lava);
+                for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
+                caps.addAll(fragment.clip(holeFaces(opaque,data.planes(),holes,uv,lava)));
+                for(MeshPoly cap:caps) out.add(glowOf(cap));
+            } else {
+                for (List<CutPlane> region : regionPlanes(data)) {
+                    for (MeshPoly cap : cutCaps(opaque, region, data.excluded(), uv, lava)) {
+                        if (onAny(cap, data.glowCuts())) { // only what the last cut opened
+                            out.add(glowOf(cap));
+                        }
                     }
-                }
-                for (MeshPoly face : holeFaces(opaque, region, data.excluded(), uv, lava)) {
-                    if (onAny(face, data.glowCuts())) {
-                        out.add(glowOf(face));
+                    for (MeshPoly face : holeFaces(opaque, region, data.excluded(), uv, lava)) {
+                        if (onAny(face, data.glowCuts())) {
+                            out.add(glowOf(face));
+                        }
                     }
                 }
             }

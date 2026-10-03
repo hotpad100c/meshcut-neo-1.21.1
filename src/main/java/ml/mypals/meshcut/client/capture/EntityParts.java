@@ -15,6 +15,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix3f;
+import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -88,7 +89,8 @@ public final class EntityParts {
     private static final class Limb {
         final String name;
         final Role role;
-        final PartTags.DrawnPart frame;
+        /** Where its first part was drawn: its pivot and rotation. */
+        final Matrix4f pose;
         int parent;
         double volume;
         int mergedInto = -1;
@@ -98,10 +100,10 @@ public final class EntityParts {
         final Map<Object, double[]> boxes = new LinkedHashMap<>();
         final Map<RenderType, List<MeshPoly>> faces = new LinkedHashMap<>();
 
-        Limb(String name, Role role, PartTags.DrawnPart frame, int parent) {
+        Limb(String name, Role role, Matrix4f pose, int parent) {
             this.name = name;
             this.role = role;
-            this.frame = frame;
+            this.pose = pose;
             this.parent = parent;
         }
     }
@@ -120,7 +122,7 @@ public final class EntityParts {
         Map<ModelPart, Set<ModelPart.Cube>> visibleCubes = new IdentityHashMap<>();
         for (List<RecordingBufferSource.Tagged> list : faces.values()) {
             for (RecordingBufferSource.Tagged t : list) {
-                if (t.tag() != null && t.tag().cube() != null) {
+                if (t.tag() != null && t.tag().part() != null && t.tag().cube() != null) {
                     visibleCubes.computeIfAbsent(t.tag().part().part(), k -> Collections.newSetFromMap(new IdentityHashMap<>()))
                             .add(t.tag().cube());
                 }
@@ -165,29 +167,191 @@ public final class EntityParts {
             boolean attachment = role == Role.ATTACHMENT || cubes.size() == 1 && volume <= ATTACHMENT_VOLUME;
             int join; // the limb it goes with, or -1 for a limb of its own
             if (attachment) {
-                join = parent >= 0 ? parent : samePivot(d, limbs);
+                join = parent >= 0 ? parent : samePivot(d.pose(), limbs);
             } else if (role.limb()) {
                 // a limb, unless it only goes on with the limb it hangs from (a wing's tip)
                 join = parent >= 0 && limbs.get(parent).role == role ? parent : -1;
             } else {
                 // The name tells nothing. Drawn where a limb that hangs from nothing is drawn, it is a layer of that
                 // limb (a player's sleeves); otherwise it is a limb of its own, hanging where it is drawn.
-                join = parent < 0 ? samePivot(d, limbs) : -1;
+                join = parent < 0 ? samePivot(d.pose(), limbs) : -1;
             }
             if (join >= 0) {
                 limbOf.put(d, join);
                 limbs.get(join).volume += volume;
             } else {
                 limbOf.put(d, limbs.size());
-                Limb limb = new Limb(name, role, d, parent);
+                Limb limb = new Limb(name, role, d.pose(), parent);
                 limb.volume = volume;
                 limbs.add(limb);
             }
         }
         if (limbs.isEmpty()) {
-            return single(entity, faces, drawn, whole);
+            // no vanilla model part drew it (Citadel's, GeckoLib's or a mod's own model): by the pose stack
+            ModelCapturer.EntityCapture byPose = entity instanceof LivingEntity ? byPose(entity, faces, drawn, whole) : null;
+            return byPose != null ? byPose : single(entity, faces, drawn, whole);
         }
+        return finish(entity, faces, drawn, whole, limbs, (all, loose) -> {
+            Map<String, Integer> byName = new HashMap<>();
+            for (var e : limbOf.entrySet()) {
+                String name = names.get(e.getKey().part());
+                if (name != null) {
+                    byName.putIfAbsent(name, e.getValue());
+                }
+            }
+            for (var entry : faces.entrySet()) {
+                for (RecordingBufferSource.Tagged t : entry.getValue()) {
+                    int li = t.tag() == null || t.tag().part() == null ? -1 : limbFor(t.tag(), limbOf, byName, names, drawn);
+                    if (li < 0) {
+                        loose.add(new Object[]{entry.getKey(), t.poly()});
+                    } else {
+                        add(all.get(resolve(all, li)), entry.getKey(), t.poly(), t.tag().part());
+                    }
+                }
+            }
+        });
+    }
 
+    /**
+     * Takes the entity apart by the levels of the pose stack it was drawn at, for models that are not made of vanilla
+     * model parts. The levels that drew something are its parts, and the rules are the vanilla ones: a part that
+     * says what it is by its name (Citadel's parts have names) is treated by it; one that does not is a limb of its
+     * own, hanging from the part it was drawn as a child of where it is drawn. Null if the levels tell nothing (all
+     * of it drawn at one level).
+     */
+    @Nullable
+    private static ModelCapturer.EntityCapture byPose(Entity entity, Map<RenderType, List<RecordingBufferSource.Tagged>> faces,
+                                                      List<PartTags.DrawnPart> drawn, ModelCapturer.CapturedMesh whole) {
+        Map<PartTags.PoseNode, List<MeshPoly>> byNode = new IdentityHashMap<>();
+        for (List<RecordingBufferSource.Tagged> list : faces.values()) {
+            for (RecordingBufferSource.Tagged t : list) {
+                if (t.tag() != null && t.tag().node() != null && t.tag().node().pose != null) {
+                    byNode.computeIfAbsent(t.tag().node(), k -> new ArrayList<>()).add(t.poly());
+                }
+            }
+        }
+        if (byNode.size() < 2) {
+            return null;
+        }
+        List<PartTags.PoseNode> order = new ArrayList<>(byNode.keySet());
+        order.sort(java.util.Comparator.comparingInt(n -> n.index));
+
+        List<Limb> limbs = new ArrayList<>();
+        Map<PartTags.PoseNode, Integer> limbOf = new IdentityHashMap<>();
+        Map<Object, List<PartTags.PoseNode>> draws = new HashMap<>();
+        for (PartTags.PoseNode n : order) {
+            // the same part drawn again where it was (by a layer over the body) is the same
+            Object key = n.owner != null ? n.owner : n.name != null ? n.name : n;
+            List<PartTags.PoseNode> earlier = draws.computeIfAbsent(key, k -> new ArrayList<>());
+            PartTags.PoseNode same = null;
+            for (PartTags.PoseNode e : earlier) {
+                if (e.pose.equals(n.pose, 1e-4f)) {
+                    same = e;
+                    break;
+                }
+            }
+            if (same != null) {
+                if (limbOf.containsKey(same)) {
+                    limbOf.put(n, limbOf.get(same));
+                }
+                continue;
+            }
+            earlier.add(n);
+            double volume = volumeIn(n.pose, byNode.get(n));
+            if (volume <= 0) {
+                continue;
+            }
+            String name = n.name != null ? n.name : "part";
+            Role role = n.name != null ? roleOf(n.name) : Role.OTHER;
+            int parent = -1;
+            for (PartTags.PoseNode p = n.parent; p != null && parent < 0; p = p.parent) {
+                parent = limbOf.getOrDefault(p, -1);
+            }
+            boolean attachment = role == Role.ATTACHMENT || volume <= ATTACHMENT_VOLUME;
+            int join;
+            if (attachment) {
+                join = parent >= 0 ? parent : samePivot(n.pose, limbs);
+            } else if (role.limb()) {
+                join = parent >= 0 && limbs.get(parent).role == role ? parent : -1;
+            } else {
+                join = parent < 0 ? samePivot(n.pose, limbs) : -1;
+            }
+            if (join >= 0) {
+                limbOf.put(n, join);
+                limbs.get(join).volume += volume;
+            } else {
+                limbOf.put(n, limbs.size());
+                Limb limb = new Limb(name, role, n.pose, parent);
+                limb.volume = volume;
+                limbs.add(limb);
+            }
+        }
+        if (limbs.size() < 2) {
+            return null;
+        }
+        return finish(entity, faces, drawn, whole, limbs, (all, loose) -> {
+            for (var entry : faces.entrySet()) {
+                for (RecordingBufferSource.Tagged t : entry.getValue()) {
+                    Integer li = null;
+                    for (PartTags.PoseNode n = t.tag() == null ? null : t.tag().node(); n != null && li == null; n = n.parent) {
+                        li = limbOf.get(n); // a level that drew nothing of its own goes with the one it is in
+                    }
+                    if (li == null) {
+                        loose.add(new Object[]{entry.getKey(), t.poly()});
+                    } else {
+                        add(all.get(resolve(all, li)), entry.getKey(), t.poly(), t.tag().node());
+                    }
+                }
+            }
+        });
+    }
+
+    /** How much room the faces take (in cubic model pixels), in the frame they were drawn in; flat ones a pixel thick. */
+    private static double volumeIn(Matrix4f pose, List<MeshPoly> polys) {
+        Matrix4f inverse = new Matrix4f(pose).invert();
+        float[] min = {Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE}, max = {-Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE};
+        Vector3f p = new Vector3f();
+        for (MeshPoly poly : polys) {
+            float[] v = poly.verts();
+            for (int i = 0; i < poly.vertexCount(); i++) {
+                inverse.transformPosition(p.set(v[i * MeshPoly.STRIDE], v[i * MeshPoly.STRIDE + 1], v[i * MeshPoly.STRIDE + 2]));
+                min[0] = Math.min(min[0], p.x);
+                min[1] = Math.min(min[1], p.y);
+                min[2] = Math.min(min[2], p.z);
+                max[0] = Math.max(max[0], p.x);
+                max[1] = Math.max(max[1], p.y);
+                max[2] = Math.max(max[2], p.z);
+            }
+        }
+        // the pose may be scaled (a model drawn smaller or bigger): measure in what it draws, then in model pixels
+        double scale = Math.cbrt(Math.abs(new Matrix3f(pose).determinant()));
+        double v = 1;
+        for (int a = 0; a < 3; a++) {
+            v *= Math.max(max[a] - min[a], 1 / 16.0 / Math.max(scale, 1e-6)) * scale * 16;
+        }
+        return v;
+    }
+
+    /** The box a face belongs to: its vanilla part's, its pose level's, or the limb's loose faces'. */
+    private static Object boxKey(RecordingBufferSource.Tagged t, Limb limb) {
+        if (t.tag() == null) {
+            return limb;
+        }
+        return t.tag().part() != null ? t.tag().part() : t.tag().node() != null ? t.tag().node() : limb;
+    }
+
+    /** Puts every face in a limb, or among the loose ones ({type, face}) that go to the nearest limb. */
+    private interface Sorter {
+        void sort(List<Limb> limbs, List<Object[]> loose);
+    }
+
+    /**
+     * The limbs as worked out from what drew the entity (a list of limbs, each hanging from the one it was drawn as
+     * a child of, or from nothing) made into what goes to the server and what each limb draws.
+     */
+    private static ModelCapturer.EntityCapture finish(Entity entity, Map<RenderType, List<RecordingBufferSource.Tagged>> faces,
+                                                      List<PartTags.DrawnPart> drawn, ModelCapturer.CapturedMesh whole,
+                                                      List<Limb> limbs, Sorter sorter) {
         // 2. the body; tiny limbs go with what they hang from (a body that weighs nothing makes the physics unstable)
         int torso = torsoOf(limbs);
         limbs.get(torso).parent = -1;
@@ -208,29 +372,12 @@ public final class EntityParts {
 
         // 3. frames
         for (Limb limb : limbs) {
-            frameOf(limb.frame.pose(), limb.rotation, limb.origin);
+            frameOf(limb.pose, limb.rotation, limb.origin);
         }
 
         // 4. faces and boxes
-        Map<String, Integer> byName = new HashMap<>();
-        for (var e : limbOf.entrySet()) {
-            String name = names.get(e.getKey().part());
-            if (name != null) {
-                byName.putIfAbsent(name, e.getValue());
-            }
-        }
         List<Object[]> loose = new ArrayList<>(); // {type, poly}
-        for (var entry : faces.entrySet()) {
-            for (RecordingBufferSource.Tagged t : entry.getValue()) {
-                int li = t.tag() == null ? -1 : limbFor(t.tag(), limbOf, byName, names, drawn);
-                if (li < 0) {
-                    loose.add(new Object[]{entry.getKey(), t.poly()});
-                    continue;
-                }
-                Limb limb = limbs.get(resolve(limbs, li));
-                add(limb, entry.getKey(), t.poly(), t.tag().part());
-            }
-        }
+        sorter.sort(limbs, loose);
         for (Object[] f : loose) {
             MeshPoly poly = (MeshPoly) f[1];
             Limb limb = nearest(limbs, poly);
@@ -345,7 +492,7 @@ public final class EntityParts {
         Map<ModelPart, Set<ModelPart.Cube>> cubes = new IdentityHashMap<>();
         for (List<RecordingBufferSource.Tagged> list : faces.values()) {
             for (RecordingBufferSource.Tagged t : list) {
-                if (t.tag() != null && t.tag().cube() != null) {
+                if (t.tag() != null && t.tag().part() != null && t.tag().cube() != null) {
                     cubes.computeIfAbsent(t.tag().part().part(), k -> Collections.newSetFromMap(new IdentityHashMap<>())).add(t.tag().cube());
                 }
             }
@@ -357,14 +504,14 @@ public final class EntityParts {
                 biggest = d;
             }
         }
-        Limb limb = new Limb("all", Role.TORSO, biggest, -1);
+        Limb limb = new Limb("all", Role.TORSO, biggest == null ? new Matrix4f() : biggest.pose(), -1);
         if (biggest != null) {
             frameOf(biggest.pose(), limb.rotation, limb.origin);
         }
         limb.origin.zero();
         for (var entry : faces.entrySet()) {
             for (RecordingBufferSource.Tagged t : entry.getValue()) {
-                add(limb, entry.getKey(), t.poly(), t.tag() == null ? limb : t.tag().part());
+                add(limb, entry.getKey(), t.poly(), boxKey(t, limb));
             }
         }
         if (limb.boxes.isEmpty()) {
@@ -517,7 +664,7 @@ public final class EntityParts {
                 if (rootOf(limbs, r, torso) != r) {
                     continue; // hangs from another loose limb: it comes along with that one
                 }
-                Vector3f pivot = limbs.get(r).frame.pose().getTranslation(new Vector3f());
+                Vector3f pivot = limbs.get(r).pose.getTranslation(new Vector3f());
                 for (int t : hanging) {
                     double d = distanceToBoxes(limbs.get(t), pivot);
                     if (d < bestDistance) {
@@ -583,12 +730,12 @@ public final class EntityParts {
         return -1;
     }
 
-    private static int samePivot(PartTags.DrawnPart d, List<Limb> limbs) {
-        Vector3f pivot = d.pose().getTranslation(new Vector3f());
+    private static int samePivot(Matrix4f pose, List<Limb> limbs) {
+        Vector3f pivot = pose.getTranslation(new Vector3f());
         int best = -1;
         double bestDistance = SAME_PIVOT;
         for (int i = 0; i < limbs.size(); i++) {
-            double dist = limbs.get(i).frame.pose().getTranslation(new Vector3f()).distance(pivot);
+            double dist = limbs.get(i).pose.getTranslation(new Vector3f()).distance(pivot);
             if (dist < bestDistance) {
                 bestDistance = dist;
                 best = i;

@@ -44,7 +44,18 @@ public final class MeshClipper {
         for (MeshPoly poly : polys) {
             List<MeshPoly> remaining = List.of(poly);
             for (CutPlane plane : region) {
-                out.addAll(clip(remaining, List.of(plane.flipped())));
+                // A coplanar face belongs to the inside branch only. Keeping it in both branches duplicates
+                // it once per box plane, and repeated exclusions can grow the mesh exponentially.
+                for (MeshPoly part : remaining) {
+                    boolean outside = false;
+                    for (int i = 0; i < part.verts().length; i += S) {
+                        if (plane.signedDistance(part.verts()[i], part.verts()[i + 1], part.verts()[i + 2]) < -1e-7) {
+                            outside = true;
+                            break;
+                        }
+                    }
+                    if (outside) out.addAll(clip(List.of(part), List.of(plane.flipped())));
+                }
                 remaining = clip(remaining, List.of(plane));
                 if (remaining.isEmpty()) {
                     break;

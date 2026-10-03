@@ -29,7 +29,7 @@ import java.util.UUID;
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberTrail {
     /** Ticks a part of the trail stays visible. */
-    private static final double LIFETIME = 40;
+    private static final double LIFETIME = 10;
     /** Minimum endpoint movement between stored world-space samples. */
     private static final double MIN_SAMPLE_MOVEMENT = 0.12;
     /** Samples further apart in time than this are separate strokes and are not joined. */

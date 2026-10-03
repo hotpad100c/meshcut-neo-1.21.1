@@ -482,6 +482,11 @@ public final class CutService {
     }
 
     static ServerSubLevel assemble(ServerLevel level, List<BlockPos> blocks) {
+        BlockPos anchor=blocks.getFirst();
+        Map<BlockPos,Piece> snapshots=new LinkedHashMap<>();
+        for(BlockPos pos:blocks) {
+            if(level.getBlockEntity(pos) instanceof MimicBlockEntity) snapshots.put(pos,pieceAt(level,pos,CapMode.LAVA));
+        }
         // limbs joined to the sub-level the blocks leave may have to follow them; see RagdollJoints
         ServerSubLevel source = Sable.HELPER.getContaining(level, blocks.getFirst()) instanceof ServerSubLevel s ? s : null;
         if (source != null) {
@@ -489,6 +494,21 @@ public final class CutService {
         }
         try {
             ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.getFirst(), blocks, BoundingBox3i.from(blocks));
+            if(made!=null) {
+                BlockPos plotAnchor=made.getPlot().getCenterBlock();
+                for(var entry:snapshots.entrySet()) {
+                    BlockPos old=entry.getKey();Piece expected=entry.getValue();
+                    BlockPos moved=plotAnchor.offset(old.getX()-anchor.getX(),old.getY()-anchor.getY(),old.getZ()-anchor.getZ());
+                    // Assembly creates the destination BE before loading its data. Never let its default stone
+                    // material or an incomplete cut payload become the moved fragment's permanent state.
+                    if(level.getBlockEntity(moved) instanceof MimicBlockEntity be
+                            && (!be.getTargetState().equals(expected.target()) || !be.getPlanes().equals(expected.planes())
+                            || !be.getPatches().equals(expected.patches()) || !be.getExcluded().equals(expected.excluded()))) {
+                        MimicBlock.place(level,moved,expected.target(),expected.planes(),expected.excluded(),expected.patches(),
+                                expected.mode(),expected.beTag(),expected.entity());
+                    }
+                }
+            }
             if (source != null && made != null) {
                 ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, made);
             }

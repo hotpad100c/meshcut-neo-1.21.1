@@ -32,6 +32,21 @@ public final class VoxelBoxes {
      *                 strictly inside one of them is gone
      */
     public static List<double[]> cut(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
+        boolean[] mask=VoxelFragments.mask(excluded);
+        if(mask!=null) {
+            List<double[]> retained=new ArrayList<>();
+            for(double[] cell:VoxelFragments.boxes(mask)) for(double[] original:shape) {
+                double[] box=new double[6];
+                boolean valid=true;
+                for(int axis=0;axis<3;axis++) {
+                    box[axis]=Math.max(cell[axis],original[axis]);
+                    box[axis+3]=Math.min(cell[axis+3],original[axis+3]);
+                    valid &= box[axis+3]-box[axis]>1e-9;
+                }
+                if(valid) retained.add(box);
+            }
+            return planes.isEmpty()?retained:remaining(retained,planes,List.of());
+        }
         if (planes.isEmpty() && excluded.isEmpty()) {
             return shape;
         }

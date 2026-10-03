@@ -12,6 +12,8 @@
   ],
   "client": [
     "FlywheelVisualizationMixin",
+    "CitadelModelBoxMixin",
+    "PoseStackMixin",
     "ModelPartAccessor",
     "ModelPartCubeMixin",
     "ModelPartMixin",

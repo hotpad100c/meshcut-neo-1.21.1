@@ -79,11 +79,10 @@ public final class LightsaberHands {
         PoseStack hilt = new PoseStack();
         hilt.mulPose(new Matrix4f(view).mul(hiltPose(blade, camera, player.getScale())));
         LightsaberItemRenderer.renderHilt(player.getMainHandItem(), hilt, buffers, light, OverlayTexture.NO_OVERLAY);
-        buffers.endBatch(); // Opaque hilt/skin depth must exist before the translucent blade and trail.
+        buffers.endBatch();
         if (player.isInvisible()) return;
 
         boolean slim = player.getSkin().model() == PlayerSkin.Model.SLIM;
-        // Dedicated cached parts avoid leaking shortened arms into vanilla or another player's renderer.
         if (slim && slimModel == null)
             slimModel = new PlayerModel<>(minecraft.getEntityModels().bakeLayer(ModelLayers.PLAYER_SLIM), true);
         if (!slim && wideModel == null)

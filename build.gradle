@@ -40,9 +40,13 @@ repositories {
                 url = "https://api.modrinth.com/maven"
             }
         }
+        forRepository {
+            mavenCentral()
+        }
         // forRepositories(fg.repository) // Uncomment when using ForgeGradle
         filter {
             includeGroup "maven.modrinth"
+            includeGroup "dev.anvilcraft.lib"
         }
     }
 }
@@ -151,7 +155,7 @@ dependencies {
 
     // Example project dependency using a sister or child project:
     // implementation project(":myproject")
-
+    implementation "dev.anvilcraft.lib:anvillib-rendering-neoforge-26.1:2.0.0"
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
@@ -217,6 +221,15 @@ def checkLightsaberProjection = tasks.register('checkLightsaberProjection', Java
 tasks.named('check').configure {
     dependsOn checkLightsaberProjection
 }
+
+def checkCurveFragments = tasks.register('checkCurveFragments', JavaExec) {
+    group = 'verification'
+    description = 'Checks curved voxel fragment topology, rendered boundaries and collision volumes.'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.geom.CurveFragmentsTest'
+}
+tasks.named('check').configure { dependsOn checkCurveFragments }
 
 // GameTest classes and fixtures are available in development runs, but do not ship in the mod jar.
 tasks.named('jar', Jar).configure {

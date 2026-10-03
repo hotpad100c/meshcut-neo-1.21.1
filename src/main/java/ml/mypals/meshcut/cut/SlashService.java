@@ -16,9 +16,7 @@ import ml.mypals.meshcut.cut.graph.StructureGraph;
 import ml.mypals.meshcut.cut.graph.WorldGraphs;
 import ml.mypals.meshcut.geom.CellGrid;
 import ml.mypals.meshcut.geom.Patch;
-import ml.mypals.meshcut.geom.PieceFit;
-import ml.mypals.meshcut.geom.Polytope;
-import ml.mypals.meshcut.geom.VoxelBoxes;
+import ml.mypals.meshcut.geom.VoxelFragments;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
@@ -55,9 +53,7 @@ import java.util.function.Predicate;
  * patch runs between them, and touching blocks are joined cell to cell. A patch that goes right through a block
  * therefore separates its two sides, one that stops midway does not (the cells join up around its end), and
  * several scratches that close a loop seal off what is inside. If this severs the structure, the blocks whose
- * parts ended up in different groups are split, and each group that came apart becomes its own sub-level. Only
- * the parts that leave must have a convex shape (they are the block clipped by half-spaces); what stays behind is
- * the block with those parts cut out of it. A block that cannot be split that way stays whole.
+ * parts ended up in different groups are split, and each group that came apart becomes its own sub-level. Each fragment is a union of grid cells; concave fragments can leave just like convex ones.
  * <p>
  * In the static world a group is only released if it is small enough to be an isolated island: one that reaches the
  * ground (or anything too big to follow, or unloaded) is treated as anchored and stays where it is.
@@ -65,17 +61,6 @@ import java.util.function.Predicate;
 public final class SlashService {
     private static final double SAMPLE_STEP = 0.3;
     private static final int MAX_SAMPLES = 900;
-    /**
-     * Each side of a cut must have at least this much volume (in blocks), so the blade merely grazing a corner
-     * of a block doesn't count as cutting it.
-     */
-    private static final double MIN_SLICE_VOLUME = 0.05;
-    /** ...and each side must reach at least this far (in blocks) from the plane, so a thin layer is not a cut. */
-    private static final double MIN_SLICE_EXTENT = 0.15;
-    /** A patch smaller than this (in square blocks) is not worth remembering. */
-    private static final double MIN_PATCH_AREA = 0.03;
-    /** A layer burnt away must be at least this much of a block, or there is nothing to burn. */
-    private static final double MIN_BURN_VOLUME = 1e-3;
     private static final double SEPARATION_SPEED = 1.5;
     /** Structure id for everything attached to more than the search was willing to follow; all of it counts as one. */
     private static final int HUGE = -2;
@@ -93,10 +78,10 @@ public final class SlashService {
         final CutService.Piece piece;
         final List<Patch> patches;
         final CellGrid grid;
-        /** The block cannot be split into convex pieces, so it counts as one piece whatever its cuts say. */
-        boolean whole;
         /** A thin layer of the block was burnt away by a cut along its edge, so it may no longer touch its neighbours. */
         boolean burned;
+        /** Weakly supported cut blocks release all their local pieces together. */
+        boolean detached;
 
         Info(BlockPos pos, @Nullable CutService.Piece piece, List<Patch> patches) {
             this.pos = pos;
@@ -107,13 +92,13 @@ public final class SlashService {
 
         /** The graph node a cell group belongs to. */
         int node(int component) {
-            return whole ? 0 : component;
+            return component;
         }
 
         /** The graph nodes of this block. */
         List<Integer> nodes() {
             List<Integer> nodes = new ArrayList<>();
-            int count = whole ? Math.min(1, grid.componentCount()) : grid.componentCount();
+            int count = grid.componentCount();
             for (int i = 0; i < count; i++) {
                 nodes.add(i);
             }
@@ -123,21 +108,12 @@ public final class SlashService {
         /** The cell groups a node stands for. */
         Set<Integer> groupsOf(int node) {
             Set<Integer> groups = new HashSet<>();
-            if (whole) {
-                for (int i = 0; i < grid.componentCount(); i++) {
-                    groups.add(i);
-                }
-            } else {
-                groups.add(node);
-            }
+            groups.add(node);
             return groups;
         }
     }
 
     private record Node(BlockPos pos, int node) {}
-
-    /** The convex shape of a piece that leaves a block: all its half-spaces, and those beyond the block's own cuts. */
-    private record Fit(List<CutPlane> planes, List<CutPlane> extra) {}
 
     /** What one group of a block will be once it has been split. */
     private record Spec(BlockPos pos, Info info, List<CutPlane> planes, List<List<CutPlane>> excluded, List<Patch> patches) {}
@@ -280,7 +256,7 @@ public final class SlashService {
             collect(worldFragments, n, center, quad, sweep.samples(), null,
                     cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell)));
         }
-        int staticBlocks = process(level, null, StrokeFit.fitPatches(worldFragments), mode, created);
+        int staticBlocks = process(level, null, surfacePatches(worldFragments), mode, created);
 
         int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
         return new CutService.Result(staticBlocks, cutLevels, created[0]);
@@ -313,7 +289,7 @@ public final class SlashService {
                 collect(fragments, nl, center, quad, sweep.samples(), pose,
                         cell -> container != null && container.inBounds(cell) && !level.getBlockState(cell).isAir());
             }
-            if (process(level, sub, StrokeFit.fitPatches(fragments), mode, created) > 0) {
+            if (process(level, sub, surfacePatches(fragments), mode, created) > 0) {
                 cutLevels++;
             }
         }
@@ -364,24 +340,44 @@ public final class SlashService {
         }
         // which way the blade travelled across the quad
         Vector3d motion = new Vector3d(quad[3]).sub(quad[0]).add(new Vector3d(quad[2]).sub(quad[1])).mul(0.5);
-        double d = n.dot(center);
         for (BlockPos cell : candidates) {
             if (!accept.test(cell)) {
                 continue;
             }
-            // the swept outline projected onto the plane, in the block's own coordinates
-            float[] polygon = new float[12];
-            for (int i = 0; i < 4; i++) {
-                double off = d - n.dot(quad[i]);
-                polygon[i * 3] = (float) (quad[i].x + n.x * off - cell.getX());
-                polygon[i * 3 + 1] = (float) (quad[i].y + n.y * off - cell.getY());
-                polygon[i * 3 + 2] = (float) (quad[i].z + n.z * off - cell.getZ());
-            }
-            float[] clipped = Patch.clipToCube(polygon);
-            if (clipped.length >= 9 && Patch.area(clipped) > MIN_FRAGMENT_AREA) {
-                out.computeIfAbsent(cell.immutable(), k -> new ArrayList<>()).add(new StrokeFit.Fragment(n, motion, clipped));
+            // Keep each triangle in its own plane, including twisted blade sweeps.
+            for (int[] triangle : new int[][]{{0,1,2},{0,2,3}}) {
+                Vector3d tn = new Vector3d(quad[triangle[1]]).sub(quad[triangle[0]])
+                        .cross(new Vector3d(quad[triangle[2]]).sub(quad[triangle[0]]));
+                if (tn.lengthSquared() < 1e-12) continue;
+                tn.normalize();
+                float[] polygon = new float[9];
+                for (int i=0;i<3;i++) {
+                    Vector3d q=quad[triangle[i]];
+                    polygon[i*3]=(float)(q.x-cell.getX());
+                    polygon[i*3+1]=(float)(q.y-cell.getY());
+                    polygon[i*3+2]=(float)(q.z-cell.getZ());
+                }
+                float[] clipped=Patch.clipToCube(polygon);
+                if (clipped.length>=9 && Patch.area(clipped)>1e-7)
+                    out.computeIfAbsent(cell.immutable(),k->new ArrayList<>()).add(new StrokeFit.Fragment(tn,motion,clipped));
             }
         }
+    }
+
+    /** Bounded triangles, never upgraded to an infinite cut or averaged across a bend. */
+    private static Map<BlockPos,List<Patch>> surfacePatches(Map<BlockPos,List<StrokeFit.Fragment>> fragments) {
+        Map<BlockPos,List<Patch>> result=new LinkedHashMap<>();
+        fragments.forEach((pos, parts)-> {
+            List<Patch> patches=new ArrayList<>();
+            for (StrokeFit.Fragment f:parts) {
+                float[] v=f.polygon();
+                double d=f.n().x*v[0]+f.n().y*v[1]+f.n().z*v[2];
+                Patch p=Patch.restore(new CutPlane(f.n().x,f.n().y,f.n().z,d),v,false);
+                if (!patches.contains(p)) patches.add(p);
+            }
+            result.put(pos,patches);
+        });
+        return result;
     }
 
     @Nullable
@@ -452,28 +448,9 @@ public final class SlashService {
                 if (!straddles(piece.cutBoxes(), patch.plane())) {
                     continue; // passes through where the block has nothing (a torch is only a thin stick)
                 }
-                Polytope.Side side = Polytope.classify(planes, piece.excluded(), patch.plane(), piece.cutBoxes(),
-                        MIN_SLICE_VOLUME, MIN_SLICE_EXTENT);
-                if (side != Polytope.Side.SPLIT) {
-                    // A cut right through that leaves only a thin layer on one side (or just clips a corner) does
-                    // not divide the block: the layer is burnt away.
-                    CutPlane burn = patch.through() ? (side == Polytope.Side.ALL_KEPT ? patch.plane() : patch.plane().flipped()) : null;
-                    if (burn != null && burntVolume(planes, piece.excluded(), burn) > MIN_BURN_VOLUME
-                            && Polytope.volume(with(planes, burn)) >= Polytope.MIN_VOLUME) {
-                        planes.add(burn);
-                        changed = burned = true;
-                        if (nl == null) {
-                            nl = new Vector3d(burn.nx(), burn.ny(), burn.nz());
-                            dl = burn.d() + nl.x * cell.getX() + nl.y * cell.getY() + nl.z * cell.getZ();
-                        }
-                    }
-                    continue; // otherwise it grazes the block, or too little of it was swept to matter
-                }
-                if (!patch.through() && Patch.area(patch.polygon()) < MIN_PATCH_AREA) {
-                    continue;
-                }
                 List<Patch> before = new ArrayList<>(merged);
-                StrokeFit.mergeInto(merged, patch, planes, piece.excluded(), piece.cutBoxes());
+                // Never convex-hull distinct surfaces or forget earlier connections.
+                if (!merged.contains(patch)) merged.add(patch);
                 if (!merged.equals(before)) {
                     changed = true;
                     if (nl == null) { // which way the parts are pushed apart is judged by the first cut
@@ -485,9 +462,16 @@ public final class SlashService {
             }
             if (changed) {
                 BlockPos fixed = cell.immutable();
-                CutService.Piece now = burned
-                        ? new CutService.Piece(piece.target(), planes, piece.excluded(), merged, piece.mode(), piece.beTag(), piece.undetachedBe(), piece.entity())
-                        : piece;
+                List<List<CutPlane>> burnedHoles=new ArrayList<>(piece.excluded());
+                burnedHoles.addAll(VoxelFragments.edgeBurns(entry.getValue()));
+                CellGrid grid=CellGrid.of(planes,burnedHoles,merged,piece.cutBoxes());
+                Set<Integer> all=new HashSet<>();
+                for(int i=0;i<grid.componentCount();i++) all.add(i);
+                List<List<CutPlane>> holes=new ArrayList<>(burnedHoles);
+                List<List<CutPlane>> emptyCells=VoxelFragments.excluded(grid,all);
+                for(List<CutPlane> hole:emptyCells) if(!holes.contains(hole)) holes.add(hole);
+                burned=grid.filledCells()<CellGrid.of(piece.planes(),piece.excluded(),List.of(),piece.cutBoxes()).filledCells();
+                CutService.Piece now=new CutService.Piece(piece.target(),planes,VoxelFragments.compact(holes),merged,piece.mode(),piece.beTag(),piece.undetachedBe(),piece.entity());
                 Info info = new Info(fixed, now, merged);
                 info.burned = burned;
                 dom.infos.put(fixed, info);
@@ -521,45 +505,36 @@ public final class SlashService {
         // 2. which pieces are connected to which
         Map<Node, Integer> comp = new HashMap<>();
         Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp);
-
-
-        // 3.-5. who is severed and who moves; every piece that moves must be convex, or its block stays whole
-        Plan attempted = null;
-        Map<Info, Map<Integer, Fit>> fits = new HashMap<>();
-        for (int attempt = 0; attempt < 8; attempt++) {
-            attempted = plan(dom, sub, comp, closures, hits, !applyUnsevered && sub == null);
-            fits.clear();
-            Info unfit = fitMovers(attempted, fits);
-            if (unfit == null) {
-                break;
+        if(sub==null) {
+            boolean changed=false;
+            for(Info hit:hits) {
+                if(hit.grid.componentCount()<2) continue;
+                Set<Integer> ids=new HashSet<>();
+                for(int node:hit.nodes()) {
+                    Integer id=comp.get(new Node(hit.pos,node));
+                    if(id!=null) ids.add(id);
+                }
+                // Analyse the whole structure first: a chain already severed keeps its neighbouring blocks.
+                if(ids.size()==1 && supportingNeighbours(dom,hit)<3) {hit.detached=true;changed=true;}
             }
-            unfit.whole = true; // it cannot come apart into convex pieces: it stays one piece
-            comp.clear();
-            closures = components(dom, hits, comp);
-            attempted = null;
+            if(changed) {comp.clear();closures=components(dom,hits,comp);}
         }
-        if (attempted == null) {
-            return hits.size(); // could not settle on a plan; leave things as they are
-        }
-
-        final Plan plan = attempted;
+        final Plan plan = plan(dom, sub, comp, closures, hits, !applyUnsevered && sub == null);
 
         // A real block entity (a chest, a furnace) the cut only scratched stays the real block: as a mimic it would
         // lose its contents and stop working. Only one that comes apart, or loses a layer, becomes a mimic.
         List<Info> mimics = new ArrayList<>();
-        for (Info hit : hits) {
-            if (!hit.piece.undetachedBe() || hit.burned || plan.severed().containsKey(hit)) {
-                mimics.add(hit);
-            }
-        }
+        for (Info hit : hits) mimics.add(hit);
         // Spill the contents of real block entities before they are replaced by mimics.
         Map<BlockPos, CompoundTag> beTags = detachBlockEntities(level, mimics);
 
+        for(Info hit:hits) if(hit.grid.componentCount()==0)
+            level.setBlock(hit.pos,Blocks.AIR.defaultBlockState(),net.minecraft.world.level.block.Block.UPDATE_CLIENTS | net.minecraft.world.level.block.Block.UPDATE_KNOWN_SHAPE);
         if (plan.severed().isEmpty() && plan.movers().isEmpty()) {
             // Nothing came apart: the blocks just remember the cut.
             if (applyUnsevered) {
                 for (Info hit : mimics) {
-                    place(level, hit, hit.piece.planes(), hit.piece.excluded(), hit.patches, beTags);
+                    if(hit.grid.componentCount()>0) place(level, hit, hit.piece.planes(), hit.piece.excluded(), hit.patches, beTags);
                 }
             }
             return hits.size();
@@ -569,37 +544,14 @@ public final class SlashService {
         Map<Integer, List<Spec>> specs = new HashMap<>();
         for (var entry : plan.severed().entrySet()) {
             Info info = entry.getKey();
-            Map<Integer, Fit> blockFits = fits.getOrDefault(info, Map.of());
-            // what the parts that leave were cut out of the block
-            List<List<CutPlane>> holes = new ArrayList<>(info.piece.excluded());
-            for (Fit fit : blockFits.values()) {
-                if (!fit.extra().isEmpty()) {
-                    if (holes.stream().noneMatch(h -> CutPlane.sameRegion(h, fit.extra()))) {
-                        holes.add(fit.extra());
-                    }
-                }
-            }
-            Set<Integer> stayingGroups = new LinkedHashSet<>();
-            Set<Integer> stayingCells = new HashSet<>();
-            List<CutPlane> usedByMovers = new ArrayList<>();
-            blockFits.values().forEach(f -> usedByMovers.addAll(f.extra()));
             for (var group : entry.getValue().entrySet()) {
-                if (plan.movers().contains(group.getKey())) {
-                    Fit fit = blockFits.get(group.getKey());
-                    List<Patch> kept = PieceFit.remaining(info.grid, group.getValue(), info.patches, fit.extra());
-                    specs.computeIfAbsent(group.getKey(), k -> new ArrayList<>())
-                            .add(new Spec(info.pos, info, fit.planes(), info.piece.excluded(), kept));
-                } else {
-                    stayingGroups.add(group.getKey());
-                    stayingCells.addAll(group.getValue());
-                }
-            }
-            if (!stayingGroups.isEmpty()) {
-                List<Patch> kept = PieceFit.remainingStaying(info.grid, stayingCells, info.patches, usedByMovers);
-                specs.computeIfAbsent(stayingGroups.iterator().next(), k -> new ArrayList<>())
-                        .add(new Spec(info.pos, info, info.piece.planes(), holes, kept));
+                List<List<CutPlane>> excluded = new ArrayList<>(info.piece.excluded());
+                excluded.addAll(VoxelFragments.excluded(info.grid, group.getValue()));
+                specs.computeIfAbsent(group.getKey(), k -> new ArrayList<>())
+                        .add(new Spec(info.pos, info, info.piece.planes(), VoxelFragments.compact(excluded), info.patches));
             }
         }
+
         for (Info hit : mimics) {
             if (!plan.severed().containsKey(hit) && !hit.nodes().isEmpty()) {
                 Integer id = comp.get(new Node(hit.pos, hit.nodes().get(0)));
@@ -769,32 +721,6 @@ public final class SlashService {
     }
 
     /**
-     * Works out the convex shape of every piece that leaves a severed block.
-     *
-     * @return a block one of whose leaving pieces is not convex, or {@code null} if all of them are
-     */
-    @Nullable
-    private static Info fitMovers(Plan plan, Map<Info, Map<Integer, Fit>> fits) {
-        for (var entry : plan.severed().entrySet()) {
-            Info info = entry.getKey();
-            for (var group : entry.getValue().entrySet()) {
-                if (!plan.movers().contains(group.getKey())) {
-                    continue;
-                }
-                List<CutPlane> planes = PieceFit.fit(info.grid, group.getValue(), info.piece.planes(), info.patches);
-                if (planes == null) {
-                    MeshCut.LOGGER.info("Cut block at {} has {} pieces but piece {} cannot be split off as a convex shape; it stays whole ({} cuts)",
-                            info.pos, info.grid.componentCount(), group.getValue(), info.patches.size());
-                    return info;
-                }
-                Fit fit = new Fit(planes, planes.subList(info.piece.planes().size(), planes.size()));
-                fits.computeIfAbsent(info, k -> new HashMap<>()).put(group.getKey(), fit);
-            }
-        }
-        return null;
-    }
-
-    /**
      * Recomputes a sub-level's mass, centre of mass and inertia from its blocks as they are now, and moves the body
      * so that nothing visibly shifts when the centre of mass moves. Blocks that were taken out and put back have
      * been through many incremental updates; this makes sure the sub-level ends up with the true values.
@@ -936,7 +862,8 @@ public final class SlashService {
         Map<Long, BlockNodes> over = new HashMap<>();
         List<StructureGraph.NodeRef> seeds = new ArrayList<>();
         for (Info hit : hits) {
-            over.put(StructureGraph.pack(hit.pos.getX(), hit.pos.getY(), hit.pos.getZ()), BlockNodes.of(hit.grid, hit.whole));
+            over.put(StructureGraph.pack(hit.pos.getX(), hit.pos.getY(), hit.pos.getZ()), hit.detached
+                    ? BlockNodes.mimic(new long[hit.grid.componentCount()][6]) : BlockNodes.of(hit.grid, false));
             for (Node seed : seedsOf(dom, hit)) {
                 seeds.add(new StructureGraph.NodeRef(seed.pos().getX(), seed.pos().getY(), seed.pos().getZ(), seed.node()));
             }
@@ -953,6 +880,22 @@ public final class SlashService {
             }
         }
         return byId;
+    }
+
+    private static int supportingNeighbours(Domain dom,Info hit) {
+        int count=0;
+        for(Direction direction:Direction.values()) {
+            BlockPos pos=hit.pos.relative(direction);
+            if(!dom.inside(pos) || !dom.loaded(pos)) {count++;continue;}
+            Info neighbour=dom.info(pos);
+            if(neighbour==null) continue;
+            int face=direction.getStepX()!=0 ? (direction.getStepX()>0?0:1)
+                    : direction.getStepY()!=0 ? (direction.getStepY()>0?2:3) : (direction.getStepZ()>0?4:5);
+            for(int i=0;i<CellGrid.N*CellGrid.N;i++) {
+                if(hit.grid.faceComponent(face,i)>=0 && neighbour.grid.faceComponent(face^1,i)>=0) {count++;break;}
+            }
+        }
+        return count;
     }
 
     /**
@@ -990,24 +933,13 @@ public final class SlashService {
                 max = Math.max(max, d);
             }
         }
-        return min < -0.01 && max > 0.01;
-    }
-
-    /** How much of the block a burn along {@code burn} would take: the layer beyond it, less what was cut out already. */
-    private static double burntVolume(List<CutPlane> planes, List<List<CutPlane>> excluded, CutPlane burn) {
-        List<CutPlane> layer = with(planes, burn.flipped());
-        return excluded.isEmpty() ? Polytope.volume(layer)
-                : VoxelBoxes.remainingVolume(List.of(new double[]{0, 0, 0, 1, 1, 1}), layer, excluded);
-    }
-
-    private static List<CutPlane> with(List<CutPlane> planes, CutPlane extra) {
-        return CutService.with(planes, extra);
+        return min < -1e-6 && max > 1e-6;
     }
 
     /** Which side of the cut plane a piece is on (positive: the normal's side), judged by its centre. */
     private static double sideOf(Domain dom, Node node, Vector3d nl, double dl) {
         Info info = dom.infos.get(node.pos());
-        double[] c = info.whole || info.grid == CellGrid.FULL ? new double[]{0.5, 0.5, 0.5} : info.grid.centroid(node.node());
+        double[] c = info.grid == CellGrid.FULL ? new double[]{0.5, 0.5, 0.5} : info.grid.centroid(node.node());
         return nl.x * (node.pos().getX() + c[0]) + nl.y * (node.pos().getY() + c[1]) + nl.z * (node.pos().getZ() + c[2]) - dl;
     }
 

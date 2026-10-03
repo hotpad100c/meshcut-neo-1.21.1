@@ -92,7 +92,11 @@ public final class LightsaberHandler {
             return;
         }
         try {
-            SlashService.slashSwing(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
+            var result=SlashService.slashSwing(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
+            if(result!=null) {
+                MeshCut.LOGGER.info("Applied saber stroke: {} swipes, {} static blocks, {} sub-levels cut, {} sub-levels created",
+                        swing.swipes.size(),result.staticBlocks(),result.subLevelsCut(),result.subLevelsCreated());
+            }
         } catch (RuntimeException e) {
             MeshCut.LOGGER.error("Applying a lightsaber swing failed", e);
         }

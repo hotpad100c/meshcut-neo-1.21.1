@@ -398,8 +398,8 @@ public class MimicBlockEntity extends BlockEntity {
             for (int i = 0; i < polygon.length; i++) {
                 polygon[i] = poly.getFloat(i);
             }
-            if (plane.size() == 1 && p.getBoolean("through")) { // saves from when a cut could stop midway: those are dropped
-                patches.add(Patch.restore(plane.get(0), polygon, true));
+            if (plane.size() == 1 && polygon.length >= 9 && polygon.length % 3 == 0) {
+                patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
             }
         }
         if (tag.contains("pending")) { // saves from before cuts could stop midway: each was a cut right through
