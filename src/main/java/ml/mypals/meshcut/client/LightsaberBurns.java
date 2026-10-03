@@ -40,6 +40,8 @@ public final class LightsaberBurns {
     private static final double CHAR_HALF_WIDTH = 0.040;
     private static final double EMBER_HALF_WIDTH = 0.014;
     private static final double LIFT = 0.0025;
+    /** A sub-level's blocks are drawn through its own float transform, whose depth is less exact than the world's. */
+    private static final double SUB_LEVEL_LIFT = 4;
     private static final int MAX_MARKS = 1800;
     private static final int MAX_CANDIDATE_BLOCKS = 1024;
     private static final int[][] SWEEP_TRIANGLES = {{0, 1, 2}, {0, 2, 3}};
@@ -196,6 +198,7 @@ public final class LightsaberBurns {
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         var container = SubLevelContainer.getContainer(level);
         VertexConsumer consumer = buffers.getBuffer(LightsaberRenderTypes.SCORCH);
+        VertexConsumer glow = Bloom.usable() ? Bloom.consumer(BloomRenderTypes.TRIANGLES) : null; // the embers also glow
         for (Mark mark : MARKS) {
             Pose3dc pose = null;
             if (mark.subLevel != null) {
@@ -206,10 +209,14 @@ public final class LightsaberBurns {
             float fade = (float) Math.pow(Math.max(0, 1 - (time - mark.time) / CHAR_LIFETIME), 1.5);
             polygon(consumer, matrix, camera, pose, mark, mark.charred, LIFT, 0.05f, 0.03f, 0.025f, fade * 0.85f);
             float cooling = (float) Math.max(0, 1 - (time - mark.time) / EMBER_LIFETIME);
-            if (cooling > 0) polygon(consumer, matrix, camera, pose, mark, mark.ember, LIFT * 1.5,
-                    1, 0.25f + 0.55f * cooling, 0.05f + 0.35f * cooling * cooling, cooling * cooling * 0.9f);
+            if (cooling > 0) {
+                float g = 0.25f + 0.55f * cooling, b = 0.05f + 0.35f * cooling * cooling, a = cooling * cooling * 0.9f;
+                polygon(consumer, matrix, camera, pose, mark, mark.ember, LIFT * 1.5, 1, g, b, a);
+                if (glow != null) polygon(glow, matrix, camera, pose, mark, mark.ember, LIFT * 1.5, 1, g, b, a);
+            }
         }
         buffers.endBatch(LightsaberRenderTypes.SCORCH);
+        if (glow != null) Bloom.flush(BloomRenderTypes.TRIANGLES);
     }
 
     private static void polygon(VertexConsumer consumer, Matrix4f matrix, Vec3 camera, @Nullable Pose3dc pose,
@@ -217,7 +224,7 @@ public final class LightsaberBurns {
         for (int i = 1; i + 1 < vertices.length / 3; i++) {
             for (int j : new int[]{0, i, i + 1}) {
                 Vec3 p = new Vec3(vertices[j * 3] + mark.block.getX(), vertices[j * 3 + 1] + mark.block.getY(),
-                        vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(lift));
+                        vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(pose == null ? lift : lift * SUB_LEVEL_LIFT));
                 if (pose != null) p = pose.transformPosition(p);
                 p = p.subtract(camera);
                 consumer.addVertex(matrix, (float) p.x, (float) p.y, (float) p.z).setColor(r, g, b, alpha);

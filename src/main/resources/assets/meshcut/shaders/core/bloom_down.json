@@ -1,0 +1,28 @@
+{
+    "blend": {
+        "func": "add",
+        "srcrgb": "one",
+        "dstrgb": "zero"
+    },
+    "vertex": "meshcut:bloom",
+    "fragment": "meshcut:bloom_down",
+    "attributes": [
+        "Position"
+    ],
+    "samplers": [
+        {
+            "name": "Sampler0"
+        }
+    ],
+    "uniforms": [
+        {
+            "name": "TexelSize",
+            "type": "float",
+            "count": 2,
+            "values": [
+                0.0,
+                0.0
+            ]
+        }
+    ]
+}

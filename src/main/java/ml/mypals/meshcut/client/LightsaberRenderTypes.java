@@ -13,6 +13,7 @@ final class LightsaberRenderTypes extends RenderStateShard {
                     .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
                     .setCullState(NO_CULL)
                     .setDepthTestState(LEQUAL_DEPTH_TEST)
+                    .setLayeringState(POLYGON_OFFSET_LAYERING) // marks lie on surfaces: pull them towards the camera
                     .setWriteMaskState(COLOR_WRITE)
                     .setOutputState(MAIN_TARGET)
                     .createCompositeState(false));

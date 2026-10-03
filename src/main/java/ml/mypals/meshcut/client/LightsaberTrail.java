@@ -22,22 +22,15 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * The swish of a swinging lightsaber: a ribbon through the blade's positions of the last moments, fading out.
- * It shows the surface that is being swept, and so what is about to be cut.
- */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberTrail {
-    /** Ticks a part of the trail stays visible. */
-    private static final double LIFETIME = 10;
-    /** Minimum endpoint movement between stored world-space samples. */
+    private static final double LIFETIME = 3;
     private static final double MIN_SAMPLE_MOVEMENT = 0.12;
-    /** Samples further apart in time than this are separate strokes and are not joined. */
     private static final long MAX_GAP_TICKS = 3;
-    /** Colours (rgb) at the blade's base and at its tip. */
     private static final float[] BASE_COLOR = {0.15f, 0.55f, 1f};
     private static final float[] TIP_COLOR = {0.8f, 0.95f, 1f};
     private static final float MAX_ALPHA = 0.55f;
+    private static final float GLOW_INTENSITY = 0.1f;
 
     private record Sample(double time, Blade blade) {}
 
@@ -80,14 +73,22 @@ public final class LightsaberTrail {
         Vec3 camera = event.getCamera().getPosition();
         Matrix4f matrix = event.getPoseStack().last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
-        VertexConsumer consumer = buffers.getBuffer(LightsaberRenderTypes.TRAIL);
+        drawTrails(buffers.getBuffer(LightsaberRenderTypes.TRAIL), minecraft, blades, matrix, camera, time, 1f);
+        buffers.endBatch(LightsaberRenderTypes.TRAIL);
+        if (Bloom.usable()) {
+            drawTrails(Bloom.consumer(BloomRenderTypes.QUADS), minecraft, blades, matrix, camera, time, GLOW_INTENSITY);
+            Bloom.flush(BloomRenderTypes.QUADS);
+        }
+    }
+
+    private static void drawTrails(VertexConsumer consumer, Minecraft minecraft, Map<UUID, Blade> blades,
+                                   Matrix4f matrix, Vec3 camera, double time, float intensity) {
         for (Map.Entry<UUID, ArrayDeque<Sample>> entry : TRAILS.entrySet()) {
             if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
                     && !minecraft.options.hideGui && LightsaberItem.isActive(minecraft.player)
                     && entry.getKey().equals(minecraft.player.getUUID())) continue;
-            renderTrail(consumer, matrix, camera, entry.getValue(), blades.get(entry.getKey()), time);
+            renderTrail(consumer, matrix, camera, entry.getValue(), blades.get(entry.getKey()), time, intensity);
         }
-        buffers.endBatch(LightsaberRenderTypes.TRAIL);
     }
 
     /** The local trail is drawn with the same world projection and hilt depth as its blade. */
@@ -98,6 +99,11 @@ public final class LightsaberTrail {
         renderTrail(buffers.getBuffer(LightsaberRenderTypes.TRAIL), matrix, camera,
                 TRAILS.get(player.getUUID()), blade, time);
         buffers.endBatch(LightsaberRenderTypes.TRAIL);
+        if (Bloom.usable()) {
+            renderTrail(Bloom.consumer(BloomRenderTypes.QUADS), matrix, camera, TRAILS.get(player.getUUID()), blade, time,
+                    GLOW_INTENSITY);
+            Bloom.flush(BloomRenderTypes.QUADS);
+        }
     }
 
     private static void recordBlade(UUID id, Blade blade, double time) {
@@ -112,25 +118,29 @@ public final class LightsaberTrail {
 
     private static void renderTrail(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,
                                     ArrayDeque<Sample> trail, @Nullable Blade current, double time) {
+        renderTrail(consumer, matrix, camera, trail, current, time, 1f);
+    }
+
+    /** @param intensity scales the opacity: the glow of the trail is faint, the trail itself translucent */
+    private static void renderTrail(VertexConsumer consumer, Matrix4f matrix, Vec3 camera,
+                                    ArrayDeque<Sample> trail, @Nullable Blade current, double time, float intensity) {
         Sample previous = null;
         for (Sample sample : trail) {
             if (previous != null && sample.time() - previous.time() <= MAX_GAP_TICKS) {
                 float alpha = (float) (1 - (time - sample.time()) / LIFETIME);
                 if (alpha > 0) {
-                    ribbon(consumer, matrix, camera, previous.blade(), sample.blade(), alpha * alpha * MAX_ALPHA);
+                    ribbon(consumer, matrix, camera, previous.blade(), sample.blade(), alpha * alpha * MAX_ALPHA * intensity);
                 }
             }
             previous = sample;
         }
-        // Finish at the exact interpolated segment rendered this frame, between stored samples too.
         if (previous != null && current != null && time - previous.time() <= MAX_GAP_TICKS
                 && (current.tip().distanceToSqr(previous.blade().tip()) > 1e-8
                 || current.base().distanceToSqr(previous.blade().base()) > 1e-8)) {
-            ribbon(consumer, matrix, camera, previous.blade(), current, MAX_ALPHA);
+            ribbon(consumer, matrix, camera, previous.blade(), current, MAX_ALPHA * intensity);
         }
     }
 
-    /** The surface between two blade positions, brighter towards the tip. The render type disables culling. */
     private static void ribbon(VertexConsumer c, Matrix4f m, Vec3 camera, Blade a, Blade b, float alpha) {
         Vec3 a0 = a.base().subtract(camera), a1 = a.tip().subtract(camera);
         Vec3 b0 = b.base().subtract(camera), b1 = b.tip().subtract(camera);

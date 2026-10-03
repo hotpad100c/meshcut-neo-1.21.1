@@ -11,6 +11,7 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
@@ -49,7 +50,8 @@ public final class LightsaberRenderer {
             }
             blades.put(player.getUUID(), Blade.of(player, partialTick));
         }
-        if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
+        // with bloom the hands are drawn after it, so that its glow does not lie over them (see renderHands)
+        if (!Bloom.usable() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
                 && !minecraft.options.hideGui && LightsaberItem.isActive(minecraft.player)) {
             LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
                     camera, matrix, buffers);
@@ -68,6 +70,31 @@ public final class LightsaberRenderer {
                     time, entry.getKey());
         }
         buffers.endBatch(beamType);
+        if (Bloom.usable() && !blades.isEmpty()) { // the same beam again, into the glow buffer
+            VertexConsumer glow = Bloom.consumer(BloomRenderTypes.QUADS);
+            for (var entry : blades.entrySet()) {
+                Blade blade = entry.getValue();
+                drawBlade(glow, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
+                        time, entry.getKey());
+            }
+            Bloom.flush(BloomRenderTypes.QUADS);
+        }
+    }
+
+    /** The first-person arms and hilt, after the bloom has been added to the scene: it never glows over them. */
+    @SubscribeEvent(priority = EventPriority.LOW)
+    public static void renderHands(RenderLevelStageEvent event) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER || !Bloom.usable()) {
+            return;
+        }
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.level == null || minecraft.player == null || !minecraft.options.getCameraType().isFirstPerson()
+                || minecraft.options.hideGui || !LightsaberItem.isActive(minecraft.player)) {
+            return;
+        }
+        float partialTick = event.getPartialTick().getGameTimeDeltaPartialTick(true);
+        LightsaberHands.render(minecraft.player, Blade.of(minecraft.player, partialTick), partialTick,
+                event.getCamera().getPosition(), event.getPoseStack().last().pose(), minecraft.renderBuffers().bufferSource());
     }
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,

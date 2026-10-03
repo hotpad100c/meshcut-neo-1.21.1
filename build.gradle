@@ -49,7 +49,6 @@ repositories {
         // forRepositories(fg.repository) // Uncomment when using ForgeGradle
         filter {
             includeGroup "maven.modrinth"
-            includeGroup "dev.anvilcraft.lib"
         }
     }
 }
@@ -158,7 +157,6 @@ dependencies {
 
     // Example project dependency using a sister or child project:
     // implementation project(":myproject")
-    //implementation "dev.anvilcraft.lib:anvillib-renderer-neoforge-1.21.1:2.0.0+snapshot.546"
     // For more info:
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html

@@ -37,9 +37,24 @@ import java.util.WeakHashMap;
  */
 public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     /** How long the glow on a fresh cut lasts. */
-    private static final double GLOW_TICKS = 5000;
+    private static final double GLOW_TICKS = 600;
 
-    private record CacheEntry(int version, Map<RenderType, List<MeshPoly>> byType) {}
+    /** What a block draws. Until a worker has cut it up, it draws its model whole. */
+    private static final class CacheEntry {
+        final int version;
+        final Map<RenderType, List<MeshPoly>> whole;
+        volatile Map<RenderType, List<MeshPoly>> cut;
+
+        CacheEntry(int version, Map<RenderType, List<MeshPoly>> whole) {
+            this.version = version;
+            this.whole = whole;
+        }
+
+        Map<RenderType, List<MeshPoly>> byType() {
+            Map<RenderType, List<MeshPoly>> done = cut;
+            return done != null ? done : whole;
+        }
+    }
 
     private final Map<MimicBlockEntity, CacheEntry> cache = new WeakHashMap<>();
 
@@ -54,7 +69,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
 
         if (be.getAppearance() != null || ModelCapturer.hasBlockEntityRenderer(state)) {
             CacheEntry entry = cache.get(be);
-            if (entry == null || entry.version() != be.getVersion()) {
+            if (entry == null || entry.version != be.getVersion()) {
                 entry = build(be);
                 cache.put(be, entry);
             }
@@ -69,8 +84,22 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
         float fade = glowFade(be, partialTick);
         if (fade > 0f) {
             VertexConsumer consumer = buffer.getBuffer(Sheets.translucentCullBlockSheet());
+            // cooling: white-hot at first, then orange, then a dull red as the lava dies
+            int heat = 0xFF0000 | Math.round(55 + 200 * fade) << 8 | Math.round(25 + 230 * fade * fade);
+            boolean bloom = Bloom.usable();
+            org.joml.Vector3f at = new org.joml.Vector3f();
             for (MeshPoly poly : MimicMesh.glowPolys(be.renderData())) {
-                emit(consumer, pose, poly, 0xFFFFFF, packedLight, fade);
+                emit(consumer, pose, poly, heat, packedLight, fade);
+                if (bloom) { // the lava also glows: queued, to be drawn into the glow buffer later in the frame
+                    float[] v = poly.verts();
+                    for (int i = 1; i + 1 < poly.vertexCount(); i++) {
+                        for (int k : new int[]{0, i, i + 1}) {
+                            pose.pose().transformPosition(v[k * MeshPoly.STRIDE], v[k * MeshPoly.STRIDE + 1],
+                                    v[k * MeshPoly.STRIDE + 2], at);
+                            Bloom.queue(at.x, at.y, at.z, 1f, 0.42f * fade, 0.1f * fade, fade * 0.5f);
+                        }
+                    }
+                }
             }
         }
     }
@@ -92,12 +121,17 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     }
 
     private static CacheEntry build(MimicBlockEntity be) {
+        // recording the model needs the render thread; cutting it up does not
         var captured = be.getAppearance() != null ? MimicMesh.entityPart(be.getAppearance())
                 : ModelCapturer.capture(be.getTargetState(), be.getTargetBeTag());
-        // cut exactly as the chunk mesh cuts other blocks: pieces, slits, cut-out parts and their walls
-        Map<RenderType, List<MeshPoly>> out = MimicMesh.cutModel(captured.byType(), captured.opaque(), captured.capUv(), null,
-                be.renderData(), Sheets.cutoutBlockSheet());
-        return new CacheEntry(be.getVersion(), out);
+        CacheEntry entry = new CacheEntry(be.getVersion(), captured.byType());
+        var data = be.renderData();
+        MimicMesh.async(() -> {
+            // cut exactly as the chunk mesh cuts other blocks: pieces, slits, cut-out parts and their walls
+            entry.cut = MimicMesh.cutModel(captured.byType(), captured.opaque(), captured.capUv(), null, data,
+                    Sheets.cutoutBlockSheet());
+        });
+        return entry;
     }
 
     private static int tint(MimicBlockEntity be, BlockState state, int tintIndex) {

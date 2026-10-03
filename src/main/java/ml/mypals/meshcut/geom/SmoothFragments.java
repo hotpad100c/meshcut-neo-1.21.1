@@ -51,6 +51,8 @@ public final class SmoothFragments {
     private final List<Patch> patches;
     private final List<CutPlane> real;
     private final List<CutPlane> planes = new ArrayList<>();
+    /** Each patch's bounding box (min, max), so that most are ruled out without looking at their plane. */
+    private final double[][] patchBounds;
     private final Piece[][] cells = new Piece[CellGrid.CELLS][];
     /** Cells that are kept whole and are not divided by any plane: they are merged into boxes when clipping. */
     private final boolean[] whole = new boolean[CellGrid.CELLS];
@@ -62,6 +64,17 @@ public final class SmoothFragments {
         this.patches = patches;
         this.real = real;
         planes.addAll(real);
+        patchBounds = new double[patches.size()][6];
+        for (int i = 0; i < patchBounds.length; i++) {
+            float[] v = patches.get(i).polygon();
+            double[] b = patchBounds[i];
+            java.util.Arrays.fill(b, 0, 3, Double.MAX_VALUE);
+            java.util.Arrays.fill(b, 3, 6, -Double.MAX_VALUE);
+            for (int k = 0; k < v.length; k++) {
+                b[k % 3] = Math.min(b[k % 3], v[k] - 0.01);
+                b[k % 3 + 3] = Math.max(b[k % 3 + 3], v[k] + 0.01);
+            }
+        }
         for (CutPlane p : surfaces(patches, real)) {
             planes.add(p);
         }
@@ -443,6 +456,11 @@ public final class SmoothFragments {
 
     /** The model's surface kept to the fragments. */
     public List<MeshPoly> clip(List<MeshPoly> source) {
+        return clip(source, true);
+    }
+
+    /** @param beyond whether what lies beyond the block goes with the fragment nearest it (not for an entity's limb) */
+    public List<MeshPoly> clip(List<MeshPoly> source, boolean beyond) {
         List<MeshPoly> out = new ArrayList<>();
         for (double[] box : VoxelFragments.boxes(whole)) {
             out.addAll(MeshClipper.clip(source, VoxelFragments.planes(box)));
@@ -457,7 +475,7 @@ public final class SmoothFragments {
                 out.addAll(MeshClipper.clip(overlapping(source, bounds(cell)), bounds));
             }
         }
-        if (extendsOutside(source)) {
+        if (beyond && extendsOutside(source)) {
             out.addAll(keptOutside(outsideOf(source)));
         }
         return out;
@@ -742,6 +760,11 @@ public final class SmoothFragments {
 
     /** The faces the fragments have inside the block, textured from the model's own section by each plane. */
     public List<MeshPoly> caps(List<MeshPoly> source, float[] uv, Object sprite) {
+        return caps(source, uv, sprite, true);
+    }
+
+    /** @param beyond as in {@link #clip(List, boolean)}: the body of an entity reaches far past its limb's block */
+    public List<MeshPoly> caps(List<MeshPoly> source, float[] uv, Object sprite, boolean beyond) {
         boolean cube = source == Polytope.cube();
         Map<String, List<MeshPoly>> sections = new HashMap<>();
         List<MeshPoly> out = new ArrayList<>();
@@ -762,7 +785,7 @@ public final class SmoothFragments {
                 out.add(textured(null, face, uv, sprite, part));
             }
         }
-        if (!cube && extendsOutside(source)) {
+        if (beyond && !cube && extendsOutside(source)) {
             out.addAll(outsideCaps(source, uv, sprite));
         }
         return out;
@@ -813,6 +836,12 @@ public final class SmoothFragments {
             } else {
                 a = x;
                 b = 1 - y;
+            }
+            if (a < 0 || a > 1) { // beyond the block the texture repeats: it must stay within its sprite
+                a -= Math.floor(a);
+            }
+            if (b < 0 || b > 1) {
+                b -= Math.floor(b);
             }
             v[i + 3] = uv[0] + (uv[2] - uv[0]) * (float) a;
             v[i + 4] = uv[1] + (uv[3] - uv[1]) * (float) b;
@@ -917,7 +946,14 @@ public final class SmoothFragments {
     }
 
     private boolean blocked(double[] a, double[] b) {
-        for (Patch patch : patches) {
+        for (int i = 0; i < patches.size(); i++) {
+            Patch patch = patches.get(i);
+            double[] box = patchBounds[i];
+            if (!patch.through() && (Math.max(a[0], b[0]) < box[0] || Math.min(a[0], b[0]) > box[3]
+                    || Math.max(a[1], b[1]) < box[1] || Math.min(a[1], b[1]) > box[4]
+                    || Math.max(a[2], b[2]) < box[2] || Math.min(a[2], b[2]) > box[5])) {
+                continue;
+            }
             CutPlane p = patch.plane();
             double da = p.signedDistance(a[0], a[1], a[2]), db = p.signedDistance(b[0], b[1], b[2]);
             if ((da > 0) == (db > 0) || Math.abs(da - db) < 1e-12) {

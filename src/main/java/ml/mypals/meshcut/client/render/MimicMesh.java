@@ -24,42 +24,32 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * The cut block as baked quads for the chunk mesh: the imitated model clipped by the cuts, plus the cut faces.
- * Quads are grouped by chunk render layer and by the side whose neighbour may hide them, which is what lets the
- * chunk mesher cull faces. Built from {@link ModelCapturer#captureModel}, so it is safe on chunk-compile threads.
- */
 public final class MimicMesh {
     private static final int SIDES = 7; // the six directions, then "null" (never culled)
     private static final ResourceLocation LAVA = ResourceLocation.withDefaultNamespace("block/lava_still");
-    /** Lifts the lava layer off the base cap to avoid z-fighting. */
     private static final float GLOW_LIFT = 0.002f;
     private static final int GLOW_ARGB = 0x99FFFFFF;
-    /** The charred colour of a scratch's mark on the block face. */
     private static final int SCRATCH_ARGB = 0xFF2A1A12;
     private static final int MAX_CACHED = 4096;
-    /** Width, in blocks, of the slit that marks a cut that has not separated anything yet. */
     private static final double SLIT_WIDTH = 0.08;
-    /** At most this many pending cuts are drawn (a block cannot hold more). */
 
     private static final Map<MimicRenderData, MimicMesh> CACHE = new ConcurrentHashMap<>();
     private static final Map<MimicRenderData, List<MeshPoly>> GLOW = new ConcurrentHashMap<>();
-    /**
-     * The same, by identity: a block entity hands out one data object until it changes, and the model asks for it
-     * for every side and layer (every frame, for a sub-level that is a single block). Hashing and comparing the data
-     * of a cut-up entity each time is slow, so those lookups do neither. Bounded like the caches above, so a mesh
-     * dropped there is not kept alive here; one that falls out is found again by the slow way.
-     */
+
     private static final Cache<MimicRenderData, MimicMesh> BY_IDENTITY = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(MAX_CACHED).build();
     private static final Cache<MimicRenderData, List<MeshPoly>> GLOW_BY_IDENTITY = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(MAX_CACHED).build();
-    /**
-     * The fragment geometry of a block, by identity like the caches above: the chunk mesh and the lava glow both
-     * need it, and it is the expensive part of cutting up a block.
-     */
     private static final Cache<MimicRenderData, SmoothFragments> FRAGMENTS = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(512).build();
+    private static final java.util.concurrent.ExecutorService WORKERS = java.util.concurrent.Executors.newFixedThreadPool(
+            Math.clamp(Runtime.getRuntime().availableProcessors() / 4, 1, 3), task -> {
+                Thread thread = new Thread(task, "meshcut-mesh");
+                thread.setDaemon(true);
+                thread.setPriority(Thread.MIN_PRIORITY + 1);
+                return thread;
+            });
+    private static final Map<MimicRenderData, Boolean> BUILDING = java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -86,10 +76,7 @@ public final class MimicMesh {
         }
     }
 
-    /**
-     * Everything the mesh of a cut block is made of, as text, for debugging: for each piece (region) the model faces,
-     * cut faces and hole walls before baking, with their vertices and normals; then every baked quad.
-     */
+
     public static String describe(MimicRenderData data) {
         StringBuilder sb = new StringBuilder();
         sb.append("target ").append(data.target()).append('\n');
@@ -176,12 +163,44 @@ public final class MimicMesh {
         sb.append('\n');
     }
 
+    /** Runs the task on a mesh worker. */
+    public static void async(Runnable task) {
+        WORKERS.execute(() -> {
+            try {
+                task.run();
+            } catch (Throwable t) {
+                ml.mypals.meshcut.MeshCut.LOGGER.error("Cutting a mesh failed", t);
+            }
+        });
+    }
+
+    private static boolean onRenderThread() {
+        Minecraft minecraft = Minecraft.getInstance();
+        return minecraft != null && minecraft.isSameThread();
+    }
+
     public static MimicMesh of(MimicRenderData data) {
         MimicMesh mesh = BY_IDENTITY.getIfPresent(data);
         if (mesh != null) {
             return mesh;
         }
         mesh = CACHE.get(data);
+        if (mesh == null && onRenderThread()) {
+            if (BUILDING.putIfAbsent(data, Boolean.TRUE) == null) {
+                async(() -> {
+                    try {
+                        MimicMesh built = build(data);
+                        if (CACHE.size() >= MAX_CACHED) {
+                            CACHE.clear();
+                        }
+                        CACHE.put(data, built);
+                    } finally {
+                        BUILDING.remove(data);
+                    }
+                });
+            }
+            return EMPTY; // not cached: the next frame asks again
+        }
         if (mesh == null) {
             mesh = build(data);
             if (CACHE.size() >= MAX_CACHED) {
@@ -360,11 +379,11 @@ public final class MimicMesh {
         if (fragment != null) {
             List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
             surfaces.forEach((type, polys) -> {
-                List<MeshPoly> clipped=fragment.clip(polys);
+                List<MeshPoly> clipped=fragment.clip(polys,data.entity()==null);
                 for(List<CutPlane> hole:holes) clipped=MeshClipper.subtract(clipped,hole);
                 out.put(type,FragmentMesh.liftScars(clipped));
             });
-            List<MeshPoly> caps=fragment.caps(capBase,uv,sprite);
+            List<MeshPoly> caps=fragment.caps(capBase,uv,sprite,data.entity()==null);
             for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
             caps.addAll(fragment.clip(holeFaces(capBase,data.planes(),holes,uv,sprite)));
             out.computeIfAbsent(capLayer,k->new ArrayList<>()).addAll(caps);
@@ -532,19 +551,43 @@ public final class MimicMesh {
             GLOW_BY_IDENTITY.put(data, cached);
             return cached;
         }
-        List<MeshPoly> out = new ArrayList<>();
         if (data.capMode() == CapMode.LAVA) {
+            // what needs the render thread is taken here, the cutting is done by a worker
             List<MeshPoly> opaque = data.entity() != null ? entityPart(data.entity()).opaque()
                     : ModelCapturer.hasBlockEntityRenderer(data.target())
                     ? ModelCapturer.capture(data.target(), data.beTag()).opaque()
                     : ModelCapturer.captureModel(data.target()).opaque();
-            opaque = capBase(opaque, data);
+            List<MeshPoly> base = capBase(opaque, data);
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
+            if (BUILDING.putIfAbsent(data, Boolean.TRUE) != null) {
+                return List.of();
+            }
+            async(() -> {
+                try {
+                    List<MeshPoly> done = glowFrom(data, base, lava);
+                    if (GLOW.size() >= MAX_CACHED) {
+                        GLOW.clear();
+                    }
+                    GLOW.put(data, done);
+                } finally {
+                    BUILDING.remove(data);
+                }
+            });
+            return List.of();
+        }
+        GLOW.put(data, List.of());
+        GLOW_BY_IDENTITY.put(data, List.of());
+        return List.of();
+    }
+
+    private static List<MeshPoly> glowFrom(MimicRenderData data, List<MeshPoly> opaque, TextureAtlasSprite lava) {
+        List<MeshPoly> out = new ArrayList<>();
+        {
             float[] uv = {lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()};
             SmoothFragments fragment=fragments(data);
             if(fragment!=null) {
                 List<List<CutPlane>> holes=VoxelFragments.smoothHoles(data.excluded());
-                List<MeshPoly> caps=fragment.caps(opaque,uv,lava);
+                List<MeshPoly> caps=fragment.caps(opaque,uv,lava,data.entity()==null);
                 for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
                 caps.addAll(fragment.clip(holeFaces(opaque,data.planes(),holes,uv,lava)));
                 for(MeshPoly cap:caps) out.add(glowOf(cap));
@@ -563,11 +606,6 @@ public final class MimicMesh {
                 }
             }
         }
-        if (GLOW.size() >= MAX_CACHED) {
-            GLOW.clear();
-        }
-        GLOW.put(data, out);
-        GLOW_BY_IDENTITY.put(data, out);
         return out;
     }
 
