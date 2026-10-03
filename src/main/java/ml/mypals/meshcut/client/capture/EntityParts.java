@@ -56,7 +56,8 @@ public final class EntityParts {
     private static final double SAME_PIVOT = 0.05;
     /** No box is thinner than this (in blocks): it would have nothing to collide with. */
     private static final double MIN_THICKNESS = 0.02;
-    private static final int MAX_BOXES_PER_LIMB = 48;
+    /** Limbs are made of voxels this big (one model pixel), or bigger if the body would have too many boxes. */
+    private static final double VOXEL = 1 / 16.0;
 
     private enum Role {
         HEAD, TORSO, ARM, LEG, WING, TAIL, ATTACHMENT, OTHER;
@@ -89,6 +90,10 @@ public final class EntityParts {
         final Quaternionf rotation = new Quaternionf();
         final Vector3f origin = new Vector3f();
         final Map<Object, double[]> boxes = new LinkedHashMap<>();
+        /** Its faces in its own frame, as triangles with their normal, by the closed piece (cube) they belong to. */
+        final Map<Object, List<float[]>> triangles = new LinkedHashMap<>();
+        /** The size of the voxels it is made of. */
+        double voxel = VOXEL;
         final Map<RenderType, List<MeshPoly>> faces = new LinkedHashMap<>();
 
         Limb(String name, Role role, PartTags.DrawnPart frame, int parent) {
@@ -228,7 +233,9 @@ public final class EntityParts {
             return single(entity, faces, drawn, whole);
         }
         Set<String> used = new HashSet<>();
-        List<BodySpec> bodies = new ArrayList<>();
+        List<Limb> kept = new ArrayList<>();
+        List<String> keptNames = new ArrayList<>();
+        List<Integer> keptParents = new ArrayList<>();
         Map<String, ModelCapturer.CapturedMesh> meshes = new LinkedHashMap<>();
         for (int i : alive) {
             Limb limb = limbs.get(i);
@@ -243,10 +250,43 @@ public final class EntityParts {
                     break;
                 }
             }
-            bodies.add(spec(name, limb, parent));
+            kept.add(limb);
+            keptNames.add(name);
+            keptParents.add(parent);
             meshes.put(name, new ModelCapturer.CapturedMesh(limb.faces, ModelCapturer.opaqueOf(limb.faces), whole.capUv()));
         }
-        return new ModelCapturer.EntityCapture(whole, meshes, fitBoxes(bodies));
+        return new ModelCapturer.EntityCapture(whole, meshes, specs(kept, keptNames, keptParents));
+    }
+
+    /**
+     * The limbs as the server is to build them, made of voxels. If that is more boxes than the server takes
+     * ({@link BodySpec#MAX_BOXES}), the limb with the most gets bigger voxels, until it fits.
+     */
+    private static List<BodySpec> specs(List<Limb> limbs, List<String> names, List<Integer> parents) {
+        List<BodySpec> out = new ArrayList<>(limbs.size());
+        for (int i = 0; i < limbs.size(); i++) {
+            out.add(spec(names.get(i), limbs.get(i), parents.get(i)));
+        }
+        while (out.stream().mapToInt(b -> b.boxes().size()).sum() > BodySpec.MAX_BOXES) {
+            int most = 0;
+            for (int i = 1; i < out.size(); i++) {
+                if (out.get(i).boxes().size() > out.get(most).boxes().size()) {
+                    most = i;
+                }
+            }
+            Limb limb = limbs.get(most);
+            if (limb.voxel < 1) {
+                limb.voxel *= 2;
+                out.set(most, spec(names.get(most), limb, parents.get(most)));
+            } else {
+                // whole-block voxels and still too many: the nearest boxes are joined
+                BodySpec b = out.get(most);
+                int excess = out.stream().mapToInt(x -> x.boxes().size()).sum() - BodySpec.MAX_BOXES;
+                List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, b.boxes().size() - excess));
+                out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
+            }
+        }
+        return out;
     }
 
     /**
@@ -279,30 +319,6 @@ public final class EntityParts {
 
     private static double volume(double[] b) {
         return Math.max(0, b[3] - b[0]) * Math.max(0, b[4] - b[1]) * Math.max(0, b[5] - b[2]);
-    }
-
-    /**
-     * Keeps the whole body within what the server takes ({@link BodySpec#MAX_BOXES}): the limbs with the most boxes
-     * are made of one box each until it fits. Coarser collision, but nothing of the model is lost.
-     */
-    private static List<BodySpec> fitBoxes(List<BodySpec> bodies) {
-        List<BodySpec> out = new ArrayList<>(bodies);
-        while (out.stream().mapToInt(b -> b.boxes().size()).sum() > BodySpec.MAX_BOXES) {
-            int most = 0;
-            for (int i = 1; i < out.size(); i++) {
-                if (out.get(i).boxes().size() > out.get(most).boxes().size()) {
-                    most = i;
-                }
-            }
-            BodySpec b = out.get(most);
-            if (b.boxes().size() <= 1) {
-                break;
-            }
-            int excess = out.stream().mapToInt(x -> x.boxes().size()).sum() - BodySpec.MAX_BOXES;
-            List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, Math.max(b.boxes().size() / 2, b.boxes().size() - excess)));
-            out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
-        }
-        return out;
     }
 
     /** Everything as one rigid piece, in the frame of its biggest part (a boat's hull lies along the boat). */
@@ -340,11 +356,14 @@ public final class EntityParts {
         }
         Map<String, ModelCapturer.CapturedMesh> meshes = Map.of(limb.name,
                 new ModelCapturer.CapturedMesh(limb.faces, ModelCapturer.opaqueOf(limb.faces), whole.capUv()));
-        return new ModelCapturer.EntityCapture(whole, meshes, List.of(spec(limb.name, limb, -1)));
+        return new ModelCapturer.EntityCapture(whole, meshes, specs(List.of(limb), List.of(limb.name), List.of(-1)));
     }
 
     private static BodySpec spec(String name, Limb limb, int parent) {
-        List<double[]> boxes = merged(new ArrayList<>(limb.boxes.values()), MAX_BOXES_PER_LIMB);
+        List<double[]> boxes = Voxelizer.boxes(new ArrayList<>(limb.triangles.values()), limb.voxel);
+        if (boxes.isEmpty()) {
+            boxes = new ArrayList<>(limb.boxes.values());
+        }
         List<double[]> out = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {
             double[] t = b.clone();
@@ -362,9 +381,25 @@ public final class EntityParts {
         return new BodySpec(name, new double[]{q.x, q.y, q.z, q.w}, origin, out, parent, origin.clone());
     }
 
-    /** Adds a face to the limb, and grows the box it belongs to (by its cube, or the limb's loose box). */
+    /**
+     * Adds a face to the limb: to what it draws, to the closed piece it belongs to (by its cube, or the limb's loose
+     * faces) for the voxels, and to that piece's box.
+     */
     private static void add(Limb limb, RenderType type, MeshPoly poly, Object box) {
         limb.faces.computeIfAbsent(type, k -> new ArrayList<>()).add(poly);
+        List<float[]> tris = limb.triangles.computeIfAbsent(box, k -> new ArrayList<>());
+        Quaternionf toFrame = new Quaternionf(limb.rotation).conjugate();
+        Vector3f n = toFrame.transform(new Vector3f(poly.nx(), poly.ny(), poly.nz()));
+        float[] pv = poly.verts();
+        Vector3f[] local = new Vector3f[poly.vertexCount()];
+        for (int i = 0; i < local.length; i++) {
+            local[i] = toFrame.transform(new Vector3f(pv[i * MeshPoly.STRIDE], pv[i * MeshPoly.STRIDE + 1], pv[i * MeshPoly.STRIDE + 2])
+                    .sub(limb.origin));
+        }
+        for (int i = 1; i + 1 < local.length; i++) {
+            tris.add(new float[]{local[0].x, local[0].y, local[0].z, local[i].x, local[i].y, local[i].z,
+                    local[i + 1].x, local[i + 1].y, local[i + 1].z, n.x, n.y, n.z});
+        }
         double[] b = limb.boxes.computeIfAbsent(box,
                 k -> new double[]{Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE});
         float[] v = poly.verts();

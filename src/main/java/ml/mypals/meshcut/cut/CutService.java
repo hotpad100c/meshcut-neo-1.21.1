@@ -438,11 +438,16 @@ public final class CutService {
 
     static ServerSubLevel assemble(ServerLevel level, List<BlockPos> blocks) {
         // limbs joined to the sub-level the blocks leave may have to follow them; see RagdollJoints
-        if (Sable.HELPER.getContaining(level, blocks.get(0)) instanceof ServerSubLevel source) {
-            ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source);
+        ServerSubLevel source = Sable.HELPER.getContaining(level, blocks.get(0)) instanceof ServerSubLevel s ? s : null;
+        if (source != null) {
+            ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, null);
         }
         try {
-            return SubLevelAssemblyHelper.assembleBlocks(level, blocks.get(0), blocks, BoundingBox3i.from(blocks));
+            ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.get(0), blocks, BoundingBox3i.from(blocks));
+            if (source != null && made != null) {
+                ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, made);
+            }
+            return made;
         } catch (RuntimeException e) {
             MeshCut.LOGGER.error("Failed to assemble {} cut blocks into a sub-level", blocks.size(), e);
             return null;

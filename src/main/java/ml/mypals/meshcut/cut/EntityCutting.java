@@ -54,10 +54,13 @@ import java.util.function.Consumer;
  */
 public final class EntityCutting {
     /**
-     * No part of a limb in a block is thinner than this (in blocks): a sliver of a limb that just reaches into a block
-     * still gets that block, or what of the model is there would not be drawn by anyone.
+     * The parts of a limb in a block lie on a grid this fine (per block), and are never thinner than one step of it: a
+     * sliver of a limb that just reaches into a block still gets that block, or what of the model is there would not
+     * be drawn by anyone.
      */
-    private static final double MIN_PART = 0.03;
+    private static final int GRID = 16;
+    /** At most this many collision boxes in one block of a body. */
+    private static final int MAX_BOXES_PER_BLOCK = 6;
     /** At most this many blocks for one body (a client could ask for anything). */
     private static final int MAX_CELLS = 65536;
     /** How long a client may take to answer (ticks). */
@@ -241,7 +244,9 @@ public final class EntityCutting {
                 RagdollJoints.join(level, built.get(spec.parent()), bodies.get(spec.parent()).name(), built.get(i), spec.name(), anchor);
             }
         }
-        int limbs = (int) built.stream().filter(java.util.Objects::nonNull).count();
+        List<ServerSubLevel> made = built.stream().filter(java.util.Objects::nonNull).toList();
+        RagdollJoints.ghostOverlapping(level, made); // limbs that overlap do not throw each other apart
+        int limbs = made.size();
         MeshCut.LOGGER.info("Cut down a {}: {} limb(s){}", look.type(), limbs, bodies == asBox ? " (one piece the size of its box)" : "");
         built.removeIf(java.util.Objects::isNull);
         return built;
@@ -431,12 +436,15 @@ public final class EntityCutting {
                     for (int z = (int) Math.floor(b[2]); z <= (int) Math.floor(b[5] - 1e-9); z++) {
                         double[] in = {Math.max(b[0] - x, 0), Math.max(b[1] - y, 0), Math.max(b[2] - z, 0),
                                 Math.min(b[3] - x, 1), Math.min(b[4] - y, 1), Math.min(b[5] - z, 1)};
-                        for (int a = 0; a < 3; a++) { // a sliver is thickened into the block, never cut off
-                            if (in[a + 3] - in[a] < MIN_PART) {
-                                if (in[a] + MIN_PART <= 1) {
-                                    in[a + 3] = in[a] + MIN_PART;
+                        for (int a = 0; a < 3; a++) {
+                            // on the grid of a model pixel: blocks of the same shape share one collider
+                            in[a] = Math.floor(in[a] * GRID + 1e-6) / GRID;
+                            in[a + 3] = Math.ceil(in[a + 3] * GRID - 1e-6) / GRID;
+                            if (in[a + 3] - in[a] < 1.0 / GRID) { // a sliver is thickened into the block, never cut off
+                                if (in[a] + 1.0 / GRID <= 1) {
+                                    in[a + 3] = in[a] + 1.0 / GRID;
                                 } else {
-                                    in[a] = in[a + 3] - MIN_PART;
+                                    in[a] = in[a + 3] - 1.0 / GRID;
                                 }
                             }
                         }
@@ -448,6 +456,8 @@ public final class EntityCutting {
         if (cells.isEmpty()) {
             return null;
         }
+        // every box of a block is a collider the physics engine tests on its own: a few per block are plenty
+        cells.replaceAll((c, boxes) -> ml.mypals.meshcut.geom.VoxelBoxes.join(boxes, MAX_BOXES_PER_BLOCK));
         int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
         int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
         for (BlockPos c : cells.keySet()) {

@@ -20,7 +20,8 @@ import java.util.List;
 public record BodySpec(@Nullable String name, double[] rotation, double[] origin, List<double[]> boxes, int parent,
                        double[] anchor) {
     public static final int MAX_BODIES = 32;
-    public static final int MAX_BOXES = 256;
+    /** Boxes travel as floats: this many fit in what a client may send (32 KiB) with room to spare. */
+    public static final int MAX_BOXES = 1000;
 
     public void write(FriendlyByteBuf buf) {
         buf.writeBoolean(name != null);
@@ -31,7 +32,9 @@ public record BodySpec(@Nullable String name, double[] rotation, double[] origin
         writeDoubles(buf, origin);
         buf.writeVarInt(boxes.size());
         for (double[] b : boxes) {
-            writeDoubles(buf, b);
+            for (double v : b) {
+                buf.writeFloat((float) v);
+            }
         }
         buf.writeVarInt(parent + 1);
         writeDoubles(buf, anchor);
@@ -47,7 +50,11 @@ public record BodySpec(@Nullable String name, double[] rotation, double[] origin
         }
         List<double[]> boxes = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            boxes.add(readDoubles(buf, 6));
+            double[] b = new double[6];
+            for (int k = 0; k < 6; k++) {
+                b[k] = buf.readFloat();
+            }
+            boxes.add(b);
         }
         int parent = buf.readVarInt() - 1;
         return new BodySpec(name, rotation, origin, boxes, parent, readDoubles(buf, 3));

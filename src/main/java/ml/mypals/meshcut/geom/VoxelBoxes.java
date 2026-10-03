@@ -52,6 +52,44 @@ public final class VoxelBoxes {
     }
 
     /**
+     * Joins boxes until there are at most {@code limit}: each time the two whose joint box adds the least empty space.
+     * Everything stays covered; the shape only gets coarser.
+     */
+    public static List<double[]> join(List<double[]> boxes, int limit) {
+        List<double[]> out = new ArrayList<>(boxes.size());
+        for (double[] b : boxes) {
+            out.add(b.clone());
+        }
+        while (out.size() > Math.max(1, limit)) {
+            int bestA = 0, bestB = 1;
+            double bestWaste = Double.MAX_VALUE;
+            for (int a = 0; a < out.size(); a++) {
+                for (int b = a + 1; b < out.size(); b++) {
+                    double[] p = out.get(a), q = out.get(b);
+                    double union = (Math.max(p[3], q[3]) - Math.min(p[0], q[0])) * (Math.max(p[4], q[4]) - Math.min(p[1], q[1]))
+                            * (Math.max(p[5], q[5]) - Math.min(p[2], q[2]));
+                    double waste = union - boxVolume(p) - boxVolume(q);
+                    if (waste < bestWaste) {
+                        bestWaste = waste;
+                        bestA = a;
+                        bestB = b;
+                    }
+                }
+            }
+            double[] p = out.get(bestA), q = out.remove(bestB);
+            for (int k = 0; k < 3; k++) {
+                p[k] = Math.min(p[k], q[k]);
+                p[k + 3] = Math.max(p[k + 3], q[k + 3]);
+            }
+        }
+        return out;
+    }
+
+    private static double boxVolume(double[] b) {
+        return (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
+    }
+
+    /**
      * How much of the shape is left after the cuts (cubic blocks), as finely as {@link #cut} finds it but without
      * the token cell it adds to a piece too thin to find: zero means nothing is left.
      */

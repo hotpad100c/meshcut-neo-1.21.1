@@ -32,7 +32,9 @@ import java.util.function.Supplier;
  * (imitated block, quantised cuts) and live for the lifetime of the JVM.
  */
 public final class MimicColliders {
-    private static final int MAX_ENTRIES = 4096;
+    private static final int MAX_ENTRIES = 16384;
+    /** ...and at most this many coarse ones once that is full; see {@link #coarse}. */
+    private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
 
     private record Pending(ServerLevel level, BlockPos pos) {}
@@ -59,10 +61,20 @@ public final class MimicColliders {
         if (entry != null) {
             return entry;
         }
-        if (ENTRIES.size() >= MAX_ENTRIES) {
-            return fallback.get(); // native entries can't be freed; stop growing
-        }
         List<double[]> boxes = MimicShapes.boxes(key);
+        if (ENTRIES.size() >= MAX_ENTRIES) {
+            // Native entries can't be freed, so the cache stops growing; a whole block in their place would make
+            // overlapping bodies push each other apart with enormous force. Shapes coarse enough to repeat instead.
+            key = coarse(key, boxes);
+            entry = ENTRIES.get(key);
+            if (entry != null) {
+                return entry;
+            }
+            if (ENTRIES.size() >= MAX_ENTRIES + MAX_COARSE) {
+                return fallback.get();
+            }
+            boxes = key.baseBoxes();
+        }
         if (boxes.isEmpty()) {
             entry = RapierVoxelColliderData.EMPTY;
         } else {
@@ -78,6 +90,26 @@ public final class MimicColliders {
         }
         ENTRIES.put(key, entry);
         return entry;
+    }
+
+    /**
+     * The shape on a quarter-block grid, in at most four boxes, standing as an uncut block of that shape (so the
+     * same coarse shape is one entry, whatever cuts made it). It weighs what the coarse shape fills.
+     */
+    private static MimicShapes.Key coarse(MimicShapes.Key key, List<double[]> boxes) {
+        List<double[]> snapped = new ArrayList<>(boxes.size());
+        for (double[] b : boxes) {
+            double[] s = new double[6];
+            for (int a = 0; a < 3; a++) {
+                s[a] = Math.floor(b[a] * 4 + 1e-6) / 4;
+                s[a + 3] = Math.ceil(b[a + 3] * 4 - 1e-6) / 4;
+            }
+            snapped.add(s);
+        }
+        List<double[]> joined = VoxelBoxes.join(snapped, 4);
+        joined.sort(java.util.Comparator.comparingDouble((double[] b) -> b[0]).thenComparingDouble(b -> b[1])
+                .thenComparingDouble(b -> b[2]).thenComparingDouble(b -> b[3]).thenComparingDouble(b -> b[4]));
+        return MimicShapes.Key.of(key.target(), List.of(), List.of(), joined);
     }
 
     /** Re-reads colliders of mimics that were first seen without their block entity. */

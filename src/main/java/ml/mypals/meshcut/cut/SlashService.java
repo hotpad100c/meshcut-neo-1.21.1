@@ -784,7 +784,7 @@ public final class SlashService {
             return;
         }
         var physics = container.physicsSystem();
-        ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, sub); // its joints were made for the old centre of mass
+        ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, sub, null); // its joints were made for the old centre of mass
         try {
             Vector3dc before = sub.getMassTracker().getCenterOfMass();
             Vector3d oldCenter = before == null ? null : new Vector3d(before);
