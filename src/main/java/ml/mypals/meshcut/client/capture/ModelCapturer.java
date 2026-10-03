@@ -118,7 +118,15 @@ public final class ModelCapturer {
         ALPHA_CACHE.clear();
     }
 
-    private static final Map<EntityAppearance.Look, CapturedMesh> ENTITY_CACHE = new HashMap<>();
+    /**
+     * A recorded entity: all of it, and the limbs it was taken apart into (see {@link EntityParts}).
+     *
+     * @param limbs  the faces of each limb, by its name, where the entity stood (not yet in the limb's frame)
+     * @param bodies how to build the limbs; empty if the entity could not be drawn
+     */
+    public record EntityCapture(CapturedMesh whole, Map<String, CapturedMesh> limbs, List<ml.mypals.meshcut.cut.BodySpec> bodies) {}
+
+    private static final Map<EntityAppearance.Look, EntityCapture> ENTITY_CACHE = new HashMap<>();
     private static final ResourceLocation FLESH = ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "block/flesh");
     private static boolean warnedAboutEntity;
 
@@ -128,33 +136,48 @@ public final class ModelCapturer {
      * Render thread only; cached per look.
      */
     public static CapturedMesh captureEntity(EntityAppearance.Look look) {
+        return captureEntityParts(look).whole();
+    }
+
+    /** {@link #captureEntity}, also taken apart into limbs. */
+    public static EntityCapture captureEntityParts(EntityAppearance.Look look) {
         return ENTITY_CACHE.computeIfAbsent(look, ModelCapturer::doCaptureEntity);
     }
 
-    private static CapturedMesh doCaptureEntity(EntityAppearance.Look look) {
+    private static EntityCapture doCaptureEntity(EntityAppearance.Look look) {
         Minecraft minecraft = Minecraft.getInstance();
         TextureAtlasSprite flesh = minecraft.getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(FLESH);
         float[] uv = {flesh.getU0(), flesh.getV0(), flesh.getU1(), flesh.getV1()};
-        Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
+        Map<RenderType, List<RecordingBufferSource.Tagged>> tagged = new LinkedHashMap<>();
+        Entity entity = null;
+        List<PartTags.DrawnPart> drawn = List.of();
         if (minecraft.level != null) {
             try {
-                Entity entity = createEntity(minecraft.level, look);
+                entity = createEntity(minecraft.level, look);
                 if (entity != null) {
                     RecordingBufferSource recorder = new RecordingBufferSource();
                     recording = true;
+                    PartTags.begin();
                     try {
                         minecraft.getEntityRenderDispatcher().render(entity, 0, 0, 0, look.bodyYaw(), 0f, new PoseStack(),
                                 recorder, 0xF000F0);
                     } finally {
                         recording = false;
+                        drawn = PartTags.end();
                     }
-                    recorder.finish().forEach((type, polys) -> {
+                    recorder.finishTagged().forEach((type, faces) -> {
                         String name = layerName(type);
                         // the name tag, the shadow and debug boxes are not part of the body
                         if (!name.startsWith("text") && !name.contains("shadow") && !name.equals("lines")) {
-                            List<MeshPoly> seen = visible(type, polys);
+                            Alpha alpha = alphaOf(type);
+                            List<RecordingBufferSource.Tagged> seen = new ArrayList<>(faces.size());
+                            for (RecordingBufferSource.Tagged face : faces) {
+                                if (alpha == null || seen(face.poly(), alpha)) {
+                                    seen.add(face);
+                                }
+                            }
                             if (!seen.isEmpty()) {
-                                byType.computeIfAbsent(type, k -> new ArrayList<>()).addAll(seen);
+                                tagged.computeIfAbsent(type, k -> new ArrayList<>()).addAll(seen);
                             }
                         }
                     });
@@ -166,15 +189,32 @@ public final class ModelCapturer {
                 }
             }
         }
+        Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
+        tagged.forEach((type, faces) -> byType.put(type, faces.stream().map(RecordingBufferSource.Tagged::poly).toList()));
+        CapturedMesh whole = new CapturedMesh(byType, opaqueOf(byType), uv);
+        EntityCapture capture;
+        try {
+            capture = entity == null ? new EntityCapture(whole, Map.of(), List.of())
+                    : EntityParts.split(entity, look, tagged, drawn, whole);
+        } catch (RuntimeException e) {
+            MeshCut.LOGGER.warn("Couldn't take the cut-up {} apart into limbs", look.type(), e);
+            capture = new EntityCapture(whole, Map.of(), List.of());
+        }
+        int faces = byType.values().stream().mapToInt(List::size).sum();
+        MeshCut.LOGGER.info("Recorded the look of a cut-up {}: {} faces in {} layers, {} limb(s)", look.type(), faces,
+                byType.size(), capture.bodies().size());
+        return capture;
+    }
+
+    /** The faces that are not see-through: what cut faces are worked out from. */
+    static List<MeshPoly> opaqueOf(Map<RenderType, List<MeshPoly>> byType) {
         List<MeshPoly> opaque = new ArrayList<>();
         byType.forEach((type, polys) -> {
             if (!type.toString().contains("translucent")) {
                 opaque.addAll(polys);
             }
         });
-        int faces = byType.values().stream().mapToInt(List::size).sum();
-        MeshCut.LOGGER.info("Recorded the look of a cut-up {}: {} faces in {} layers", look.type(), faces, byType.size());
-        return new CapturedMesh(byType, opaque, uv);
+        return opaque;
     }
 
     /** The alpha channel of a texture, row by row. */
@@ -194,20 +234,12 @@ public final class ModelCapturer {
      * (the villager's hat brim, which only the farmer's texture fills in; the outer layer of a skin); the game
      * throws those pixels away, but here they would be cut faces and walls with nothing around them.
      */
-    private static List<MeshPoly> visible(RenderType type, List<MeshPoly> polys) {
+    @Nullable
+    private static Alpha alphaOf(RenderType type) {
         java.util.regex.Matcher m = TEXTURE.matcher(type.toString());
         ResourceLocation location = m.find() ? ResourceLocation.tryParse(m.group(1)) : null;
-        Alpha alpha = location == null ? null : ALPHA_CACHE.computeIfAbsent(location, l -> java.util.Optional.ofNullable(readAlpha(l))).orElse(null);
-        if (alpha == null) {
-            return polys; // no texture to go by: keep everything
-        }
-        List<MeshPoly> out = new ArrayList<>(polys.size());
-        for (MeshPoly p : polys) {
-            if (seen(p, alpha)) {
-                out.add(p);
-            }
-        }
-        return out;
+        // no texture to go by: everything is kept
+        return location == null ? null : ALPHA_CACHE.computeIfAbsent(location, l -> java.util.Optional.ofNullable(readAlpha(l))).orElse(null);
     }
 
     /** Whether any texel under the face is kept by a cutout shader. */

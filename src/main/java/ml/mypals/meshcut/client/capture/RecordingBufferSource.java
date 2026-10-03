@@ -23,6 +23,25 @@ public final class RecordingBufferSource implements MultiBufferSource {
         return recorders.computeIfAbsent(type, Recorder::new);
     }
 
+    /** A recorded face and what drew it (see {@link PartTags}); the tag is null outside a model part. */
+    public record Tagged(MeshPoly poly, @org.jetbrains.annotations.Nullable PartTags.Tag tag) {}
+
+    /** The recorded faces per render type, each with what drew it. */
+    public Map<RenderType, List<Tagged>> finishTagged() {
+        Map<RenderType, List<Tagged>> out = new LinkedHashMap<>();
+        recorders.forEach((type, rec) -> {
+            List<MeshPoly> polys = rec.toPolys();
+            List<Tagged> tagged = new ArrayList<>(polys.size());
+            for (int i = 0; i < polys.size(); i++) {
+                tagged.add(new Tagged(polys.get(i), i < rec.tags.size() ? rec.tags.get(i) : null));
+            }
+            if (!tagged.isEmpty()) {
+                out.put(type, tagged);
+            }
+        });
+        return out;
+    }
+
     public Map<RenderType, List<MeshPoly>> finish() {
         Map<RenderType, List<MeshPoly>> out = new LinkedHashMap<>();
         recorders.forEach((type, rec) -> {
@@ -38,6 +57,8 @@ public final class RecordingBufferSource implements MultiBufferSource {
         private final int primitive;
         /** x, y, z, u, v, argb(as float bits), nx, ny, nz per vertex */
         private final List<float[]> vertices = new ArrayList<>();
+        /** What drew each primitive, taken as its first vertex comes. */
+        final List<PartTags.Tag> tags = new ArrayList<>();
         private float[] cur;
 
         Recorder(RenderType type) {
@@ -47,6 +68,9 @@ public final class RecordingBufferSource implements MultiBufferSource {
 
         @Override
         public VertexConsumer addVertex(float x, float y, float z) {
+            if (primitive > 0 && vertices.size() % primitive == 0) {
+                tags.add(PartTags.current());
+            }
             cur = new float[9];
             cur[0] = x;
             cur[1] = y;

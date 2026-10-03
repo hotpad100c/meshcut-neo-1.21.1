@@ -235,7 +235,15 @@ public final class SlashService {
         // creatures first: their bodies become sub-levels, which the cut below then goes through like any other
         List<EntityCutting.Swept> swept = new ArrayList<>(sweeps.size());
         sweeps.forEach(sweep -> swept.add(new EntityCutting.Swept(sweep.quad())));
-        EntityCutting.cut(level, swept, wielder);
+        // bodies built later (once a client has said what their limbs are) are cut by the same swing then
+        EntityCutting.cut(level, swept, wielder, bodies -> {
+            MimicBlock.setGlowingCuts(true);
+            try {
+                cutSubLevels(level, sweeps, bodies, mode, new int[1]);
+            } finally {
+                MimicBlock.setGlowingCuts(false);
+            }
+        });
 
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
@@ -274,6 +282,15 @@ public final class SlashService {
         }
         int staticBlocks = process(level, null, StrokeFit.fitPatches(worldFragments), representative, mode, created);
 
+        int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
+        return new CutService.Result(staticBlocks, cutLevels, created[0]);
+    }
+
+    /** Cuts the sub-levels with the swing. @return how many of them it went through */
+    private static int cutSubLevels(ServerLevel level, List<Sweep> sweeps, List<ServerSubLevel> subLevels, CapMode mode,
+                                    int[] created) {
+        var container = SubLevelContainer.getContainer(level);
+        Vec3 representative = sweeps.get(0).n();
         int cutLevels = 0;
         for (ServerSubLevel sub : subLevels) {
             if (sub.isRemoved()) {
@@ -301,7 +318,7 @@ public final class SlashService {
                 cutLevels++;
             }
         }
-        return new CutService.Result(staticBlocks, cutLevels, created[0]);
+        return cutLevels;
     }
 
     /** More candidate blocks than this and the swept quad is not worth walking cell by cell: its samples are used. */
@@ -767,6 +784,7 @@ public final class SlashService {
             return;
         }
         var physics = container.physicsSystem();
+        ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, sub); // its joints were made for the old centre of mass
         try {
             Vector3dc before = sub.getMassTracker().getCenterOfMass();
             Vector3d oldCenter = before == null ? null : new Vector3d(before);

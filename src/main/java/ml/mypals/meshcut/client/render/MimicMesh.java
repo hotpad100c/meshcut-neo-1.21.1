@@ -85,8 +85,12 @@ public final class MimicMesh {
         sb.append("patches ").append(data.patches()).append('\n');
         if (data.entity() != null) {
             var e = data.entity();
-            sb.append("entity ").append(e.look().type()).append(" origin ").append(java.util.Arrays.toString(e.origin()))
-                    .append(" bounds ").append(java.util.Arrays.toString(e.bounds())).append('\n');
+            sb.append("entity ").append(e.look().type()).append(" limb ").append(e.part())
+                    .append(" rotation ").append(java.util.Arrays.toString(e.rotation()))
+                    .append(" origin ").append(java.util.Arrays.toString(e.origin())).append('\n');
+            for (double[] b : e.boxes()) {
+                sb.append("  box ").append(java.util.Arrays.toString(b)).append('\n');
+            }
             ModelCapturer.CapturedMesh whole = ModelCapturer.captureEntity(e.look());
             whole.byType().forEach((type, polys) -> sb.append("  recorded ").append(polys.size()).append(" faces in ").append(type).append('\n'));
             ModelCapturer.CapturedMesh part = entityPart(e);
@@ -204,23 +208,35 @@ public final class MimicMesh {
      * faces from. Render thread only.
      */
     public static ModelCapturer.CapturedMesh entityPart(ml.mypals.meshcut.block.EntityAppearance entity) {
-        ModelCapturer.CapturedMesh whole = ModelCapturer.captureEntity(entity.look());
+        ModelCapturer.EntityCapture capture = ModelCapturer.captureEntityParts(entity.look());
+        ModelCapturer.CapturedMesh source = entity.part() == null ? capture.whole() : capture.limbs().get(entity.part());
+        if (source == null) {
+            // this client took the entity apart differently from the one that built the body (other mods, say)
+            return new ModelCapturer.CapturedMesh(Map.of(), List.of(), capture.whole().capUv());
+        }
+        double[] r = entity.rotation();
+        org.joml.Quaternionf inverse = new org.joml.Quaternionf((float) r[0], (float) r[1], (float) r[2], (float) r[3]).conjugate();
         double[] o = entity.origin();
         Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
-        whole.byType().forEach((type, polys) -> byType.put(type, MeshClipper.clip(shift(polys, o), CUBE)));
-        return new ModelCapturer.CapturedMesh(byType, shift(whole.opaque(), o), whole.capUv());
+        source.byType().forEach((type, polys) -> byType.put(type, MeshClipper.clip(place(polys, inverse, o), CUBE)));
+        return new ModelCapturer.CapturedMesh(byType, place(source.opaque(), inverse, o), source.capUv());
     }
 
-    private static List<MeshPoly> shift(List<MeshPoly> polys, double[] by) {
+    /** The faces turned by {@code rotation} and then moved by {@code by}. */
+    private static List<MeshPoly> place(List<MeshPoly> polys, org.joml.Quaternionf rotation, double[] by) {
         List<MeshPoly> out = new ArrayList<>(polys.size());
-        for (MeshPoly p : polys) {
-            float[] v = p.verts().clone();
+        org.joml.Vector3f p = new org.joml.Vector3f();
+        for (MeshPoly poly : polys) {
+            float[] v = poly.verts().clone();
             for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
-                v[i] += (float) by[0];
-                v[i + 1] += (float) by[1];
-                v[i + 2] += (float) by[2];
+                rotation.transform(p.set(v[i], v[i + 1], v[i + 2]));
+                v[i] = p.x + (float) by[0];
+                v[i + 1] = p.y + (float) by[1];
+                v[i + 2] = p.z + (float) by[2];
             }
-            out.add(p.withVerts(v));
+            rotation.transform(p.set(poly.nx(), poly.ny(), poly.nz()));
+            out.add(new MeshPoly(v, p.x, p.y, p.z, poly.tintIndex(), poly.lightEmission(), poly.argb(), poly.sprite(),
+                    poly.cullFace(), poly.shade()));
         }
         return out;
     }

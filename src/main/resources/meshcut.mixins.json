@@ -11,6 +11,9 @@
   ],
   "client": [
     "FlywheelVisualizationMixin",
+    "ModelPartAccessor",
+    "ModelPartCubeMixin",
+    "ModelPartMixin",
     "LightsaberGameRendererMixin",
     "LightsaberArmPoseMixin"
   ],

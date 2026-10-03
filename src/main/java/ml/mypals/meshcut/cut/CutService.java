@@ -69,7 +69,7 @@ public final class CutService {
                  CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe, @Nullable EntityAppearance entity) {
         /** What there is of it to cut: the part of an entity it holds, or the imitated block's shape. */
         List<double[]> cutBoxes() {
-            return entity != null ? List.of(entity.bounds()) : MimicShapes.cutBoxes(target);
+            return entity != null ? entity.boxes() : MimicShapes.cutBoxes(target);
         }
     }
 
@@ -437,6 +437,10 @@ public final class CutService {
     }
 
     static ServerSubLevel assemble(ServerLevel level, List<BlockPos> blocks) {
+        // limbs joined to the sub-level the blocks leave may have to follow them; see RagdollJoints
+        if (Sable.HELPER.getContaining(level, blocks.get(0)) instanceof ServerSubLevel source) {
+            ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source);
+        }
         try {
             return SubLevelAssemblyHelper.assembleBlocks(level, blocks.get(0), blocks, BoundingBox3i.from(blocks));
         } catch (RuntimeException e) {

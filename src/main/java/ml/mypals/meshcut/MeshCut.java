@@ -71,6 +71,8 @@ public class MeshCut {
         ITEMS.register(modEventBus);
         COMPONENTS.register(modEventBus);
         LightsaberMotion.register(modEventBus);
+        modEventBus.addListener(ml.mypals.meshcut.network.EntityPartsNet::register);
+        ml.mypals.meshcut.physics.RagdollJoints.register();
         modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
             if (e.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
                 e.accept(LIGHTSABER);
@@ -80,6 +82,7 @@ public class MeshCut {
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
         NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
+        NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerTick);
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.ChunkEvent.Unload e) -> {
             if (e.getLevel() instanceof net.minecraft.server.level.ServerLevel server) {
                 ml.mypals.meshcut.cut.graph.WorldGraphs.onChunkUnload(server, e.getChunk().getPos().x, e.getChunk().getPos().z);

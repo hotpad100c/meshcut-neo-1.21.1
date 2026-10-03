@@ -129,12 +129,12 @@ public class MimicBlockEntity extends BlockEntity {
 
     /** What there is of this block to cut: the part of an entity it holds, or the imitated block's shape. */
     public List<double[]> cutBoxes() {
-        return appearance != null ? List.of(appearance.bounds()) : MimicShapes.cutBoxes(targetState);
+        return appearance != null ? appearance.boxes() : MimicShapes.cutBoxes(targetState);
     }
 
     /** The key of this block's collision geometry. */
     public MimicShapes.Key shapeKey() {
-        return MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.bounds());
+        return MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
     }
 
     /** Collision / selection shape of what is left of the block, cached per version. */

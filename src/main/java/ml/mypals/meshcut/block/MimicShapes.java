@@ -28,10 +28,11 @@ public final class MimicShapes {
     private static final double QUANT = 1000.0;
     private static final double MIN_FRACTION = 0.004;
 
-    /** Imitated block plus its cuts, quantised so near-identical cuts share one cache entry. */
     /**
-     * @param base the box the block is made of instead of the imitated block's collision boxes (a part of an
-     *             entity's body), quantised; null for the imitated block's own shape
+     * Imitated block plus its cuts, quantised so near-identical cuts share one cache entry.
+     *
+     * @param base the boxes the block is made of instead of the imitated block's collision boxes (a part of an
+     *             entity's body), six values each, quantised; null for the imitated block's own shape
      */
     public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable List<Double> base) {
         public static Key of(BlockState target, List<CutPlane> planes) {
@@ -42,19 +43,21 @@ public final class MimicShapes {
             return of(target, planes, excluded, null);
         }
 
-        public static Key of(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable double[] base) {
+        public static Key of(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable List<double[]> base) {
             List<List<CutPlane>> regions = new ArrayList<>(excluded.size());
             for (List<CutPlane> region : excluded) {
                 regions.add(quantised(region));
             }
-            List<Double> box = null;
+            List<Double> boxes = null;
             if (base != null) {
-                box = new ArrayList<>(6);
-                for (double v : base) {
-                    box.add(round(v));
+                boxes = new ArrayList<>(base.size() * 6);
+                for (double[] b : base) {
+                    for (double v : b) {
+                        boxes.add(round(v));
+                    }
                 }
             }
-            return new Key(target, quantised(planes), regions, box);
+            return new Key(target, quantised(planes), regions, boxes);
         }
 
         /** What the block is made of before it is cut. */
@@ -62,11 +65,15 @@ public final class MimicShapes {
             if (base == null) {
                 return targetBoxes(target);
             }
-            double[] b = new double[6];
-            for (int i = 0; i < 6; i++) {
-                b[i] = base.get(i);
+            List<double[]> out = new ArrayList<>(base.size() / 6);
+            for (int i = 0; i + 6 <= base.size(); i += 6) {
+                double[] b = new double[6];
+                for (int k = 0; k < 6; k++) {
+                    b[k] = base.get(i + k);
+                }
+                out.add(b);
             }
-            return List.of(b);
+            return out;
         }
 
         private static List<CutPlane> quantised(List<CutPlane> planes) {

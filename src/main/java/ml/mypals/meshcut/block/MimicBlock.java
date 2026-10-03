@@ -80,6 +80,9 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         builder.add(REFRESH, WATERLOGGED);
     }
 
+    /** A block holding less of a body than this (in cubic blocks) holds nothing. */
+    private static final double EMPTY_BODY_VOLUME = 2e-4;
+
     /** Places a mimic of {@code target} cut by {@code planes} (block-local half-spaces). */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes, CapMode mode,
                              @Nullable CompoundTag beTag) {
@@ -99,6 +102,15 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
                              @Nullable EntityAppearance entity) {
+        if (entity != null && ml.mypals.meshcut.geom.VoxelBoxes.volume(
+                MimicShapes.boxes(MimicShapes.Key.of(target, planes, excluded, entity.boxes()))) < EMPTY_BODY_VOLUME) {
+            // nothing of the body is left in this block (it was all cut away, or only ever passed by): it goes, or
+            // it would hold together what is no longer touching
+            if (level.getBlockState(pos).getBlock() instanceof MimicBlock) {
+                level.setBlock(pos, level.getFluidState(pos).createLegacyBlock(), UPDATE_ALL);
+            }
+            return;
+        }
         // A block Sable saw being placed had no block entity yet, so it weighed what a default mimic weighs.
         boolean fresh = !(level.getBlockState(pos).getBlock() instanceof MimicBlock);
         if (fresh) {
