@@ -232,6 +232,15 @@ def checkCurveFragments = tasks.register('checkCurveFragments', JavaExec) {
 }
 tasks.named('check').configure { dependsOn checkCurveFragments }
 
+def checkStrokeSimplifier = tasks.register('checkStrokeSimplifier', JavaExec) {
+    group = 'verification'
+    description = 'Checks stroke simplification error bounds and interaction numeric limits without GameTest.'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.cut.StrokeSimplifierTest'
+}
+tasks.named('check').configure { dependsOn checkStrokeSimplifier }
+
 // GameTest classes and fixtures are available in development runs, but do not ship in the mod jar.
 tasks.named('jar', Jar).configure {
     exclude 'ml/mypals/meshcut/gametest/**'

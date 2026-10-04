@@ -41,6 +41,20 @@ public final class FragmentGrabClient {
     private static UUID body;
     private static final Vector3d point = new Vector3d();
     private static float distance;
+    private static int request;
+    private static boolean confirmed;
+    private static int sentTick;
+    private static net.minecraft.client.multiplayer.ClientLevel heldLevel;
+
+    public static void accept(GrabNet.Result result) {
+        if (body == null || !body.equals(result.body()) || request != result.request()) return;
+        boolean wasConfirmed = confirmed;
+        confirmed = result.reason() == 0;
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player != null && (!wasConfirmed || !confirmed)) player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                "message.meshcut.grab." + result.reason()), true);
+        if (!confirmed) body = null;
+    }
 
     public static void setHolders(Collection<UUID> players) {
         HOLDERS.clear();
@@ -81,6 +95,8 @@ public final class FragmentGrabClient {
         Vector3d world = sub.logicalPose().transformPosition(new Vector3d(local));
         Vec3 eye = player.getEyePosition();
         body = sub.getUniqueId();
+        heldLevel = minecraft.level;
+        confirmed = false;
         point.set(local);
         distance = (float) Math.min(world.distance(eye.x, eye.y, eye.z), reach(player));
         send(true);
@@ -96,9 +112,12 @@ public final class FragmentGrabClient {
             return;
         }
         if (player == null || minecraft.level == null || !minecraft.options.keyUse.isDown() || player.isDeadOrDying()
-                || !player.getMainHandItem().isEmpty()) {
+                || minecraft.level != heldLevel || !player.getMainHandItem().isEmpty() || minecraft.screen != null
+                || (!confirmed && player.tickCount - sentTick > 60)
+                || Sable.HELPER.getContaining(minecraft.level, BlockPos.containing(point.x, point.y, point.z)) == null) {
             send(false);
             body = null;
+            confirmed = false;
         }
     }
 
@@ -127,8 +146,11 @@ public final class FragmentGrabClient {
     }
 
     private static void send(boolean holding) {
-        if (body != null) {
-            PacketDistributor.sendToServer(new GrabNet.Hold(holding, body, point.x, point.y, point.z, distance));
+        if (body != null && Minecraft.getInstance().getConnection() != null) {
+            request++;
+            LocalPlayer player = Minecraft.getInstance().player;
+            sentTick = player == null ? 0 : player.tickCount;
+            PacketDistributor.sendToServer(new GrabNet.Hold(holding, body, point.x, point.y, point.z, distance, request));
         }
     }
 

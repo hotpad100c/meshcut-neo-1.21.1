@@ -52,19 +52,14 @@ import java.util.UUID;
  * </ul>
  * Sable keeps constraints only while both bodies are loaded, so both are saved here and made again whenever they are.
  * <p>
- * <b>When a joint breaks.</b> Each end of a joint holds on to a point of its limb's material: the point of the limb
- * nearest the joint's pivot, a little inside it ({@link End#hold}). The end belongs to whatever piece that very point
- * is still part of, exactly (the limb's boxes, the kept side of every cut, not in any part cut out). A cut that
- * leaves the point on a piece cut off the limb moves the end to that piece; a cut through the point, a burn that takes
- * it, or a hand that breaks the fragment it is in leaves no piece holding it, and the joint is gone: the limb has been
- * cut off there. A piece that only comes near the point (the other side of a cut a hair away) does not count.
+ * <b>When a joint breaks.</b> Each end holds a small, fixed area inside the limb near the joint pivot. A shallow
+ * nick of one sample does not detach the limb. If all samples are gone the joint breaks; if surviving material
+ * moves into a piece made by cutting this limb, the joint follows that piece. Unrelated bodies cannot take it over.
  */
 public final class RagdollJoints extends SavedData {
     private static final String NAME = "meshcut_joints";
     /** How hard a joint pulls a limb back to how it was, and how much it damps it (as in the ragdoll mod). */
     private static final double STIFFNESS = 20, DAMPING = 20;
-    /** How far inside the limb's material (in blocks) a joint's hold point is put, at most. */
-    private static final double HOLD_DEPTH = 0.05;
     /** Slack (in blocks) when telling whether a point is in the material. */
     private static final double EPS = 1e-3;
     /** Every this many ticks, every joint checks that its limbs still hold on to it, and ghost pairs that came apart part. */
@@ -89,6 +84,7 @@ public final class RagdollJoints extends SavedData {
         /** The point of the limb's material the end holds on to, in the body's plot; null until worked out. */
         @Nullable
         Vector3d hold;
+        final List<Vector3d> supports = new ArrayList<>();
 
         End(UUID body, @Nullable String limb, Vector3d anchor, @Nullable Vector3d hold) {
             this.body = body;
@@ -107,6 +103,13 @@ public final class RagdollJoints extends SavedData {
             if (hold != null) {
                 putVector(tag, "hold", hold);
             }
+            ListTag supportTag = new ListTag();
+            for (Vector3d point : supports) {
+                CompoundTag t = new CompoundTag();
+                putVector(t, "point", point);
+                supportTag.add(t);
+            }
+            tag.put("supports", supportTag);
             return tag;
         }
 
@@ -114,8 +117,10 @@ public final class RagdollJoints extends SavedData {
             // joints saved before ends held on to a point had the anchor as "x", "y", "z"
             Vector3d anchor = tag.contains("anchor") ? getVector(tag, "anchor")
                     : new Vector3d(tag.getDouble("x"), tag.getDouble("y"), tag.getDouble("z"));
-            return new End(tag.getUUID("body"), tag.contains("limb") ? tag.getString("limb") : null, anchor,
+            End end = new End(tag.getUUID("body"), tag.contains("limb") ? tag.getString("limb") : null, anchor,
                     tag.contains("hold") ? getVector(tag, "hold") : null);
+            for (Tag t : tag.getList("supports", Tag.TAG_COMPOUND)) end.supports.add(getVector((CompoundTag) t, "point"));
+            return end;
         }
     }
 
@@ -208,6 +213,8 @@ public final class RagdollJoints extends SavedData {
         Quaterniond frame = new Quaterniond(parent.logicalPose().orientation()).conjugate().mul(child.logicalPose().orientation());
         Joint joint = new Joint(new End(parent.getUniqueId(), parentLimb, inParent, holdPoint(level, parent, parentLimb, inParent)),
                 new End(child.getUniqueId(), childLimb, inChild, holdPoint(level, child, childLimb, inChild)), frame);
+        supportPoints(level, parent, joint.parent);
+        supportPoints(level, child, joint.child);
         RagdollJoints data = of(level);
         data.joints.add(joint);
         data.setDirty();
@@ -400,7 +407,11 @@ public final class RagdollJoints extends SavedData {
         }
         Pose3dc pose;
         if (loaded) {
-            if (holds(level, (ServerSubLevel) current, end.hold, end.limb)) {
+            ServerSubLevel body = (ServerSubLevel) current;
+            if (end.supports.isEmpty()) { supportPoints(level, body, end); setDirty(); }
+            Vector3d surviving = end.supports.stream().filter(p -> holds(level, body, p, end.limb)).findFirst().orElse(null);
+            if (surviving != null) {
+                if (!end.hold.equals(surviving)) { end.hold.set(surviving); setDirty(); }
                 return true;
             }
             pose = touched.containsKey(end.body) ? touched.get(end.body) : current.logicalPose();
@@ -409,25 +420,35 @@ public final class RagdollJoints extends SavedData {
         } else {
             return true; // not loaded: it is looked at when it is
         }
-        Vector3d hold = pose.transformPosition(new Vector3d(end.hold));
         Vector3d anchor = pose.transformPosition(new Vector3d(end.anchor));
-        double r = 0.5;
-        for (SubLevel s : Sable.HELPER.getAllIntersecting(level, new BoundingBox3d(hold.x - r, hold.y - r, hold.z - r,
-                hold.x + r, hold.y + r, hold.z + r))) {
-            if (!(s instanceof ServerSubLevel candidate) || candidate.isRemoved() || candidate.getUniqueId().equals(end.body)
-                    || candidate.getUniqueId().equals(other.body)) {
-                continue;
-            }
-            Vector3d local = candidate.logicalPose().transformPositionInverse(new Vector3d(hold));
-            if (holds(level, candidate, local, end.limb)) {
+        if (end.supports.isEmpty()) end.supports.add(new Vector3d(end.hold)); // legacy removed end
+        // Transfer only to pieces actually made from this limb, never an unrelated corpse nearby.
+        for (UUID id : madeFrom.getOrDefault(end.body, Set.of())) {
+            ServerSubLevel candidate = loaded(level, id);
+            if (candidate == null || id.equals(other.body)) continue;
+            for (Vector3d point : end.supports) {
+                Vector3d world = pose.transformPosition(new Vector3d(point));
+                Vector3d local = candidate.logicalPose().transformPositionInverse(world);
+                if (!holds(level, candidate, local, end.limb)) continue;
+                List<Vector3d> transformed = end.supports.stream().map(p -> candidate.logicalPose().transformPositionInverse(
+                        pose.transformPosition(new Vector3d(p)))).toList();
                 end.body = candidate.getUniqueId();
                 end.hold.set(local);
+                end.supports.clear(); end.supports.addAll(transformed);
                 end.anchor.set(candidate.logicalPose().transformPositionInverse(anchor));
                 setDirty();
                 return true;
             }
         }
         return false;
+    }
+
+    /** A small fixed attachment area tolerates a shallow nick; it never grows back after cutting. */
+    private static void supportPoints(ServerLevel level, ServerSubLevel body, End end) {
+        if (end.hold == null || !end.supports.isEmpty()) return;
+        for (Vector3d point : JointSupport.samples(end.hold)) {
+            if (holds(level, body, point, end.limb)) end.supports.add(point);
+        }
     }
 
     /**
@@ -507,14 +528,10 @@ public final class RagdollJoints extends SavedData {
                     }
                     for (double[] b : be.getAppearance().boxes()) {
                         Vector3d c = new Vector3d(x, y, z);
-                        double[] point = new double[3];
                         double[] target = {near.x - x, near.y - y, near.z - z};
-                        for (int a = 0; a < 3; a++) {
-                            double depth = Math.min(HOLD_DEPTH, (b[a + 3] - b[a]) / 2);
-                            point[a] = Math.max(b[a] + depth, Math.min(b[a + 3] - depth, target[a]));
-                        }
-                        c.add(point[0], point[1], point[2]);
-                        if (!inside(be, be.getAppearance(), point[0], point[1], point[2])) {
+                        Vector3d point = JointSupport.inset(b, target);
+                        c.add(point);
+                        if (!inside(be, be.getAppearance(), point.x, point.y, point.z)) {
                             continue; // already cut away there
                         }
                         double d = c.distanceSquared(near);

@@ -18,6 +18,21 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberControls {
+    @SubscribeEvent
+    public static void scrollLength(InputEvent.MouseScrollingEvent event) {
+        Minecraft minecraft = Minecraft.getInstance();
+        LocalPlayer player = minecraft.player;
+        if (minecraft.screen != null || player == null || !net.minecraft.client.gui.screens.Screen.hasControlDown()
+                || !(player.getMainHandItem().getItem() instanceof LightsaberItem) || event.getScrollDeltaY() == 0) return;
+        float length = Math.clamp(LightsaberItem.lengthScale(player.getMainHandItem())
+                + (float) event.getScrollDeltaY() * 0.1f, 0.25f, 2f);
+        LightsaberItem.setLengthScale(player.getMainHandItem(), length);
+        PacketDistributor.sendToServer(new LightsaberNet.Length(length));
+        player.displayClientMessage(net.minecraft.network.chat.Component.translatable("message.meshcut.length",
+                Math.round(length * 100)), true);
+        event.setCanceled(true);
+    }
+
     private static LocalPlayer owner;
     private static SaberControl control;
     private static Object session;

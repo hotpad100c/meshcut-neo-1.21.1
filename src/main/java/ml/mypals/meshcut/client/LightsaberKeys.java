@@ -14,10 +14,13 @@ public final class LightsaberKeys {
             GLFW.GLFW_KEY_G, "key.categories.meshcut");
     public static final KeyMapping REPOSITION = new KeyMapping("key.meshcut.saber_reposition",
             GLFW.GLFW_KEY_V, "key.categories.meshcut");
+    public static final KeyMapping CONNECTIONS = new KeyMapping("key.meshcut.connections",
+            GLFW.GLFW_KEY_H, "key.categories.meshcut");
     @SubscribeEvent
     public static void register(RegisterKeyMappingsEvent event) {
         event.register(RANDOM_SWING);
         event.register(REPOSITION);
+        event.register(CONNECTIONS);
     }
     private LightsaberKeys() {}
 }

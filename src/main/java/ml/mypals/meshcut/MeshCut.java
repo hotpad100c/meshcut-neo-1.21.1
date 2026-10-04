@@ -64,6 +64,9 @@ public class MeshCut {
     public static final Supplier<DataComponentType<Boolean>> SABER_ACTIVE = COMPONENTS.registerComponentType("active",
             builder -> builder.persistent(Codec.BOOL).networkSynchronized(ByteBufCodecs.BOOL));
 
+    public static final Supplier<DataComponentType<Float>> SABER_LENGTH = COMPONENTS.registerComponentType("blade_length",
+            builder -> builder.persistent(Codec.floatRange(0.25f, 2f)).networkSynchronized(ByteBufCodecs.FLOAT));
+
     public static final DeferredItem<LightsaberItem> LIGHTSABER = ITEMS.register("lightsaber",
             () -> new LightsaberItem(new Item.Properties().stacksTo(1)));
 

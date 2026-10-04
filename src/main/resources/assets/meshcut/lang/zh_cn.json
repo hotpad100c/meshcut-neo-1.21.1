@@ -5,5 +5,14 @@
   "key.meshcut.saber_reposition": "调整光剑位置",
   "block.meshcut.mimic": "断裂的方块",
   "item.meshcut.lightsaber": "激光剑",
-  "block.meshcut.entity_body": "尸体"
+  "block.meshcut.entity_body": "尸体",
+  "key.meshcut.connections": "查看碎片连接（按住）",
+  "message.meshcut.length": "光剑长度：%s%%",
+  "message.meshcut.grab.0": "已抓住碎片，滚轮调整距离",
+  "message.meshcut.grab.1": "碎片已消失或无法抓取",
+  "message.meshcut.grab.2": "碎片距离太远",
+  "message.meshcut.grab.3": "请站稳后抓取，不能拉动脚下的碎片",
+  "message.meshcut.connections.hint": "按住 %s 查看连接 | Ctrl + 滚轮调整剑长",
+  "message.meshcut.connections.result": "蓝色：选中碎片 | 橙色：连接区域, 连接 %s 个邻块（局部）",
+  "message.meshcut.connections.unknown": "蓝色：选中碎片 | 橙色：连接区域, 已知连接 %s 个邻块，部分未加载"
 }

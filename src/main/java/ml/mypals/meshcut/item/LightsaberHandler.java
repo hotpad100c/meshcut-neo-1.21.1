@@ -32,6 +32,24 @@ public final class LightsaberHandler {
         final ResourceKey<Level> dimension;
         final Object session;
         final List<SlashService.Swipe> swipes = new ArrayList<>();
+        final List<Blade> pending = new ArrayList<>();
+
+        void add(Blade from, Blade to) {
+            if (!pending.isEmpty() && !pending.getLast().equals(from)) flush();
+            if (pending.isEmpty()) pending.add(from);
+            pending.add(to);
+            if (pending.size() >= 33) flush();
+        }
+
+        void flush() {
+            if (pending.size() < 2) { pending.clear(); return; }
+            List<double[]> points = pending.stream().map(b -> new double[]{b.base().x, b.base().y, b.base().z,
+                    b.tip().x, b.tip().y, b.tip().z}).toList();
+            List<Integer> retained = ml.mypals.meshcut.cut.StrokeSimplifier.retain(points);
+            for (int i = 1; i < retained.size() && swipes.size() < MAX_SWIPES; i++)
+                swipes.add(new SlashService.Swipe(pending.get(retained.get(i - 1)), pending.get(retained.get(i))));
+            pending.clear();
+        }
 
         Swing(ResourceKey<Level> dimension, Object session) {
             this.dimension = dimension;
@@ -68,7 +86,7 @@ public final class LightsaberHandler {
         net.minecraft.world.phys.Vec3 base = player.position().add(swing.bx(), swing.by(), swing.bz());
         net.minecraft.world.phys.Vec3 direction = new net.minecraft.world.phys.Vec3(swing.dx(), swing.dy(), swing.dz());
         double length = direction.length();
-        if (length < 0.05 || length > Blade.LENGTH * 1.05 || base.distanceTo(player.getEyePosition()) > MAX_BASE_DISTANCE) {
+        if (length < 0.05 || length > Blade.LENGTH * LightsaberItem.lengthScale(player.getMainHandItem()) * 1.05 || base.distanceTo(player.getEyePosition()) > MAX_BASE_DISTANCE) {
             return;
         }
         List<Blade> inbox = INBOX.computeIfAbsent(player.getUUID(), k -> new ArrayList<>());
@@ -121,7 +139,7 @@ public final class LightsaberHandler {
         if (before == null) return;
         double speed = now.tip().distanceTo(before.tip());
         if (speed >= MIN_TIP_SPEED && swing.swipes.size() < MAX_SWIPES) {
-            swing.swipes.add(new SlashService.Swipe(before, now));
+            swing.add(before, now);
         }
     }
 
@@ -139,6 +157,7 @@ public final class LightsaberHandler {
             return;
         }
         try {
+            swing.flush();
             var result=SlashService.slashBlocks(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
             if(result!=null) {
                 MeshCut.LOGGER.info("Applied saber stroke: {} swipes, {} static blocks, {} sub-levels cut, {} sub-levels created",

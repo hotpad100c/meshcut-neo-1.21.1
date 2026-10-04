@@ -41,6 +41,7 @@ public final class FragmentGrab {
         final UUID body;
         final Vector3d point;
         float distance;
+        int request;
         @Nullable
         PhysicsConstraintHandle handle;
 
@@ -74,29 +75,37 @@ public final class FragmentGrab {
         NeoForge.EVENT_BUS.addListener(FragmentGrab::serverTick);
     }
 
-    public static void hold(ServerPlayer player, UUID body, Vector3d point, float distance) {
+    /** 0 accepted, 1 invalid coordinates/target, 2 out of reach, 3 cannot pull here. */
+    public static int hold(ServerPlayer player, UUID body, Vector3d point, float distance, int request) {
+        if (!ml.mypals.meshcut.InteractionLimits.grabNumbers(point.x, point.y, point.z, distance)) return 1;
         ServerLevel level = player.serverLevel();
         ServerSubLevel sub = subLevel(level, body);
         if (sub == null || !sub.getPlot().getBoundingBox().contains((int) Math.floor(point.x), (int) Math.floor(point.y), (int) Math.floor(point.z))
                 || !(level.getBlockState(BlockPos.containing(point.x, point.y, point.z)).getBlock() instanceof MimicBlock)) {
-            return; // only cut pieces, at a point of one of their blocks
+            return 1; // only cut pieces, at a point of one of their blocks
         }
         Vector3d world = sub.logicalPose().transformPosition(new Vector3d(point));
         double reach = reach(player);
-        if (player.getEyePosition().distanceToSqr(world.x, world.y, world.z) > (reach + SLACK) * (reach + SLACK)) {
-            return;
+        if (!Double.isFinite(world.x) || !Double.isFinite(world.y) || !Double.isFinite(world.z)
+                || !Double.isFinite(reach) || player.getEyePosition().distanceToSqr(world.x, world.y, world.z) > (reach + SLACK) * (reach + SLACK)) {
+            return 2;
         }
+        if (!canPull(player, sub)) return 3;
         float clamped = (float) Math.max(MIN_DISTANCE, Math.min(distance, reach));
         Grab grab = GRABS.get(player.getUUID());
         if (grab != null && grab.body.equals(body) && grab.level == level) {
             grab.distance = clamped;
-            return;
+            grab.request = request;
+            return 0;
         }
         if (grab != null) {
             grab.drop();
         }
-        GRABS.put(player.getUUID(), new Grab(level, body, new Vector3d(point), clamped));
+        Grab added = new Grab(level, body, new Vector3d(point), clamped);
+        added.request = request;
+        GRABS.put(player.getUUID(), added);
         changed = true;
+        return 0;
     }
 
     public static void release(ServerPlayer player) {
@@ -166,6 +175,8 @@ public final class FragmentGrab {
             if (player == null || player.isDeadOrDying() || player.level() != entry.getValue().level
                     || subLevel(entry.getValue().level, entry.getValue().body) == null) {
                 entry.getValue().drop();
+                if (player != null) PacketDistributor.sendToPlayer(player,
+                        new GrabNet.Result(entry.getValue().request, entry.getValue().body, 1));
                 it.remove();
                 changed = true;
             } else if (player.fallDistance > 0 && entry.getValue().handle != null) {

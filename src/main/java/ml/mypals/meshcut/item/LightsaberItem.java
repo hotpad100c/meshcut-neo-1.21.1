@@ -19,6 +19,16 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 public class LightsaberItem extends Item {
+    public static float lengthScale(ItemStack stack) {
+        float value = stack.getOrDefault(ml.mypals.meshcut.MeshCut.SABER_LENGTH.get(), 1f);
+        return ml.mypals.meshcut.InteractionLimits.bladeLength(value);
+    }
+
+    public static void setLengthScale(ItemStack stack, float value) {
+        if (Float.isFinite(value) && stack.getItem() instanceof LightsaberItem)
+            stack.set(ml.mypals.meshcut.MeshCut.SABER_LENGTH.get(), ml.mypals.meshcut.InteractionLimits.bladeLength(value));
+    }
+
     public LightsaberItem(Properties properties) {
         super(properties);
     }

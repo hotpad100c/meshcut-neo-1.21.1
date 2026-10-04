@@ -1,4 +1,14 @@
 
+# MeshCut controls
+
+- Hold right-click with a lightsaber to ignite and steer it; release to commit the block cut.
+- Ctrl + mouse wheel adjusts the held saber from 25% to 200% length, even when off. Each saber remembers its length across ignition and saves.
+- G performs a random swing; hold V while moving the mouse to reposition the saber.
+- With a lightsaber in your main hand (lit or unlit), aim at a cut block and hold H to inspect the selected fragment: blue marks its material, orange marks remaining contacts with neighbouring blocks. The hint and view only appear while holding the saber. This is a local contact view, not a prediction of whether the whole structure will fall. Keys can be rebound.
+- With an empty main hand, hold right-click on a cut-off piece to grab it; the server confirms or explains why it cannot be grabbed. Scroll to adjust distance.
+
+Run `gradlew check` for geometry, projection, stroke-simplification and numerical-boundary checks; these do not start GameTest.
+
 Installation information
 =======
 

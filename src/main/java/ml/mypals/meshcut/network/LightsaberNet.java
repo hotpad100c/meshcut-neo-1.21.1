@@ -16,6 +16,12 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 @EventBusSubscriber(modid = MeshCut.MODID, bus = EventBusSubscriber.Bus.MOD)
 public final class LightsaberNet {
+    public record Length(float scale) implements CustomPacketPayload {
+        public static final Type<Length> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_length"));
+        public static final StreamCodec<FriendlyByteBuf, Length> CODEC = StreamCodec.of(
+                (buf, p) -> buf.writeFloat(p.scale), buf -> new Length(buf.readFloat()));
+        @Override public Type<Length> type() { return TYPE; }
+    }
     public record Input(float yaw, float pitch, float x, float y) implements CustomPacketPayload {
         public static final Type<Input> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_input"));
         public static final StreamCodec<FriendlyByteBuf, Input> CODEC = StreamCodec.of(
@@ -37,11 +43,11 @@ public final class LightsaberNet {
         @Override public Type<Swing> type() { return TYPE; }
     }
 
-    public record Target(int id, float yaw, float pitch, float x, float y) implements CustomPacketPayload {
+    public record Target(int id, float yaw, float pitch, float x, float y, float length) implements CustomPacketPayload {
         public static final Type<Target> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_target"));
         public static final StreamCodec<FriendlyByteBuf, Target> CODEC = StreamCodec.of(
-                (buf, target) -> { buf.writeVarInt(target.id); buf.writeFloat(target.yaw); buf.writeFloat(target.pitch); buf.writeFloat(target.x); buf.writeFloat(target.y); },
-                buf -> new Target(buf.readVarInt(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
+                (buf, target) -> { buf.writeVarInt(target.id); buf.writeFloat(target.yaw); buf.writeFloat(target.pitch); buf.writeFloat(target.x); buf.writeFloat(target.y); buf.writeFloat(target.length); },
+                buf -> new Target(buf.readVarInt(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
         @Override public Type<Target> type() { return TYPE; }
     }
 
@@ -55,7 +61,11 @@ public final class LightsaberNet {
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("2");
+        var registrar = event.registrar("3");
+        registrar.playToServer(Length.TYPE, Length.CODEC, (length, context) -> context.enqueueWork(() -> {
+            if (context.player() instanceof ServerPlayer player && Float.isFinite(length.scale))
+                LightsaberItem.setLengthScale(player.getMainHandItem(), length.scale);
+        }));
         registrar.playToServer(Gesture.TYPE, Gesture.CODEC, (gesture, context) -> context.enqueueWork(
                 () -> LightsaberMotion.startGesture(context.player(), gesture.preset, gesture.seed)));
         registrar.playToServer(Input.TYPE, Input.CODEC, LightsaberNet::onInput);
@@ -78,7 +88,8 @@ public final class LightsaberNet {
     }
 
     public static void broadcast(ServerPlayer player, float yaw, float pitch, float x, float y) {
-        PacketDistributor.sendToPlayersTrackingEntity(player, new Target(player.getId(), yaw, pitch, x, y));
+        PacketDistributor.sendToPlayersTrackingEntity(player, new Target(player.getId(), yaw, pitch, x, y,
+                LightsaberItem.lengthScale(player.getMainHandItem())));
     }
 
     private LightsaberNet() {}

@@ -5,5 +5,14 @@
   "key.meshcut.saber_swing": "Random lightsaber swing",
   "key.categories.meshcut": "MeshCut",
   "subtitles.meshcut.saber": "Lightsaber hum",
-  "key.meshcut.saber_reposition": "Reposition lightsaber"
+  "key.meshcut.saber_reposition": "Reposition lightsaber",
+  "key.meshcut.connections": "Inspect fragment connections (hold)",
+  "message.meshcut.length": "Blade length: %s%%",
+  "message.meshcut.grab.0": "Fragment grabbed, Scroll to adjust distance",
+  "message.meshcut.grab.1": "Fragment missing or unavailable",
+  "message.meshcut.grab.2": "Fragment is too far away",
+  "message.meshcut.grab.3": "Find stable footing; you cannot pull the fragment you stand on",
+  "message.meshcut.connections.hint": "Hold %s to inspect connections · Ctrl + Scroll adjusts blade length",
+  "message.meshcut.connections.result": "Blue: selected piece | Orange: contacts %s connected neighbours",
+  "message.meshcut.connections.unknown": "Blue: selected piece | Orange: contacts %s known neighbours; some unloaded"
 }

@@ -28,7 +28,7 @@ public record Blade(Vec3 base, Vec3 tip) {
         offset.add(new Vector3f(handOffset).mul(player.getScale()));
         Vec3 look = new Vec3(direction.x, direction.y, direction.z);
         Vec3 base = player.getPosition(partialTick).add(offset.x, offset.y, offset.z);
-        return new Blade(base, base.add(look.scale(LENGTH * Math.max(0.0001f,
+        return new Blade(base, base.add(look.scale(LENGTH * ml.mypals.meshcut.item.LightsaberItem.lengthScale(player.getMainHandItem()) * Math.max(0.0001f,
                 LightsaberMotion.visualExtension(player, partialTick)))));
     }
 

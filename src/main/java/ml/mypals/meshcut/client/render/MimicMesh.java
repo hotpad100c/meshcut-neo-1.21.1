@@ -33,8 +33,10 @@ public final class MimicMesh {
     private static final int MAX_CACHED = 4096;
     private static final double SLIT_WIDTH = 0.08;
 
-    private static final Map<MimicRenderData, MimicMesh> CACHE = new ConcurrentHashMap<>();
-    private static final Map<MimicRenderData, List<MeshPoly>> GLOW = new ConcurrentHashMap<>();
+    private static final Cache<MimicRenderData, MimicMesh> CACHE = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
+    private static final Cache<MimicRenderData, List<MeshPoly>> GLOW = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
+    private static final Object CACHE_LOCK = new Object();
+    private static volatile long generation;
 
     private static final Cache<MimicRenderData, MimicMesh> BY_IDENTITY = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(MAX_CACHED).build();
@@ -49,7 +51,8 @@ public final class MimicMesh {
                 thread.setPriority(Thread.MIN_PRIORITY + 1);
                 return thread;
             });
-    private static final Map<MimicRenderData, Boolean> BUILDING = java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
+    private static final Map<MimicRenderData, Boolean> BUILDING = new ConcurrentHashMap<>();
+    private static final Map<MimicRenderData, Boolean> GLOW_BUILDING = new ConcurrentHashMap<>();
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -180,20 +183,20 @@ public final class MimicMesh {
     }
 
     public static MimicMesh of(MimicRenderData data) {
+        long epoch = generation;
         MimicMesh mesh = BY_IDENTITY.getIfPresent(data);
         if (mesh != null) {
             return mesh;
         }
-        mesh = CACHE.get(data);
+        mesh = CACHE.getIfPresent(data);
         if (mesh == null && onRenderThread()) {
             if (BUILDING.putIfAbsent(data, Boolean.TRUE) == null) {
                 async(() -> {
                     try {
                         MimicMesh built = build(data);
-                        if (CACHE.size() >= MAX_CACHED) {
-                            CACHE.clear();
+                        synchronized (CACHE_LOCK) {
+                            if (epoch == generation) CACHE.put(data, built);
                         }
-                        CACHE.put(data, built);
                     } finally {
                         BUILDING.remove(data);
                     }
@@ -203,21 +206,27 @@ public final class MimicMesh {
         }
         if (mesh == null) {
             mesh = build(data);
-            if (CACHE.size() >= MAX_CACHED) {
-                CACHE.clear();
+            synchronized (CACHE_LOCK) {
+                if (epoch != generation) return EMPTY;
+                CACHE.put(data, mesh);
             }
-            CACHE.put(data, mesh);
         }
-        BY_IDENTITY.put(data, mesh);
+        synchronized (CACHE_LOCK) {
+            if (epoch != generation) return EMPTY;
+            BY_IDENTITY.put(data, mesh);
+        }
         return mesh;
     }
 
     public static void clearCache() {
-        CACHE.clear();
-        GLOW.clear();
-        BY_IDENTITY.invalidateAll();
-        GLOW_BY_IDENTITY.invalidateAll();
-        FRAGMENTS.invalidateAll();
+        synchronized (CACHE_LOCK) {
+            generation++;
+            CACHE.invalidateAll();
+            GLOW.invalidateAll();
+            BY_IDENTITY.invalidateAll();
+            GLOW_BY_IDENTITY.invalidateAll();
+            FRAGMENTS.invalidateAll();
+        }
     }
 
     /** The fragments of a block cut into cells, or null if its cut-out parts are not a lattice (legacy geometry). */
@@ -542,13 +551,17 @@ public final class MimicMesh {
      * mesh: {@code MimicRenderer} draws it for a while after the cut and lets it fade. Render thread only.
      */
     public static List<MeshPoly> glowPolys(MimicRenderData data) {
+        long epoch = generation;
         List<MeshPoly> cached = GLOW_BY_IDENTITY.getIfPresent(data);
         if (cached != null) {
             return cached;
         }
-        cached = GLOW.get(data);
+        cached = GLOW.getIfPresent(data);
         if (cached != null) {
-            GLOW_BY_IDENTITY.put(data, cached);
+            synchronized (CACHE_LOCK) {
+                if (epoch != generation) return List.of();
+                GLOW_BY_IDENTITY.put(data, cached);
+            }
             return cached;
         }
         if (data.capMode() == CapMode.LAVA) {
@@ -559,24 +572,27 @@ public final class MimicMesh {
                     : ModelCapturer.captureModel(data.target()).opaque();
             List<MeshPoly> base = capBase(opaque, data);
             TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
-            if (BUILDING.putIfAbsent(data, Boolean.TRUE) != null) {
+            if (GLOW_BUILDING.putIfAbsent(data, Boolean.TRUE) != null) {
                 return List.of();
             }
             async(() -> {
                 try {
                     List<MeshPoly> done = glowFrom(data, base, lava);
-                    if (GLOW.size() >= MAX_CACHED) {
-                        GLOW.clear();
+                    synchronized (CACHE_LOCK) {
+                        if (epoch == generation) GLOW.put(data, done);
                     }
-                    GLOW.put(data, done);
                 } finally {
-                    BUILDING.remove(data);
+                    GLOW_BUILDING.remove(data);
                 }
             });
             return List.of();
         }
-        GLOW.put(data, List.of());
-        GLOW_BY_IDENTITY.put(data, List.of());
+        synchronized (CACHE_LOCK) {
+            if (epoch == generation) {
+                GLOW.put(data, List.of());
+                GLOW_BY_IDENTITY.put(data, List.of());
+            }
+        }
         return List.of();
     }
 

@@ -403,6 +403,15 @@ public final class EntityParts {
         // 5. a limb with nothing to hang from hangs from the nearest limb that hangs from the body, one after another
         //    (the dragon's head from the last of its neck, not from its body)
         attach(limbs, torso);
+        // Humanoid model parts are siblings, not an anatomical hierarchy. A raised arm's pivot
+        // may be closer to the head than the torso; it still belongs at the shoulder.
+        if (entity instanceof net.minecraft.world.entity.player.Player) {
+            for (int i = 0; i < limbs.size(); i++) {
+                Limb limb = limbs.get(i);
+                if (i != torso && limb.mergedInto < 0
+                        && (limb.role == Role.ARM || limb.role == Role.LEG || limb.role == Role.HEAD)) limb.parent = torso;
+            }
+        }
 
         // 6. what goes to the server, and what each limb draws
         List<Integer> alive = new ArrayList<>();

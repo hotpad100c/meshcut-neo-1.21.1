@@ -12,6 +12,7 @@ public final class LightsaberRemoteAim {
                 && player != minecraft.player) {
             LightsaberMotion.setRemoteTarget(player, target.yaw(), target.pitch());
             LightsaberMotion.setRemoteHandTarget(player, target.x(), target.y());
+            ml.mypals.meshcut.item.LightsaberItem.setLengthScale(player.getMainHandItem(), target.length());
         }
     }
 
