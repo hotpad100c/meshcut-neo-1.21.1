@@ -45,12 +45,26 @@ public final class MeshCutClient {
         event.register((state, level, pos, tintIndex) -> MimicTint.color(level, pos, tintIndex), MeshCut.MIMIC_BLOCK.get());
     }
 
+    @SubscribeEvent
+    public static void registerItemColors(RegisterColorHandlersEvent.Item event) {
+        event.register((stack, index) -> {
+            int color = LightsaberItem.getBladeColor(stack);
+            return 0xff000000 | (color == -1 ? 0x40ccff : color);
+        }, MeshCut.LASER_GUN.get());
+        event.register((stack, index) -> {
+            int color = LightsaberItem.getBladeColor(stack);
+            return 0xff000000 | (color == -1 ? 0x2ed2e7 : color);
+        }, MeshCut.LIGHTSABER.get());
+    }
+
     /** Captured meshes hold atlas UVs, so they're stale after any resource reload. */
     @SubscribeEvent
     public static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener((ResourceManagerReloadListener) rm -> {
             ModelCapturer.clearCache();
             MimicMesh.clearCache();
+            MimicVbos.clear();
+            LaserGunHands.clearModels();
         });
     }
 

@@ -290,7 +290,16 @@ public final class MimicMesh {
         org.joml.Quaternionf inverse = new org.joml.Quaternionf((float) r[0], (float) r[1], (float) r[2], (float) r[3]).conjugate();
         double[] o = entity.origin();
         Map<RenderType, List<MeshPoly>> byType = new LinkedHashMap<>();
-        source.byType().forEach((type, polys) -> byType.put(type, MeshClipper.clip(place(polys, inverse, o), CUBE)));
+        source.byType().forEach((type, polys) -> {
+            List<MeshPoly> placed = place(polys, inverse, o);
+            List<MeshPoly> candidates = new ArrayList<>(placed.size());
+            for (MeshPoly p : placed) {
+                if (overlapsUnitCube(p)) {
+                    candidates.add(p);
+                }
+            }
+            byType.put(type, MeshClipper.clip(candidates, CUBE));
+        });
         return new ModelCapturer.CapturedMesh(byType, place(source.opaque(), inverse, o), source.capUv());
     }
 
@@ -311,6 +320,26 @@ public final class MimicMesh {
                     poly.cullFace(), poly.shade()));
         }
         return out;
+    }
+
+    private static boolean overlapsUnitCube(MeshPoly poly) {
+        float[] v = poly.verts();
+        int n = poly.vertexCount();
+        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
+        for (int i = 0; i < n; i++) {
+            int o = i * MeshPoly.STRIDE;
+            float x = v[o], y = v[o + 1], z = v[o + 2];
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z;
+            if (z > maxZ) maxZ = z;
+        }
+        return maxX >= -1e-5f && minX <= 1 + 1e-5f
+                && maxY >= -1e-5f && minY <= 1 + 1e-5f
+                && maxZ >= -1e-5f && minZ <= 1 + 1e-5f;
     }
 
     private static MimicMesh build(MimicRenderData data) {

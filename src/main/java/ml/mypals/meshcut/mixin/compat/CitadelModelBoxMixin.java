@@ -6,6 +6,7 @@ import ml.mypals.meshcut.client.capture.ModelCapturer;
 import ml.mypals.meshcut.client.capture.PartTags;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -19,7 +20,9 @@ import java.lang.reflect.Field;
 @Pseudo
 @Mixin(targets = "com.github.alexthe666.citadel.client.model.AdvancedModelBox", remap = false)
 public abstract class CitadelModelBoxMixin {
+    @Unique
     private static Field meshcut$boxName;
+    @Unique
     private static boolean meshcut$looked;
 
     @Inject(require = 0, method = "render(Lcom/mojang/blaze3d/vertex/PoseStack;Lcom/mojang/blaze3d/vertex/VertexConsumer;III)V",
@@ -31,6 +34,7 @@ public abstract class CitadelModelBoxMixin {
         }
     }
 
+    @Unique
     private static String meshcut$nameOf(Object part) {
         try {
             if (!meshcut$looked) {

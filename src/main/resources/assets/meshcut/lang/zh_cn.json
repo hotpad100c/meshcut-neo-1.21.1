@@ -12,7 +12,17 @@
   "message.meshcut.grab.1": "碎片已消失或无法抓取",
   "message.meshcut.grab.2": "碎片距离太远",
   "message.meshcut.grab.3": "请站稳后抓取，不能拉动脚下的碎片",
-  "message.meshcut.connections.hint": "按住 %s 查看连接 | Ctrl + 滚轮调整剑长",
-  "message.meshcut.connections.result": "蓝色：选中碎片 | 橙色：连接区域, 连接 %s 个邻块（局部）",
-  "message.meshcut.connections.unknown": "蓝色：选中碎片 | 橙色：连接区域, 已知连接 %s 个邻块，部分未加载"
+  "message.meshcut.connections.result": "蓝色：选中碎片;橙色：连接区域, 连接 %s 个邻块（局部）",
+  "message.meshcut.connections.unknown": "蓝色：选中碎片;橙色：连接区域, 已知连接 %s 个邻块，部分未加载",
+  "item.meshcut.laser_gun": "激光枪",
+  "message.meshcut.laser_radius": "激光半径：%s / 4",
+  "tooltip.meshcut.laser_radius": "蒸发半径：%s / 4",
+  "tooltip.meshcut.laser_controls": "右键发射;Ctrl＋滚轮调整半径",
+  "tooltip.meshcut.laser_dye": "副手持枪，主手持染料，右键染色",
+  "itemGroup.meshcut": "网格切割",
+  "tooltip.meshcut.saber_length": "剑刃长度：%s%%",
+  "tooltip.meshcut.saber_controls": "按住右键开剑， Ctrl＋滚轮调整长度",
+  "tooltip.meshcut.saber_connections": "按住 %s 查看连接：蓝色为碎片，橙色为连接",
+  "tooltip.meshcut.saber_dye": "副手持剑，主手持染料;右键染色",
+  "tooltip.meshcut.saber_gestures": "按 %s 随机挥剑;按住 %s 用鼠标调整剑的位置"
 }

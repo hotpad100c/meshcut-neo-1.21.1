@@ -12,7 +12,17 @@
   "message.meshcut.grab.1": "Fragment missing or unavailable",
   "message.meshcut.grab.2": "Fragment is too far away",
   "message.meshcut.grab.3": "Find stable footing; you cannot pull the fragment you stand on",
-  "message.meshcut.connections.hint": "Hold %s to inspect connections · Ctrl + Scroll adjusts blade length",
-  "message.meshcut.connections.result": "Blue: selected piece | Orange: contacts %s connected neighbours",
-  "message.meshcut.connections.unknown": "Blue: selected piece | Orange: contacts %s known neighbours; some unloaded"
+  "message.meshcut.connections.result": "Blue: selected piece;Orange: contacts %s connected neighbours",
+  "message.meshcut.connections.unknown": "Blue: selected piece;Orange: contacts %s known neighbours; some unloaded",
+  "item.meshcut.laser_gun": "Laser Gun",
+  "message.meshcut.laser_radius": "Laser radius: %s / 4",
+  "tooltip.meshcut.laser_radius": "Vaporization radius: %s / 4",
+  "tooltip.meshcut.laser_controls": "Right-click to fire;Ctrl + scroll to adjust radius",
+  "tooltip.meshcut.laser_dye": "Gun in offhand + dye in main hand: right-click to dye",
+  "itemGroup.meshcut": "MeshCut",
+  "tooltip.meshcut.saber_length": "Blade length: %s%%",
+  "tooltip.meshcut.saber_controls": "Hold right-click to ignite;Ctrl + scroll to adjust length",
+  "tooltip.meshcut.saber_connections": "Hold %s to view connections: blue fragment, orange contacts",
+  "tooltip.meshcut.saber_dye": "Saber in offhand + dye in main hand: right-click to dye",
+  "tooltip.meshcut.saber_gestures": "Press %s for a swing;Hold %s and move the mouse to reposition"
 }

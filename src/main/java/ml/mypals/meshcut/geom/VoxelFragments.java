@@ -113,6 +113,15 @@ public final class VoxelFragments {
         return occupied;
     }
 
+    /** Existing polygon holes must not be replaced by boxes when a remaining fragment is moved. */
+    public static List<List<CutPlane>> excluded(CellGrid grid, Set<Integer> groups, List<List<CutPlane>> existing) {
+        if (smoothHoles(existing).isEmpty()) return excluded(grid, groups);
+        boolean[] removed = new boolean[CellGrid.CELLS];
+        for (int i = 0; i < removed.length; i++)
+            removed[i] = grid.component(i) >= 0 && !groups.contains(grid.component(i));
+        return boxes(removed).stream().map(VoxelFragments::planes).toList();
+    }
+
     /** Visual fragment labels, excluding smooth legacy holes and bounded burn prisms. */
     public static boolean[] latticeMask(List<List<CutPlane>> excluded) {
         List<List<CutPlane>> lattice=new ArrayList<>();

@@ -1,6 +1,6 @@
 {
   "selector": "meshcut:entity_body",
   "properties": {
-    "sable:mass": 0.2
+    "sable:mass": 0.02
   }
 }

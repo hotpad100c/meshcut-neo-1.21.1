@@ -404,19 +404,18 @@ public final class CutService {
      * and keep their saved data so the mimic can still look like a sign with text, a banner with patterns, ...
      */
     static void detachBlockEntities(ServerLevel level, Map<BlockPos, Split> splits) {
-        splits.replaceAll((pos, split) -> {
-            Piece piece = split.piece();
-            if (!piece.undetachedBe()) {
-                return split;
-            }
-            CompoundTag tag = null;
-            BlockEntity be = level.getBlockEntity(pos);
-            if (be != null) {
-                spillContents(level, pos, be);
-                tag = be.saveWithoutMetadata(level.registryAccess());
-            }
-            return new Split(new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false, piece.entity()), split.keep());
-        });
+        splits.replaceAll((pos, split) -> new Split(detachBlockEntity(level, pos, split.piece()), split.keep()));
+    }
+
+    static Piece detachBlockEntity(ServerLevel level, BlockPos pos, Piece piece) {
+        if (!piece.undetachedBe()) return piece;
+        CompoundTag tag = null;
+        BlockEntity be = level.getBlockEntity(pos);
+        if (be != null) {
+            spillContents(level, pos, be);
+            tag = be.saveWithoutMetadata(level.registryAccess());
+        }
+        return new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false, piece.entity());
     }
 
     static void spillContents(ServerLevel level, BlockPos pos, BlockEntity be) {

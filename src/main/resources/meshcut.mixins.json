@@ -20,6 +20,7 @@
     "compat.FlywheelVisualizationMixin",
     "compat.CitadelModelBoxMixin",
     "compat.GeckoRenderUtilsMixin",
+    "compat.SimpleBedrockModelRendererMixin",
     "PistonHeadRendererMixin",
     "HumanoidModelGrabMixin",
     "PoseStackMixin",

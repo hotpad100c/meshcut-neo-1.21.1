@@ -28,7 +28,7 @@ public final class FragmentRemoval {
             }
         }
         // the scratches that bounded the fragment stay if they still divide what is left
-        holes.addAll(VoxelFragments.excluded(grid,staying));
+        holes.addAll(VoxelFragments.excluded(grid,staying,excluded));
         return new Result(VoxelFragments.compact(holes),List.copyOf(patches));
     }
 

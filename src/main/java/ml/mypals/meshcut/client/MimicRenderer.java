@@ -73,10 +73,23 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
                 entry = build(be);
                 cache.put(be, entry);
             }
-            for (var layer : entry.byType().entrySet()) {
+            Map<RenderType, List<MeshPoly>> layers = entry.byType();
+            // once cut up, the layers are kept in vertex buffers and drawn from there; the rest are drawn the ordinary way
+            List<RenderType> immediate = null;
+            if (entry.cut != null && MimicVbos.enabled()) {
+                immediate = MimicVbos.draw(be, entry.cut, layers, pose, packedLight, index -> tint(be, state, index));
+            }
+            for (var layer : layers.entrySet()) {
+                if (immediate != null && !immediate.contains(layer.getKey())) {
+                    continue;
+                }
                 VertexConsumer consumer = buffer.getBuffer(layer.getKey());
+                boolean triangles = layer.getKey().mode() == com.mojang.blaze3d.vertex.VertexFormat.Mode.TRIANGLES;
                 for (MeshPoly poly : layer.getValue()) {
-                    emit(consumer, pose, poly, tint(be, state, poly.tintIndex()), packedLight, 1f);
+                    emit(consumer, pose, poly, tint(be, state, poly.tintIndex()), packedLight, 1f, triangles);
+                }
+                if (buffer instanceof MultiBufferSource.BufferSource bs) {
+                    bs.endBatch(layer.getKey());
                 }
             }
         }
@@ -89,7 +102,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
             boolean bloom = Bloom.usable();
             org.joml.Vector3f at = new org.joml.Vector3f();
             for (MeshPoly poly : MimicMesh.glowPolys(be.renderData())) {
-                emit(consumer, pose, poly, heat, packedLight, fade);
+                emit(consumer, pose, poly, heat, packedLight, fade, false);
                 if (bloom) { // the lava also glows: queued, to be drawn into the glow buffer later in the frame
                     float[] v = poly.verts();
                     for (int i = 1; i + 1 < poly.vertexCount(); i++) {
@@ -128,8 +141,12 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
                 : MimicTint.color(state, be.getLevel(), be.getBlockPos(), tintIndex);
     }
 
-    /** Fan-triangulates the convex polygon; triangles are emitted as degenerate quads. */
-    private static void emit(VertexConsumer c, PoseStack.Pose pose, MeshPoly poly, int rgb, int light, float alphaScale) {
+    /**
+     * Fan-triangulates the convex polygon. A buffer of triangles (some modded render types, Bedrock poly meshes for
+     * one) takes three corners per triangle; any other takes quads, so each triangle is a quad with a repeated corner.
+     */
+    static void emit(VertexConsumer c, PoseStack.Pose pose, MeshPoly poly, int rgb, int light, float alphaScale,
+                             boolean triangles) {
         int argb = poly.argb();
         float r = (rgb >> 16 & 255) / 255f * (argb >> 16 & 255) / 255f;
         float g = (rgb >> 8 & 255) / 255f * (argb >> 8 & 255) / 255f;
@@ -145,7 +162,13 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
             vertex(c, pose, poly, v, 0, r, g, b, a, light);
             vertex(c, pose, poly, v, i, r, g, b, a, light);
             vertex(c, pose, poly, v, i + 1, r, g, b, a, light);
-            vertex(c, pose, poly, v, i + 1, r, g, b, a, light);
+            if (!triangles) {
+                vertex(c, pose, poly, v, i + 1, r, g, b, a, light);
+            } else {
+                vertex(c, pose, poly, v, 0, r, g, b, a, light);
+                vertex(c, pose, poly, v, i + 1, r, g, b, a, light);
+                vertex(c, pose, poly, v, i, r, g, b, a, light);
+            }
         }
     }
 

@@ -69,7 +69,7 @@ public final class EntityCutting {
     /** At most this many collision boxes in one block of a body. */
     private static final int MAX_BOXES_PER_BLOCK = 6;
     /** At most this many blocks for one body (a client could ask for anything). */
-    private static final int MAX_CELLS = 65536;
+    public static final int MAX_CELLS = 524288;
     /**
      * No part of a body is further than this (in blocks) from the entity's feet. The biggest bodies (the ender dragon)
      * reach a few blocks; numbers beyond it would only come from a client sending nonsense, and would make the cells
@@ -143,24 +143,32 @@ public final class EntityCutting {
             }
         }
         for (Entity entity : hit) {
-            if (PENDING.values().stream().anyMatch(p -> p.entity == entity)) {
-                continue; // already waiting for its limbs
+            cutEntity(level, entity, wielder, cutLater);
+        }
+    }
+
+    public static boolean accepts(Entity entity) { return cuttable(entity); }
+
+    /** Shares the blade's death, model capture, limb assembly and joints with hitscan weapons. */
+    public static void cutEntity(ServerLevel level, Entity entity, @Nullable Entity wielder, Consumer<List<ServerSubLevel>> cutLater) {
+        if (!cuttable(entity) || entity == wielder) return;
+        if (PENDING.values().stream().anyMatch(p -> p.entity == entity)) {
+            return; // already waiting for its limbs
+        }
+        try {
+            EntityAppearance.Look look = lookOf(entity);
+            ServerPlayer client = clientFor(level, entity, wielder);
+            if (client == null) {
+                cutLater.accept(finish(level, entity, look, wielder, entity.getDeltaMovement().scale(20), null));
+                return;
             }
-            try {
-                EntityAppearance.Look look = lookOf(entity);
-                ServerPlayer client = clientFor(level, entity, wielder);
-                if (client == null) {
-                    cutLater.accept(finish(level, entity, look, wielder, entity.getDeltaMovement().scale(20), null));
-                    continue;
-                }
-                int id = nextId++;
-                Pending pending = new Pending(level, entity, look, wielder == null ? null : wielder.getUUID(), client.getUUID(), cutLater);
-                PENDING.put(id, pending);
-                freeze(entity, true, pending);
-                PacketDistributor.sendToPlayer(client, new EntityPartsNet.PartsRequest(id, look));
-            } catch (RuntimeException e) {
-                MeshCut.LOGGER.error("Couldn't cut {}", entity, e);
-            }
+            int id = nextId++;
+            Pending pending = new Pending(level, entity, look, wielder == null ? null : wielder.getUUID(), client.getUUID(), cutLater);
+            PENDING.put(id, pending);
+            freeze(entity, true, pending);
+            PacketDistributor.sendToPlayer(client, new EntityPartsNet.PartsRequest(id, look));
+        } catch (RuntimeException e) {
+            MeshCut.LOGGER.error("Couldn't cut {}", entity, e);
         }
     }
 

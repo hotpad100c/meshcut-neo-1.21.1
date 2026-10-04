@@ -474,7 +474,33 @@ public final class EntityParts {
             List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, b.boxes().size() - excess));
             out.set(most, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
         }
+        while (totalCells(out) > ml.mypals.meshcut.cut.EntityCutting.MAX_CELLS) {
+            int canMerge = -1;
+            for (int i = 0; i < out.size(); i++) {
+                if (out.get(i).boxes().size() > 1) {
+                    if (canMerge < 0 || out.get(i).boxes().size() > out.get(canMerge).boxes().size()) {
+                        canMerge = i;
+                    }
+                }
+            }
+            if (canMerge < 0) break;
+            BodySpec b = out.get(canMerge);
+            List<double[]> fewer = merged(new ArrayList<>(b.boxes()), Math.max(1, b.boxes().size() / 2));
+            out.set(canMerge, new BodySpec(b.name(), b.rotation(), b.origin(), fewer, b.parent(), b.anchor()));
+        }
         return out;
+    }
+
+    private static long totalCells(List<BodySpec> specs) {
+        long cells = 0;
+        for (BodySpec b : specs) {
+            for (double[] box : b.boxes()) {
+                cells += (long) (Math.floor(box[3]) - Math.floor(box[0]) + 1)
+                        * (long) (Math.floor(box[4]) - Math.floor(box[1]) + 1)
+                        * (long) (Math.floor(box[5]) - Math.floor(box[2]) + 1);
+            }
+        }
+        return cells;
     }
 
     /**

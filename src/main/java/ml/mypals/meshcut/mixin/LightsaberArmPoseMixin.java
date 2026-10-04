@@ -28,8 +28,15 @@ public abstract class LightsaberArmPoseMixin {
     @Inject(method = "setupAnim(Lnet/minecraft/world/entity/LivingEntity;FFFFF)V", at = @At("RETURN"))
     private void meshcut$aimSaberArm(LivingEntity entity, float limbSwing, float limbSwingAmount,
                                     float ageInTicks, float netHeadYaw, float headPitch, CallbackInfo ci) {
-        if (!(entity instanceof Player player) || !LightsaberItem.isActive(player)) return;
+        if (!(entity instanceof Player player)) return;
         float partialTick = Mth.clamp(ageInTicks - player.tickCount, 0f, 1f);
+        if (player.getMainHandItem().getItem() instanceof ml.mypals.meshcut.item.LaserGunItem) {
+            ml.mypals.meshcut.client.LaserGunHands.poseArm(player, partialTick,
+                    player.getMainArm() == net.minecraft.world.entity.HumanoidArm.RIGHT ? rightArm : leftArm);
+            body.yRot = 0;
+            return;
+        }
+        if (!LightsaberItem.isActive(player)) return;
         LightsaberHands.poseArms(player, partialTick, rightArm, leftArm);
         body.yRot = 0;
     }

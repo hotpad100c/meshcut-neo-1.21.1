@@ -12,7 +12,6 @@ import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -20,7 +19,6 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredItem;
@@ -38,6 +36,8 @@ public class MeshCut {
 
     private static final DeferredRegister.Blocks BLOCKS = DeferredRegister.createBlocks(MODID);
     private static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(MODID);
+    private static final DeferredRegister<net.minecraft.world.item.CreativeModeTab> TABS =
+            DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
     private static final DeferredRegister.DataComponents COMPONENTS = DeferredRegister.createDataComponents(MODID);
     private static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
             DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, MODID);
@@ -70,11 +70,25 @@ public class MeshCut {
     public static final DeferredItem<LightsaberItem> LIGHTSABER = ITEMS.register("lightsaber",
             () -> new LightsaberItem(new Item.Properties().stacksTo(1)));
 
+    public static final Supplier<DataComponentType<Integer>> LASER_RADIUS = COMPONENTS.registerComponentType("laser_radius",
+            builder -> builder.persistent(Codec.intRange(1, 4)).networkSynchronized(ByteBufCodecs.VAR_INT));
+
+    public static final DeferredItem<ml.mypals.meshcut.item.LaserGunItem> LASER_GUN = ITEMS.register("laser_gun",
+            () -> new ml.mypals.meshcut.item.LaserGunItem(new Item.Properties().stacksTo(1)));
+
+    public static final Supplier<net.minecraft.world.item.CreativeModeTab> CREATIVE_TAB = TABS.register("weapons", () ->
+            net.minecraft.world.item.CreativeModeTab.builder()
+                    .title(net.minecraft.network.chat.Component.translatable("itemGroup.meshcut"))
+                    .icon(() -> LIGHTSABER.get().getDefaultInstance())
+                    .displayItems((parameters, output) -> { output.accept(LIGHTSABER.get()); output.accept(LASER_GUN.get()); })
+                    .build());
+
     public MeshCut(IEventBus modEventBus, net.neoforged.fml.ModContainer container) {
         container.registerConfig(net.neoforged.fml.config.ModConfig.Type.SERVER, MeshCutConfig.SPEC);
         BLOCKS.register(modEventBus);
         BLOCK_ENTITIES.register(modEventBus);
         ITEMS.register(modEventBus);
+        TABS.register(modEventBus);
         COMPONENTS.register(modEventBus);
         LightsaberMotion.register(modEventBus);
         modEventBus.addListener(ml.mypals.meshcut.network.EntityPartsNet::register);
@@ -83,11 +97,6 @@ public class MeshCut {
         ml.mypals.meshcut.physics.MimicFloating.register();
         ml.mypals.meshcut.physics.RagdollJoints.register();
         ml.mypals.meshcut.physics.Debris.register();
-        modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
-            if (e.getTabKey() == CreativeModeTabs.TOOLS_AND_UTILITIES) {
-                e.accept(LIGHTSABER);
-            }
-        });
         NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) ->
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);

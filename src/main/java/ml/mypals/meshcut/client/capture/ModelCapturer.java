@@ -221,6 +221,9 @@ public final class ModelCapturer {
                 opaque.addAll(polys);
             }
         });
+        if (opaque.isEmpty()) {
+            byType.values().forEach(opaque::addAll);
+        }
         return opaque;
     }
 

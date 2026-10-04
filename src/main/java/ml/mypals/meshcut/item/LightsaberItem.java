@@ -19,6 +19,18 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 public class LightsaberItem extends Item {
+    @Override
+    public void appendHoverText(ItemStack stack, TooltipContext context, java.util.List<net.minecraft.network.chat.Component> tooltip,
+                                net.minecraft.world.item.TooltipFlag flag) {
+        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_length", Math.round(lengthScale(stack)*100)));
+        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_controls"));
+        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_connections",
+                net.minecraft.network.chat.Component.keybind("key.meshcut.connections")));
+        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_gestures",
+                net.minecraft.network.chat.Component.keybind("key.meshcut.saber_swing"),
+                net.minecraft.network.chat.Component.keybind("key.meshcut.saber_reposition")));
+        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_dye"));
+    }
     public static float lengthScale(ItemStack stack) {
         float value = stack.getOrDefault(ml.mypals.meshcut.MeshCut.SABER_LENGTH.get(), 1f);
         return ml.mypals.meshcut.InteractionLimits.bladeLength(value);

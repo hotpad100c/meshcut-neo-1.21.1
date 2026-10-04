@@ -241,6 +241,15 @@ def checkStrokeSimplifier = tasks.register('checkStrokeSimplifier', JavaExec) {
 }
 tasks.named('check').configure { dependsOn checkStrokeSimplifier }
 
+def checkLaserCapsule = tasks.register('checkLaserCapsule', JavaExec) {
+    group = 'verification'
+    description = 'Checks laser capsule voxel geometry without GameTest.'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.geom.LaserCapsuleTest'
+}
+tasks.named('check').configure { dependsOn checkLaserCapsule }
+
 // GameTest classes and fixtures are available in development runs, but do not ship in the mod jar.
 tasks.named('jar', Jar).configure {
     exclude 'ml/mypals/meshcut/gametest/**'

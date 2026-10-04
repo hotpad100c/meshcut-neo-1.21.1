@@ -589,7 +589,7 @@ public final class SlashService {
             Info info = entry.getKey();
             for (var group : entry.getValue().entrySet()) {
                 List<List<CutPlane>> excluded = new ArrayList<>(info.piece.excluded());
-                excluded.addAll(VoxelFragments.excluded(info.grid, group.getValue()));
+                excluded.addAll(VoxelFragments.excluded(info.grid, group.getValue(), info.piece.excluded()));
                 specs.computeIfAbsent(group.getKey(), k -> new ArrayList<>())
                         .add(new Spec(info.pos, info, info.piece.planes(), VoxelFragments.compact(excluded), info.patches));
             }

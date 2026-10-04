@@ -117,9 +117,8 @@ public final class ConnectionView extends RenderStateShard {
         boolean looking = mc.hitResult instanceof BlockHitResult hit
                 && mc.level.getBlockEntity(hit.getBlockPos()) instanceof MimicBlockEntity;
         if (!looking) return;
-        Component label = Component.translatable("message.meshcut.connections.hint", LightsaberKeys.CONNECTIONS.getTranslatedKeyMessage());
-        if (LightsaberKeys.CONNECTIONS.isDown() && mc.player.tickCount - lastDrawTick <= 2)
-            label = Component.translatable(unknown > 0 ? "message.meshcut.connections.unknown" : "message.meshcut.connections.result", neighbours);
+        if (!LightsaberKeys.CONNECTIONS.isDown() || mc.player.tickCount - lastDrawTick > 2) return;
+        Component label = Component.translatable(unknown > 0 ? "message.meshcut.connections.unknown" : "message.meshcut.connections.result", neighbours);
         var graphics = event.getGuiGraphics();
         int width = mc.font.width(label), x = (graphics.guiWidth() - width) / 2, y = graphics.guiHeight() - 65;
         graphics.fill(x - 5, y - 4, x + width + 5, y + 13, 0xB0000000);

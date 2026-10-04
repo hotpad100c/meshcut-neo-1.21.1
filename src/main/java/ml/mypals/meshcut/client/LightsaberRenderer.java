@@ -37,7 +37,6 @@ public final class LightsaberRenderer {
             int rgb = stack.getItem() instanceof LightsaberItem ? LightsaberItem.getBladeColor(stack) : -1;
             if (rgb == -1) return DEFAULT;
             float r = ((rgb >> 16) & 0xFF) / 255f, g = ((rgb >> 8) & 0xFF) / 255f, b = (rgb & 0xFF) / 255f;
-            // the halo is a little deeper than the glow, as the default blue's is
             return new Palette(new float[]{r, g, b, GLOW[3]}, new float[]{r * 0.8f, g * 0.8f, b * 0.8f, HALO[3]});
         }
     }
@@ -66,13 +65,11 @@ public final class LightsaberRenderer {
             blades.put(player.getUUID(), Blade.of(player, partialTick));
             palettes.put(player.getUUID(), Palette.of(player));
         }
-        // with bloom the hands are drawn after it, so that its glow does not lie over them (see renderHands)
         if (!Bloom.usable() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
                 && !minecraft.options.hideGui && LightsaberMotion.isVisible(minecraft.player)) {
             LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
                     camera, matrix, buffers);
         }
-        // the sweep of each blade is a motion blur over the finished scene (see MotionBlur)
         if (MotionBlur.usable()) {
             blades.forEach((id, blade) -> MotionBlur.record(id, blade, time));
         }
@@ -95,7 +92,6 @@ public final class LightsaberRenderer {
         }
     }
 
-    /** The first-person arms and hilt, after the bloom has been added to the scene: it never glows over them. */
     @SubscribeEvent(priority = EventPriority.LOW)
     public static void renderHands(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER || !Bloom.usable()) {
@@ -114,7 +110,6 @@ public final class LightsaberRenderer {
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,
                                   double time, UUID owner, Palette palette, boolean includeHalo) {
         if (base.distanceToSqr(tip) < 1e-4) return;
-        // Continuous game-time oscillation avoids frame-dependent random jumps and freezes when paused.
         double phase = (owner.hashCode() & 0xffff) * (Math.PI * 2 / 65536);
         double pulse = Math.sin(time * 1.7 + phase) * 0.035 + Math.sin(time * 2.9 + phase) * 0.015;
         Vec3 direction = tip.subtract(base).normalize();
@@ -123,9 +118,6 @@ public final class LightsaberRenderer {
         Vec3 upwards = direction.cross(sideways);
         Vec3 shimmer = sideways.scale(Math.sin(time * 1.3 + phase) * 0.003)
                 .add(upwards.scale(Math.sin(time * 1.9 + phase) * 0.003));
-        // Only the glow wavers; the emitter, core and cutting segment retain their exact alignment.
-        // With bloom, broad translucent shells are emission sources only. Drawing their hard end faces
-        // directly over the scene makes the tip look like a translucent aperture instead of scattered light.
         if (includeHalo) {
             prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), palette.halo(), (float) (1 + pulse));
             prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), palette.glow(), (float) (1 + pulse));
@@ -133,8 +125,7 @@ public final class LightsaberRenderer {
         prism(consumer, matrix, base, tip, 0.008 * (1 + pulse * 0.4), CORE, 1f);
     }
 
-    /** A square prism of half-width {@code r}; the beam render type disables face culling. */
-    private static void prism(VertexConsumer c, Matrix4f m, Vec3 a, Vec3 b, double r, float[] color, float intensity) {
+    static void prism(VertexConsumer c, Matrix4f m, Vec3 a, Vec3 b, double r, float[] color, float intensity) {
         Vec3 dir = b.subtract(a).normalize();
         Vec3 helper = Math.abs(dir.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
         Vec3 u = dir.cross(helper).normalize().scale(r);
