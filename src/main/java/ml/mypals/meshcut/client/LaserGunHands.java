@@ -176,6 +176,8 @@ public final class LaserGunHands {
             Vector3f grip = GunRecoil.grip();
             pose.translate(grip.x, grip.y, grip.z);
             pose.mulPose(Axis.XP.rotationDegrees(-55));
+            // Enlarge skin and sleeve around the palm, keeping the grip anchor fixed.
+            pose.scale(1.05f, 1.05f, 1.05f);
             pose.translate((right ? 1 : -1) * (slim ? 5.5f : 6f) / 16, -10.5f / 16, 0);
             arm.render(pose, buffers.getBuffer(RenderType.entitySolid(player.getSkin().texture())), light, OverlayTexture.NO_OVERLAY);
             if (player.isModelPartShown(right ? PlayerModelPart.RIGHT_SLEEVE : PlayerModelPart.LEFT_SLEEVE))

@@ -63,9 +63,15 @@ public final class PartTags {
     @Nullable
     private static ModelPart.Cube cube;
     /** Only an entity being taken apart is labelled (block entity renderers are recorded too). */
-    private static boolean active;
+    private static volatile boolean active;
+    private static volatile Thread thread;
+
+    private static boolean on() {
+        return active && Thread.currentThread() == thread;
+    }
 
     static void begin() {
+        thread = Thread.currentThread();
         active = true;
         STACK.clear();
         NODES.clear();
@@ -77,6 +83,7 @@ public final class PartTags {
     /** The parts drawn since {@link #begin}, in the order they were drawn (parents before their children). */
     static List<DrawnPart> end() {
         active = false;
+        thread = null;
         STACK.clear();
         NODES.clear();
         cube = null;
@@ -86,7 +93,7 @@ public final class PartTags {
     }
 
     public static void enter(ModelPart part, Matrix4f pose) {
-        if (!active) {
+        if (!on()) {
             return;
         }
         DrawnPart p = new DrawnPart(part, STACK.peek(), new Matrix4f(pose));
@@ -95,35 +102,35 @@ public final class PartTags {
     }
 
     public static void leave() {
-        if (!active) {
+        if (!on()) {
             return;
         }
         STACK.poll();
     }
 
     public static void cube(@Nullable ModelPart.Cube c) {
-        if (active) {
+        if (on()) {
             cube = c;
         }
     }
 
     /** A level was pushed onto the pose stack. */
     public static void pushed(PoseStack.Pose top) {
-        if (active) {
+        if (on()) {
             NODES.push(new PoseNode(NODES.peek(), nodes++, top));
         }
     }
 
     /** A level was popped off the pose stack. */
     public static void popped() {
-        if (active) {
+        if (on()) {
             NODES.poll();
         }
     }
 
     /** The model part that pushed the current level, and its name (a model system that names its parts tells). */
     public static void own(Object owner, @Nullable String name) {
-        PoseNode top = active ? NODES.peek() : null;
+        PoseNode top = on() ? NODES.peek() : null;
         if (top != null) {
             top.owner = owner;
             top.name = name;
@@ -135,7 +142,7 @@ public final class PartTags {
      * the pose at this moment is the part's frame, hinging at its pivot, and is taken as where the part was drawn.
      */
     public static void hinge(Object owner, @Nullable String name) {
-        PoseNode top = active ? NODES.peek() : null;
+        PoseNode top = on() ? NODES.peek() : null;
         if (top != null) {
             top.owner = owner;
             top.name = name;
@@ -145,7 +152,7 @@ public final class PartTags {
 
     @Nullable
     static Tag current() {
-        if (!active) {
+        if (!on()) {
             return null;
         }
         DrawnPart top = STACK.peek();

@@ -13,7 +13,7 @@ public final class GunPose {
         return new Matrix4f().scale(fovScale,fovScale,1)
                 .translate(side*0.46f,-0.05f-equip*0.6f,-0.95f+recoil*0.18f)
                 .rotateY((float)Math.toRadians(side*-8)).rotateZ((float)Math.toRadians(side*-4))
-                .rotateX((float)Math.toRadians(recoil*5)).scale(0.85f);
+                .rotateX((float)Math.toRadians(recoil*5)).scale(0.8f);
     }
 
     public record Arm(float x,float y,float z,float pitch,float yaw) {}
@@ -34,7 +34,7 @@ public final class GunPose {
                 .rotateX(-(float)Math.PI/2).rotateY((float)Math.PI)
                 .translate((right?1:-1)/16f,0.125f,-0.625f)
                 // laser_gun.json third-person display; positions below are already centered.
-                .translate(0,3.2f/16,-2.1f/16).scale(0.8f);
+                .translate(0,3.2f/16,-2.1f/16).scale(0.75f);
     }
     private GunPose() {}
 }

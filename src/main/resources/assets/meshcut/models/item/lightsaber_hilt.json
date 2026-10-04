@@ -6,7 +6,8 @@
   ],
   "textures": {
     "palette": "meshcut:item/lightsaber_palette",
-    "particle": "meshcut:item/lightsaber_palette"
+    "particle": "meshcut:item/lightsaber_palette",
+    "energy_palette": "meshcut:item/laser_gun"
   },
   "elements": [
     {
@@ -1438,56 +1439,62 @@
         "north": {
           "uv": [
             8,
-            4,
+            8,
             12,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         },
         "south": {
           "uv": [
             8,
-            4,
+            8,
             12,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         },
         "east": {
           "uv": [
             8,
-            4,
+            8,
             12,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         },
         "west": {
           "uv": [
             8,
-            4,
+            8,
             12,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         },
         "up": {
           "uv": [
+            8,
+            8,
             12,
-            4,
-            16,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         },
         "down": {
           "uv": [
             8,
-            4,
+            8,
             12,
-            8
+            16
           ],
-          "texture": "#palette"
+          "texture": "#energy_palette",
+          "tintindex": 0
         }
       }
     },

@@ -101,12 +101,16 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
             int heat = 0xFF0000 | Math.round(55 + 200 * fade) << 8 | Math.round(25 + 230 * fade * fade);
             boolean bloom = Bloom.usable();
             org.joml.Vector3f at = new org.joml.Vector3f();
+            int[] corner = new int[3];
             for (MeshPoly poly : MimicMesh.glowPolys(be.renderData())) {
                 emit(consumer, pose, poly, heat, packedLight, fade, false);
                 if (bloom) { // the lava also glows: queued, to be drawn into the glow buffer later in the frame
                     float[] v = poly.verts();
                     for (int i = 1; i + 1 < poly.vertexCount(); i++) {
-                        for (int k : new int[]{0, i, i + 1}) {
+                        corner[0] = 0;
+                        corner[1] = i;
+                        corner[2] = i + 1;
+                        for (int k : corner) {
                             pose.pose().transformPosition(v[k * MeshPoly.STRIDE], v[k * MeshPoly.STRIDE + 1],
                                     v[k * MeshPoly.STRIDE + 2], at);
                             Bloom.queue(at.x, at.y, at.z, 1f, 0.42f * fade, 0.1f * fade, fade * 0.5f);

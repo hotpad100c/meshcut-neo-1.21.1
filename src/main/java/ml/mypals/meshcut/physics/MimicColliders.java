@@ -30,6 +30,12 @@ public final class MimicColliders {
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
 
+    // diagnostics, read by PhysicsDiag
+    static long createdEntries;
+    static long createdBoxes;
+    static long overflowFallbacks;
+    static long coarsened;
+
     private record Pending(ServerLevel level, BlockPos pos) {}
 
     private static final Set<Pending> PENDING = ConcurrentHashMap.newKeySet();
@@ -65,12 +71,14 @@ public final class MimicColliders {
         }
         List<double[]> boxes = MimicShapes.boxes(key);
         if (ENTRIES.size() >= MAX_ENTRIES) {
+            coarsened++;
             key = coarse(key, boxes);
             entry = ENTRIES.get(key);
             if (entry != null) {
                 return entry;
             }
             if (ENTRIES.size() >= MAX_ENTRIES + MAX_COARSE) {
+                overflowFallbacks++;
                 return fallback.get();
             }
             boxes = key.baseBoxes();
@@ -84,6 +92,8 @@ public final class MimicColliders {
                     PhysicsBlockPropertyHelper.getVolume(target) * MimicShapes.volumeFraction(key),
                     PhysicsBlockPropertyHelper.getRestitution(target),
                      false, dev.ryanhcode.sable.api.block.BlockWithSubLevelCollisionCallback.sable$getCallback(target));
+            createdEntries++;
+            createdBoxes += boxes.size();
             for (double[] b : boxes) {
                 entry.addBox(new Vector3d(b[0], b[1], b[2]), new Vector3d(b[3], b[4], b[5]));
             }
@@ -126,6 +136,10 @@ public final class MimicColliders {
     /** Forgets the blocks waiting to be refreshed: they belong to a server that has stopped. */
     public static void clear() {
         PENDING.clear();
+    }
+
+    static synchronized int entryCount() {
+        return ENTRIES.size();
     }
 
     /** Total volume of the boxes, for diagnostics. */

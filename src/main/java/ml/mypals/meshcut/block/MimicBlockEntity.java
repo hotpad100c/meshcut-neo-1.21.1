@@ -41,6 +41,8 @@ public class MimicBlockEntity extends BlockEntity {
 
     private BlockState targetState = Blocks.STONE.defaultBlockState();
     /** Cuts that have really separated this piece from the rest of its block: they shape its collision and mass. */
+    /** Guards the three lists below: meshing threads read them while the main thread rewrites them. */
+    private final Object cutLock = new Object();
     private final List<CutPlane> planes = new ArrayList<>();
     /** Convex parts of the block that were cut out and went elsewhere; this piece is what is left around them. */
     private final List<List<CutPlane>> excluded = new ArrayList<>();
@@ -214,9 +216,11 @@ public class MimicBlockEntity extends BlockEntity {
         int v = version; // read first: a change made meanwhile bumps it, and the next call works it out again
         ShapeData data = shapeData;
         if (data == null || data.version() != v) {
-            var key = MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
-            data = new ShapeData(v, key, MimicShapes.shape(key), MimicShapes.volumeFraction(key),
-                    MimicFaces.wholeFaces(targetState, planes, excluded, patches, appearance != null));
+            synchronized (cutLock) {
+                var key = MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
+                data = new ShapeData(v, key, MimicShapes.shape(key), MimicShapes.volumeFraction(key),
+                        MimicFaces.wholeFaces(targetState, planes, excluded, patches, appearance != null));
+            }
             shapeData = data;
         }
         return data;
@@ -255,12 +259,14 @@ public class MimicBlockEntity extends BlockEntity {
         List<List<CutPlane>> excludedCopy = new ArrayList<>();
         newExcluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
         List<Patch> patchesCopy = List.copyOf(newPatches);
-        this.planes.clear();
-        this.planes.addAll(planesCopy);
-        this.excluded.clear();
-        this.excluded.addAll(excludedCopy);
-        this.patches.clear();
-        this.patches.addAll(patchesCopy);
+        synchronized (cutLock) {
+            this.planes.clear();
+            this.planes.addAll(planesCopy);
+            this.excluded.clear();
+            this.excluded.addAll(excludedCopy);
+            this.patches.clear();
+            this.patches.addAll(patchesCopy);
+        }
         this.capMode = mode;
         changed();
     }
@@ -278,7 +284,9 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     public void addPlane(CutPlane plane) {
-        planes.add(plane);
+        synchronized (cutLock) {
+            planes.add(plane);
+        }
         changed();
     }
 
@@ -286,10 +294,12 @@ public class MimicBlockEntity extends BlockEntity {
     public MimicRenderData renderData() {
         MimicRenderData data = renderData;
         if (data == null) {
-            List<List<CutPlane>> excludedCopy = new ArrayList<>();
-            excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
-            data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
-                    List.copyOf(patches), capMode, appearance, List.copyOf(glowCuts));
+            synchronized (cutLock) {
+                List<List<CutPlane>> excludedCopy = new ArrayList<>();
+                excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
+                data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
+                        List.copyOf(patches), capMode, appearance, List.copyOf(glowCuts));
+            }
             renderData = data;
         }
         return data;
@@ -439,31 +449,33 @@ public class MimicBlockEntity extends BlockEntity {
         if (tag.contains("target")) {
             targetState = NbtUtils.readBlockState(registries.lookupOrThrow(Registries.BLOCK), tag.getCompound("target"));
         }
-        readPlanes(tag.getList("planes", Tag.TAG_DOUBLE), planes);
-        excluded.clear();
-        for (Tag region : tag.getList("excluded", Tag.TAG_LIST)) {
-            List<CutPlane> regionPlanes = new ArrayList<>();
-            readPlanes((ListTag) region, regionPlanes);
-            excluded.add(regionPlanes);
-        }
-        patches.clear();
-        for (Tag t : tag.getList("patches", Tag.TAG_COMPOUND)) {
-            CompoundTag p = (CompoundTag) t;
-            List<CutPlane> plane = new ArrayList<>();
-            readPlanes(p.getList("plane", Tag.TAG_DOUBLE), plane);
-            ListTag poly = p.getList("poly", Tag.TAG_FLOAT);
-            float[] polygon = new float[poly.size()];
-            for (int i = 0; i < polygon.length; i++) {
-                polygon[i] = poly.getFloat(i);
+        synchronized (cutLock) {
+            readPlanes(tag.getList("planes", Tag.TAG_DOUBLE), planes);
+            excluded.clear();
+            for (Tag region : tag.getList("excluded", Tag.TAG_LIST)) {
+                List<CutPlane> regionPlanes = new ArrayList<>();
+                readPlanes((ListTag) region, regionPlanes);
+                excluded.add(regionPlanes);
             }
-            if (plane.size() == 1 && polygon.length >= 9 && polygon.length % 3 == 0) {
-                patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
+            patches.clear();
+            for (Tag t : tag.getList("patches", Tag.TAG_COMPOUND)) {
+                CompoundTag p = (CompoundTag) t;
+                List<CutPlane> plane = new ArrayList<>();
+                readPlanes(p.getList("plane", Tag.TAG_DOUBLE), plane);
+                ListTag poly = p.getList("poly", Tag.TAG_FLOAT);
+                float[] polygon = new float[poly.size()];
+                for (int i = 0; i < polygon.length; i++) {
+                    polygon[i] = poly.getFloat(i);
+                }
+                if (plane.size() == 1 && polygon.length >= 9 && polygon.length % 3 == 0) {
+                    patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
+                }
             }
-        }
-        if (tag.contains("pending")) {
-            List<CutPlane> old = new ArrayList<>();
-            readPlanes(tag.getList("pending", Tag.TAG_DOUBLE), old);
-            old.forEach(plane -> patches.add(Patch.full(plane)));
+            if (tag.contains("pending")) {
+                List<CutPlane> old = new ArrayList<>();
+                readPlanes(tag.getList("pending", Tag.TAG_DOUBLE), old);
+                old.forEach(plane -> patches.add(Patch.full(plane)));
+            }
         }
         targetBeTag = tag.contains("targetBe") ? tag.getCompound("targetBe") : null;
         appearance = tag.contains("entity") ? EntityAppearance.load(tag.getCompound("entity")) : null;

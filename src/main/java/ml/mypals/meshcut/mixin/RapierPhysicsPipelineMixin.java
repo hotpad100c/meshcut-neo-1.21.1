@@ -6,7 +6,9 @@ import com.llamalad7.mixinextras.sugar.Local;
 import dev.ryanhcode.sable.physics.impl.rapier.collider.RapierVoxelColliderBakery;
 import dev.ryanhcode.sable.physics.impl.rapier.collider.RapierVoxelColliderData;
 import dev.ryanhcode.sable.util.LevelAccelerator;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import ml.mypals.meshcut.physics.MimicColliders;
+import ml.mypals.meshcut.physics.PhysicsDiag;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
@@ -27,6 +29,20 @@ public abstract class RapierPhysicsPipelineMixin {
 
     @Shadow @Final private LevelAccelerator accelerator;
     @Shadow @Final private ServerLevel level;
+    @Shadow @Final private Int2ObjectMap<?> activeSubLevels;
+
+    /** Times the native step (see {@link PhysicsDiag}). */
+    @WrapOperation(method = "physicsTick", at = @At(value = "INVOKE",
+            target = "Ldev/ryanhcode/sable/physics/impl/rapier/Rapier3D;step(JD)V"), remap = false)
+    private void meshcut$timeStep(long scene, double dt, Operation<Void> original) {
+        if (!PhysicsDiag.enabled()) {
+            original.call(scene, dt);
+            return;
+        }
+        long start = System.nanoTime();
+        original.call(scene, dt);
+        PhysicsDiag.step(System.nanoTime() - start, activeSubLevels.size());
+    }
 
     /** Whole chunk sections being uploaded. */
     @WrapOperation(method = "handleChunkSectionAddition", at = @At(value = "INVOKE", target = BAKE), remap = false)
