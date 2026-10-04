@@ -24,6 +24,19 @@ public final class LightsaberNet {
         @Override public Type<Input> type() { return TYPE; }
     }
 
+    /**
+     * Where the player's blade was this tick, as the client has it, relative to the player: the base, and the tip
+     * from the base. The cut is made along what the client drew (within what is believable, see LightsaberHandler),
+     * so what the player sees burn is what is cut.
+     */
+    public record Swing(float bx, float by, float bz, float dx, float dy, float dz) implements CustomPacketPayload {
+        public static final Type<Swing> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_swing"));
+        public static final StreamCodec<FriendlyByteBuf, Swing> CODEC = StreamCodec.of(
+                (buf, s) -> { buf.writeFloat(s.bx); buf.writeFloat(s.by); buf.writeFloat(s.bz); buf.writeFloat(s.dx); buf.writeFloat(s.dy); buf.writeFloat(s.dz); },
+                buf -> new Swing(buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
+        @Override public Type<Swing> type() { return TYPE; }
+    }
+
     public record Target(int id, float yaw, float pitch, float x, float y) implements CustomPacketPayload {
         public static final Type<Target> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_target"));
         public static final StreamCodec<FriendlyByteBuf, Target> CODEC = StreamCodec.of(
@@ -46,6 +59,11 @@ public final class LightsaberNet {
         registrar.playToServer(Gesture.TYPE, Gesture.CODEC, (gesture, context) -> context.enqueueWork(
                 () -> LightsaberMotion.startGesture(context.player(), gesture.preset, gesture.seed)));
         registrar.playToServer(Input.TYPE, Input.CODEC, LightsaberNet::onInput);
+        registrar.playToServer(Swing.TYPE, Swing.CODEC, (swing, context) -> context.enqueueWork(() -> {
+            if (context.player() instanceof ServerPlayer player) {
+                ml.mypals.meshcut.item.LightsaberHandler.receive(player, swing);
+            }
+        }));
         registrar.playToClient(Target.TYPE, Target.CODEC, (target, context) -> context.enqueueWork(
                 () -> ml.mypals.meshcut.client.LightsaberRemoteAim.accept(target)));
     }
@@ -60,9 +78,7 @@ public final class LightsaberNet {
     }
 
     public static void broadcast(ServerPlayer player, float yaw, float pitch, float x, float y) {
-        Target target = new Target(player.getId(), yaw, pitch, x, y);
-        PacketDistributor.sendToPlayersTrackingEntity(player, target);
-        PacketDistributor.sendToPlayer(player, target); // so that its burn marks follow the cut the server makes
+        PacketDistributor.sendToPlayersTrackingEntity(player, new Target(player.getId(), yaw, pitch, x, y));
     }
 
     private LightsaberNet() {}

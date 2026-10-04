@@ -50,8 +50,41 @@ public final class LightsaberBurns {
     private static final Map<UUID, Blade> LAST_BLADE = new HashMap<>();
     @Nullable private static ClientLevel burnLevel;
 
-    private record Mark(long time, float[] charred, float[] ember, Vec3 normal, BlockPos block, Object version,
-                        @Nullable UUID subLevel) {}
+    /** Once the cut is made the block is another and a mark no longer belongs to it; it dies down over this long. */
+    private static final long CLOSING_TICKS = 100;
+
+    private static final class Mark {
+        final long time;
+        final float[] charred, ember;
+        final Vec3 normal;
+        final BlockPos block;
+        final Object version;
+        @Nullable final UUID subLevel;
+        /** When the block changed under the mark (-1 while it has not), and how hot the mark was then. */
+        long closedAt = -1;
+        float closedHeat;
+
+        Mark(long time, float[] charred, float[] ember, Vec3 normal, BlockPos block, Object version, @Nullable UUID subLevel) {
+            this.time = time;
+            this.charred = charred;
+            this.ember = ember;
+            this.normal = normal;
+            this.block = block;
+            this.version = version;
+            this.subLevel = subLevel;
+        }
+
+        float heat(double now) {
+            double age = now - time;
+            float heat = (float) Math.max(0, 1 - age / EMBER_LIFETIME);
+            return closedAt < 0 ? heat : (float) (closedHeat * Math.max(0, 1 - (now - closedAt) / CLOSING_TICKS));
+        }
+
+        /** 1 while open; falls to 0 as the mark closes. */
+        float open(double now) {
+            return closedAt < 0 ? 1 : (float) Math.max(0, 1 - (now - closedAt) / CLOSING_TICKS);
+        }
+    }
     private record Contact(Vec3 position, Vec3 normal) {}
 
     static void clear() {
@@ -70,20 +103,25 @@ public final class LightsaberBurns {
         }
         if (level == null) return;
         long now = level.getGameTime();
-        while (!MARKS.isEmpty() && now - MARKS.peekFirst().time() > CHAR_LIFETIME) MARKS.pollFirst();
+        while (!MARKS.isEmpty() && now - MARKS.peekFirst().time > CHAR_LIFETIME) MARKS.pollFirst();
         // Geometry invalidation needs a tick check, not thousands of block-entity lookups per render frame.
-        MARKS.removeIf(mark -> LightsaberSurfaces.version(level, mark.block) != mark.version);
+        MARKS.removeIf(mark -> {
+            if (LightsaberSurfaces.version(level, mark.block) == mark.version) return false;
+            if (level.getBlockState(mark.block).isAir()) return true; // the block went with a fragment
+            if (mark.closedAt < 0) { // cut: the mark cools and darkens for a few seconds instead of vanishing at once
+                mark.closedHeat = mark.heat(now);
+                mark.closedAt = now;
+            }
+            return now - mark.closedAt > CLOSING_TICKS;
+        });
         LAST_BLADE.keySet().removeIf(id -> level.getPlayerByUUID(id) == null);
         var container = SubLevelContainer.getContainer(level);
         for (Player player : level.players()) {
             if (!LightsaberItem.isActive(player)) {
                 LAST_BLADE.remove(player.getUUID());
-                if (player == minecraft.player) LightsaberServerView.reset();
                 continue;
             }
-            // the marks lie where the server cuts: its blade, as it has told this player
-            Blade told = player == minecraft.player ? LightsaberServerView.blade(player) : null;
-            Blade blade = told != null ? told : Blade.of(player, 1f);
+            Blade blade = Blade.of(player, 1f);
             Blade before = LAST_BLADE.put(player.getUUID(), blade);
             if (player.distanceToSqr(minecraft.gameRenderer.getMainCamera().getPosition()) > 48 * 48
                     || blade.direction().lengthSqr() < 1e-4) continue;
@@ -222,8 +260,8 @@ public final class LightsaberBurns {
                 pose = client.renderPose(partial);
             }
             float fade = (float) Math.pow(Math.max(0, 1 - (time - mark.time) / CHAR_LIFETIME), 1.5);
-            polygon(consumer, matrix, camera, pose, mark, mark.charred, LIFT, 0.05f, 0.03f, 0.025f, fade * 0.85f);
-            float cooling = (float) Math.max(0, 1 - (time - mark.time) / EMBER_LIFETIME);
+            polygon(consumer, matrix, camera, pose, mark, mark.charred, LIFT, 0.05f, 0.03f, 0.025f, fade * 0.85f * mark.open(time));
+            float cooling = mark.heat(time);
             if (cooling > 0) {
                 float g = 0.25f + 0.55f * cooling, b = 0.05f + 0.35f * cooling * cooling, a = cooling * cooling * 0.9f;
                 polygon(consumer, matrix, camera, pose, mark, mark.ember, LIFT * 1.5, 1, g, b, a);

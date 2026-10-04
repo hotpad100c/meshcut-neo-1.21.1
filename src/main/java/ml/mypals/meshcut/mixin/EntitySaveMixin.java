@@ -8,7 +8,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** An entity held still while it is being cut is saved as it was before (see {@link EntityCutting#saved}). */
 @Mixin(Entity.class)
 public abstract class EntitySaveMixin {
     @Inject(method = "saveWithoutId", at = @At("RETURN"))

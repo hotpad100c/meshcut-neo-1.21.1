@@ -53,6 +53,9 @@ public final class LightsaberMotion {
         }
     }
 
+    /** Degrees the lit blade is held above where the player looks (negative pitch is up). */
+    private static final float REST_TILT = -9f;
+
     private static final class State {
         final SaberAim aim;
         final SaberTranslation hand = new SaberTranslation();
@@ -70,7 +73,7 @@ public final class LightsaberMotion {
         Vector2f remoteTarget;
 
         State(Player player) {
-            aim = new SaberAim(player.getYRot(), player.getXRot());
+            aim = new SaberAim(player.getYRot(), player.getXRot() + REST_TILT);
             dimension = player.level().dimension();
             position = player.position();
             tick = started = player.tickCount;
@@ -100,7 +103,7 @@ public final class LightsaberMotion {
         if (state.tick == player.tickCount) return;
         // Missing callbacks should advance elapsed simulation time, rather than snap to the target.
         float yaw = state.remoteTarget == null ? player.getYRot() + state.yawOffset : state.remoteTarget.x;
-        float pitch = state.remoteTarget == null ? player.getXRot() + state.pitchOffset : state.remoteTarget.y;
+        float pitch = state.remoteTarget == null ? player.getXRot() + state.pitchOffset + REST_TILT : state.remoteTarget.y;
         SaberGesture.Sample gesture = state.remoteTarget == null
                 ? SaberGesture.sample(state.preset, state.seed, player.tickCount - state.gestureStarted)
                 : new SaberGesture.Sample(0, 0, 0, 0);

@@ -1,0 +1,162 @@
+{
+    "blend": {
+        "func": "add",
+        "srcrgb": "one",
+        "dstrgb": "one"
+    },
+    "vertex": "meshcut:bloom",
+    "fragment": "meshcut:motion_blur",
+    "attributes": [
+        "Position"
+    ],
+    "samplers": [
+        {
+            "name": "Sampler0"
+        }
+    ],
+    "uniforms": [
+        {
+            "name": "Params",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                0.012,
+                0.8,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA0",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB0",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA1",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB1",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA2",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB2",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA3",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB3",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA4",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB4",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseA5",
+            "type": "float",
+            "count": 4,
+            "values": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        },
+        {
+            "name": "PoseB5",
+            "type": "float",
+            "count": 4,
+            "values": [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+            ]
+        }
+    ]
+}

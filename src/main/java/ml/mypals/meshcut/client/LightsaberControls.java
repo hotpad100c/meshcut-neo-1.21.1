@@ -54,13 +54,11 @@ public final class LightsaberControls {
         }
         boolean swingRequested = false;
         while (LightsaberKeys.RANDOM_SWING.consumeClick()) swingRequested = true;
-        // consumeClick keeps taps responsive; isDown turns a hold into a continuous random combo.
         if (swingRequested || LightsaberKeys.RANDOM_SWING.isDown()) {
             int preset = player.getRandom().nextInt(SaberGesture.COUNT), seed = player.getRandom().nextInt();
             if (LightsaberMotion.startGesture(player, preset, seed))
                 PacketDistributor.sendToServer(new LightsaberNet.Gesture(preset, seed));
         }
-        // At most one packet per client tick, including while turning the camera at the free-range boundary.
         PacketDistributor.sendToServer(new LightsaberNet.Input(control.yaw(), control.pitch(), handX, handY));
     }
 
@@ -80,6 +78,18 @@ public final class LightsaberControls {
         session = null;
         handX = handY = 0;
         while (LightsaberKeys.RANDOM_SWING.consumeClick()) {}
+    }
+
+    /** After the tick's aim is worked out: the blade as drawn, which is what the server is to cut along. */
+    @SubscribeEvent
+    public static void sendBlade(ClientTickEvent.Post event) {
+        LocalPlayer player = Minecraft.getInstance().player;
+        if (player == null || !LightsaberItem.isActive(player)) return;
+        var blade = ml.mypals.meshcut.cut.Blade.of(player, 1f);
+        var at = player.position();
+        var tip = blade.tip().subtract(blade.base());
+        PacketDistributor.sendToServer(new LightsaberNet.Swing((float) (blade.base().x - at.x), (float) (blade.base().y - at.y),
+                (float) (blade.base().z - at.z), (float) tip.x, (float) tip.y, (float) tip.z));
     }
 
     @SubscribeEvent

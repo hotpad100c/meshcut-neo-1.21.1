@@ -56,11 +56,9 @@ public final class LightsaberRenderer {
             LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
                     camera, matrix, buffers);
         }
-        LightsaberTrail.renderWorld(event, blades);
-        if (minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
-                && !minecraft.options.hideGui && blades.containsKey(minecraft.player.getUUID())) {
-            LightsaberTrail.renderFirstPerson(minecraft.player, blades.get(minecraft.player.getUUID()),
-                    partialTick, matrix, camera, buffers);
+        // the sweep of each blade is a motion blur over the finished scene (see MotionBlur)
+        if (MotionBlur.usable()) {
+            blades.forEach((id, blade) -> MotionBlur.record(id, blade, time));
         }
         RenderType beamType = LightsaberRenderTypes.BEAM;
         VertexConsumer consumer = buffers.getBuffer(beamType);

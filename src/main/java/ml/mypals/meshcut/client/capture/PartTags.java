@@ -40,7 +40,7 @@ public final class PartTags {
         /** Where it drew, taken when it drew its first face (the level is turned after it is pushed); null if it drew none. */
         @Nullable
         Matrix4f pose;
-        /** The model part that pushed it, if a model system told (see {@code CitadelModelBoxMixin}). */
+        /** The model part that pushed it, if a model system told (see {@code compat.CitadelModelBoxMixin}). */
         @Nullable
         Object owner;
         @Nullable
@@ -127,6 +127,19 @@ public final class PartTags {
         if (top != null) {
             top.owner = owner;
             top.name = name;
+        }
+    }
+
+    /**
+     * As {@link #own}, for a model system that moves to a part's pivot, turns, and moves back before it draws (GeckoLib):
+     * the pose at this moment is the part's frame, hinging at its pivot, and is taken as where the part was drawn.
+     */
+    public static void hinge(Object owner, @Nullable String name) {
+        PoseNode top = active ? NODES.peek() : null;
+        if (top != null) {
+            top.owner = owner;
+            top.name = name;
+            top.pose = new Matrix4f(top.live.pose());
         }
     }
 

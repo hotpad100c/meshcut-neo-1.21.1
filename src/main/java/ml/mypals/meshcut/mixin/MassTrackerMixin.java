@@ -14,16 +14,11 @@ import org.spongepowered.asm.mixin.injection.At;
 
 import java.util.function.BiFunction;
 
-/**
- * Sable asks for a block's centre of mass through {@code BLOCK_CENTER_OF_MASS.apply(level, state)} — by state, with
- * no position, and cached. A cut block's centre of mass is where what is left of it is, which only its block entity
- * knows, so those lookups get the position handed over here.
- */
+
 @Mixin(value = MassTracker.class, remap = false)
 public abstract class MassTrackerMixin {
     private static final String APPLY = "Ljava/util/function/BiFunction;apply(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
-    /** Building the tracker from scratch: the centre-of-mass sum. */
     @WrapOperation(method = "build", at = @At(value = "INVOKE", target = APPLY, ordinal = 0), remap = false)
     private static Object meshcut$comSum(BiFunction<Object, Object, Object> function, Object level, Object state,
                                          Operation<Object> original, @Local BlockPos.MutableBlockPos pos) {

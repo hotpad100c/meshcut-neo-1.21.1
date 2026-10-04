@@ -1,4 +1,4 @@
-package ml.mypals.meshcut.mixin;
+package ml.mypals.meshcut.mixin.compat;
 
 import ml.mypals.meshcut.client.capture.ModelCapturer;
 import net.minecraft.world.level.LevelAccessor;

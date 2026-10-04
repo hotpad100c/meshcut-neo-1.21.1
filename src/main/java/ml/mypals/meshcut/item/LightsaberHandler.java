@@ -18,14 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Cuts with the surfaces a lit lightsaber's blade sweeps.
- * <p>
- * The saber is lit while right-click is held, and a cut lasts exactly that long: it begins the moment the blade is
- * lit and ends when it is put out. World blocks stay intact while holding: each tick's sweep is recorded, and
- * the whole cut is applied at once at the end. Replacing blocks as the blade passes would, for example, turn the
- * upper half of a door into a mimic before the lower half had been reached, and the door would break apart.
- */
+
 @EventBusSubscriber(modid = MeshCut.MODID)
 public final class LightsaberHandler {
     /** Larger jumps are teleports or dimension changes, not swings. */
@@ -46,7 +39,44 @@ public final class LightsaberHandler {
         }
     }
 
+    /** The client's blade is believed if its base is this close to the player's eyes (a hand reaches about one). */
+    private static final double MAX_BASE_DISTANCE = 3.5;
+    /** Blades the client has sent and the server has not used yet, per player; no more are kept than a few ticks give. */
+    private static final int MAX_INBOX = 8;
+    /** A client silent this long is not sending its blade (it does not know to): the server works the blade out itself. */
+    private static final int SILENT_TICKS = 5;
+
     private static final Map<UUID, Blade> LAST = new HashMap<>();
+    private static final Map<UUID, List<Blade>> INBOX = new HashMap<>();
+    private static final Map<UUID, Integer> HEARD = new HashMap<>();
+
+    /**
+     * The blade as the client drew it this tick. The cut is made along what the client sent, so that what the player
+     * sees burn is what is cut and the two cannot drift apart; it is believed only within reason: the base near the
+     * player, the blade no longer than it can be, and (in the tick handler) no jumps.
+     */
+    public static void receive(ServerPlayer player, ml.mypals.meshcut.network.LightsaberNet.Swing swing) {
+        if (!LightsaberItem.isActive(player)) {
+            return;
+        }
+        float[] values = {swing.bx(), swing.by(), swing.bz(), swing.dx(), swing.dy(), swing.dz()};
+        for (float v : values) {
+            if (!Float.isFinite(v)) {
+                return;
+            }
+        }
+        net.minecraft.world.phys.Vec3 base = player.position().add(swing.bx(), swing.by(), swing.bz());
+        net.minecraft.world.phys.Vec3 direction = new net.minecraft.world.phys.Vec3(swing.dx(), swing.dy(), swing.dz());
+        double length = direction.length();
+        if (length < 0.05 || length > Blade.LENGTH * 1.05 || base.distanceTo(player.getEyePosition()) > MAX_BASE_DISTANCE) {
+            return;
+        }
+        List<Blade> inbox = INBOX.computeIfAbsent(player.getUUID(), k -> new ArrayList<>());
+        if (inbox.size() < MAX_INBOX) {
+            inbox.add(new Blade(base, base.add(direction)));
+        }
+        HEARD.put(player.getUUID(), player.tickCount);
+    }
     private static final Map<UUID, Swing> SWINGS = new HashMap<>();
 
     @SubscribeEvent
@@ -57,10 +87,24 @@ public final class LightsaberHandler {
         UUID id = player.getUUID();
         if (!LightsaberItem.isActive(player)) {
             LAST.remove(id);
+            INBOX.remove(id);
+            HEARD.remove(id);
             finish(player); // let go: the cut is over
             return;
         }
-        Blade now = Blade.of(player, 1f);
+        List<Blade> blades = INBOX.remove(id);
+        if (blades == null || blades.isEmpty()) {
+            // nothing came this tick: the blade has not moved, unless the client does not send it at all
+            boolean silent = player.tickCount - HEARD.getOrDefault(id, Integer.MIN_VALUE / 2) > SILENT_TICKS;
+            blades = silent ? List.of(Blade.of(player, 1f)) : List.of();
+        }
+        for (Blade now : blades) {
+            step(player, id, now);
+        }
+    }
+
+    /** One position of the blade: the sweep from the one before it, for entities now and for blocks when it is over. */
+    private static void step(ServerPlayer player, UUID id, Blade now) {
         Blade before = LAST.put(id, now);
         Swing swing = SWINGS.get(id);
         if (swing != null && (swing.dimension != player.level().dimension() || swing.session != LightsaberMotion.session(player))) {
@@ -112,6 +156,8 @@ public final class LightsaberHandler {
         }
         LAST.remove(event.getEntity().getUUID());
         SWINGS.remove(event.getEntity().getUUID());
+        INBOX.remove(event.getEntity().getUUID());
+        HEARD.remove(event.getEntity().getUUID());
     }
 
     private LightsaberHandler() {}

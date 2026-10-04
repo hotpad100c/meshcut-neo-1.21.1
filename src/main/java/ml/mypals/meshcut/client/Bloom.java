@@ -57,6 +57,16 @@ public final class Bloom {
                 shader -> up = shader);
     }
 
+    /** Asks for the depth of the opaque scene to be kept this frame and the next few (the motion blur reads it). */
+    static void wantDepth() {
+        recent = RECENT_FRAMES;
+    }
+
+    /** The texture of the opaque scene's depth: the snapshot taken before the translucent layers, if there is one. */
+    static int sceneDepth() {
+        return haveDepth && glow != null ? glow.getDepthTextureId() : Minecraft.getInstance().getMainRenderTarget().getDepthTextureId();
+    }
+
     public static boolean usable() {
         return down != null && up != null && Minecraft.getInstance().level != null;
     }
@@ -169,6 +179,7 @@ public final class Bloom {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER) {
             return;
         }
+        MotionBlur.render(event); // before the depth it reads is let go of below
         if (!usable() || (!active && queued == 0)) {
             queued = 0;
             active = false;

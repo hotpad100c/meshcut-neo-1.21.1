@@ -670,13 +670,32 @@ public final class EntityParts {
         return true;
     }
 
+    /**
+     * The rotation and origin of a pose. A pose may be scaled, unevenly (a bone made longer, a model drawn bigger), which
+     * the quaternion of the matrix as it stands would be skewed by: the axes are taken one by one, made unit length and
+     * square to each other, and a mirrored pose is turned back to a plain rotation.
+     */
     private static void frameOf(org.joml.Matrix4f pose, Quaternionf rotation, Vector3f origin) {
         pose.getTranslation(origin);
-        Matrix3f m = new Matrix3f(pose);
-        if (m.determinant() < 0) {
-            m.scale(-1, 1, 1);
+        Vector3f x = new Matrix3f(pose).getColumn(0, new Vector3f());
+        Vector3f y = new Matrix3f(pose).getColumn(1, new Vector3f());
+        Vector3f z = new Matrix3f(pose).getColumn(2, new Vector3f());
+        if (x.lengthSquared() < 1e-12f || y.lengthSquared() < 1e-12f || z.lengthSquared() < 1e-12f
+                || !Float.isFinite(x.lengthSquared() + y.lengthSquared() + z.lengthSquared())) {
+            rotation.identity();
+            return;
         }
-        m.getNormalizedRotation(rotation);
+        x.normalize();
+        y.sub(new Vector3f(x).mul(x.dot(y)));
+        if (y.lengthSquared() < 1e-12f) {
+            rotation.identity();
+            return;
+        }
+        y.normalize();
+        Vector3f cross = new Vector3f(x).cross(y);
+        z.set(cross); // right-handed: a mirrored axis is flipped, as it was before
+        Matrix3f m = new Matrix3f(x, y, z);
+        rotation.setFromNormalized(m).normalize();
     }
 
     /**

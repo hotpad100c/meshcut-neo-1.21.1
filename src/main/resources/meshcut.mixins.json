@@ -13,8 +13,9 @@
     "VoxelNeighborhoodStateMixin"
   ],
   "client": [
-    "FlywheelVisualizationMixin",
-    "CitadelModelBoxMixin",
+    "compat.FlywheelVisualizationMixin",
+    "compat.CitadelModelBoxMixin",
+    "compat.GeckoRenderUtilsMixin",
     "PistonHeadRendererMixin",
     "PoseStackMixin",
     "ModelPartAccessor",
