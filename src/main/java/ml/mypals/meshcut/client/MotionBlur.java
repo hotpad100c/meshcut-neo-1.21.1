@@ -29,21 +29,13 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * The sweep of the blade, as a motion blur: a layer of its own, drawn over the finished scene by a shader that adds
- * up, for each pixel, how long the blade was over it during the last moments. It replaces the ribbon the blade used to
- * leave, which was a surface and looked like one; this is light, soft at its edges, longer where the blade moves
- * faster, and hidden behind what is in front of it by the depth of the scene.
- */
+
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MotionBlur {
-    /** How far back the blur reaches, in ticks. */
-    private static final double SHUTTER_TICKS = 2.8;
-    /** Positions of the blade the shader sweeps through (see motion_blur.fsh). */
-    private static final int POSES = 6;
-    /** Half-width of the blade's light in the blur, in fractions of the screen height; and its gain. */
+    private static final double SHUTTER_TICKS = 0.7;
+    private static final int POSES = 10;
     private static final float WIDTH = 0.012f;
-    private static final float GAIN = 0.8f;
+    private static final float GAIN = 1f;
 
     private record Pose(double time, Vec3 base, Vec3 tip) {}
 
@@ -61,12 +53,11 @@ public final class MotionBlur {
         return shader != null;
     }
 
-    /** Where a blade is this frame: kept for a moment, for the blur to sweep through. */
     static void record(UUID id, Blade blade, double time) {
         ArrayDeque<Pose> history = HISTORY.computeIfAbsent(id, k -> new ArrayDeque<>());
         Pose last = history.peekLast();
         if (last != null && time - last.time() < 1e-3) {
-            history.pollLast(); // drawn twice in a frame (hands and world): the later is the one
+            history.pollLast();
         }
         history.addLast(new Pose(time, blade.base(), blade.tip()));
         while (history.size() > 2 && time - history.peekFirst().time() > SHUTTER_TICKS * 1.5) {
@@ -75,8 +66,7 @@ public final class MotionBlur {
         Bloom.wantDepth();
     }
 
-    /** Called by the bloom's composition, in the stage after the scene: its depth is still in its buffer. */
-    static void render(RenderLevelStageEvent event) {
+    static void render(RenderLevelStageEvent event, int depth, int glow, int bloom, float strength) {
         if (shader == null || HISTORY.isEmpty()) {
             return;
         }
@@ -120,16 +110,15 @@ public final class MotionBlur {
                 continue;
             }
             if (!prepared) {
-                prepare(main);
+                prepare(main, depth, glow, bloom);
                 prepared = true;
             }
             float aspect = (float) main.width / Math.max(1, main.height);
-            shader.safeGetUniform("Params").set(aspect, WIDTH, GAIN, 0f);
+            shader.safeGetUniform("Params").set(aspect, WIDTH, GAIN, strength);
             for (int k = 0; k < POSES; k++) {
                 shader.safeGetUniform("PoseA" + k).set(a[k][0], a[k][1], a[k][2], a[k][3]);
                 shader.safeGetUniform("PoseB" + k).set(b[k][0], b[k][1], b[k][2], b[k][3]);
             }
-            // only the part of the screen the blade has been over, and the light around it
             float marginY = WIDTH * 4, marginX = marginY / aspect;
             float x0 = Math.max(-1, minX - marginX), x1 = Math.min(1, maxX + marginX);
             float y0 = Math.max(-1, minY - marginY), y1 = Math.min(1, maxY + marginY);
@@ -153,7 +142,7 @@ public final class MotionBlur {
         }
     }
 
-    private static void prepare(RenderTarget main) {
+    private static void prepare(RenderTarget main, int depth, int glow, int bloom) {
         main.bindWrite(true);
         RenderSystem.disableCull();
         RenderSystem.disableDepthTest();
@@ -161,10 +150,11 @@ public final class MotionBlur {
         RenderSystem.enableBlend();
         RenderSystem.blendFunc(GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ONE);
         RenderSystem.setShader(() -> shader);
-        RenderSystem.setShaderTexture(0, Bloom.sceneDepth());
+        RenderSystem.setShaderTexture(0, depth);
+        RenderSystem.setShaderTexture(1, glow);
+        RenderSystem.setShaderTexture(2, bloom);
     }
 
-    /** The blade at the time, between the two positions it was seen in on either side of it. */
     private static Pose at(ArrayDeque<Pose> history, double time) {
         Pose before = null, after = null;
         for (Pose pose : history) {
@@ -185,7 +175,6 @@ public final class MotionBlur {
         return new Pose(time, before.base().lerp(after.base(), t), before.tip().lerp(after.tip(), t));
     }
 
-    /** The point in clip space (xy and depth in normalised device coordinates), or null if it is behind the camera. */
     private static Vector4f clip(Matrix4f toClip, Vec3 point, Vec3 camera) {
         Vector4f v = new Vector4f((float) (point.x - camera.x), (float) (point.y - camera.y), (float) (point.z - camera.z), 1);
         toClip.transform(v);

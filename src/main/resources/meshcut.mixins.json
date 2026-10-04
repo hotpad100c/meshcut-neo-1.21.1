@@ -4,6 +4,8 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "EntitySaveMixin",
+    "FloatingBlockControllerAccessor",
+    "FloatingClusterContainerMixin",
     "LevelChunkMixin",
     "MassTrackerMixin",
     "PistonBaseBlockMixin",
@@ -17,6 +19,7 @@
     "compat.CitadelModelBoxMixin",
     "compat.GeckoRenderUtilsMixin",
     "PistonHeadRendererMixin",
+    "HumanoidModelGrabMixin",
     "PoseStackMixin",
     "ModelPartAccessor",
     "ModelPartCubeMixin",

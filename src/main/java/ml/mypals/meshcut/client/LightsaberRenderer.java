@@ -4,11 +4,13 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import ml.mypals.meshcut.MeshCut;
 import ml.mypals.meshcut.cut.Blade;
+import ml.mypals.meshcut.item.LightsaberItem;
 import ml.mypals.meshcut.item.LightsaberMotion;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
@@ -21,12 +23,24 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** World-space blades and trails use the cutting segment; the hilt is aligned to its origin. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberRenderer {
     private static final float[] CORE = {1f, 1f, 1f, 1f};
     private static final float[] GLOW = {0.25f, 0.8f, 1f, 0.45f};
     private static final float[] HALO = {0.2f, 0.6f, 1f, 0.18f};
+
+    private record Palette(float[] glow, float[] halo) {
+        static final Palette DEFAULT = new Palette(GLOW, HALO);
+
+        static Palette of(Player player) {
+            ItemStack stack = player.getMainHandItem();
+            int rgb = stack.getItem() instanceof LightsaberItem ? LightsaberItem.getBladeColor(stack) : -1;
+            if (rgb == -1) return DEFAULT;
+            float r = ((rgb >> 16) & 0xFF) / 255f, g = ((rgb >> 8) & 0xFF) / 255f, b = (rgb & 0xFF) / 255f;
+            // the halo is a little deeper than the glow, as the default blue's is
+            return new Palette(new float[]{r, g, b, GLOW[3]}, new float[]{r * 0.8f, g * 0.8f, b * 0.8f, HALO[3]});
+        }
+    }
 
     @SubscribeEvent
     public static void onRenderLevel(RenderLevelStageEvent event) {
@@ -44,11 +58,13 @@ public final class LightsaberRenderer {
         Matrix4f matrix = poseStack.last().pose();
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         Map<UUID, Blade> blades = new HashMap<>();
+        Map<UUID, Palette> palettes = new HashMap<>();
         for (Player player : minecraft.level.players()) {
             if (!LightsaberMotion.isVisible(player)) {
                 continue;
             }
             blades.put(player.getUUID(), Blade.of(player, partialTick));
+            palettes.put(player.getUUID(), Palette.of(player));
         }
         // with bloom the hands are drawn after it, so that its glow does not lie over them (see renderHands)
         if (!Bloom.usable() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
@@ -65,7 +81,7 @@ public final class LightsaberRenderer {
         for (var entry : blades.entrySet()) {
             Blade blade = entry.getValue();
             drawBlade(consumer, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
-                    time, entry.getKey());
+                    time, entry.getKey(), palettes.get(entry.getKey()));
         }
         buffers.endBatch(beamType);
         if (Bloom.usable() && !blades.isEmpty()) { // the same beam again, into the glow buffer
@@ -73,7 +89,7 @@ public final class LightsaberRenderer {
             for (var entry : blades.entrySet()) {
                 Blade blade = entry.getValue();
                 drawBlade(glow, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
-                        time, entry.getKey());
+                        time, entry.getKey(), palettes.get(entry.getKey()));
             }
             Bloom.flush(BloomRenderTypes.QUADS);
         }
@@ -96,7 +112,7 @@ public final class LightsaberRenderer {
     }
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,
-                                  double time, UUID owner) {
+                                  double time, UUID owner, Palette palette) {
         if (base.distanceToSqr(tip) < 1e-4) return;
         // Continuous game-time oscillation avoids frame-dependent random jumps and freezes when paused.
         double phase = (owner.hashCode() & 0xffff) * (Math.PI * 2 / 65536);
@@ -108,8 +124,8 @@ public final class LightsaberRenderer {
         Vec3 shimmer = sideways.scale(Math.sin(time * 1.3 + phase) * 0.003)
                 .add(upwards.scale(Math.sin(time * 1.9 + phase) * 0.003));
         // Only the glow wavers; the emitter, core and cutting segment retain their exact alignment.
-        prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), HALO, (float) (1 + pulse));
-        prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), GLOW, (float) (1 + pulse));
+        prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), palette.halo(), (float) (1 + pulse));
+        prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), palette.glow(), (float) (1 + pulse));
         prism(consumer, matrix, base, tip, 0.008 * (1 + pulse * 0.4), CORE, 1f);
     }
 

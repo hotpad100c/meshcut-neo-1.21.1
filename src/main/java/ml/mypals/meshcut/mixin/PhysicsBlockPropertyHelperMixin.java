@@ -11,9 +11,20 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** A cut block weighs what the imitated block weighs, scaled by how much of it is left. */
 @Mixin(value = PhysicsBlockPropertyHelper.class, remap = false)
 public abstract class PhysicsBlockPropertyHelperMixin {
+    @Inject(method = "getInertia", at = @At("HEAD"), cancellable = true)
+    private static void meshcut$mimicInertia(BlockGetter level, BlockPos pos, BlockState state,
+                                             CallbackInfoReturnable<net.minecraft.world.phys.Vec3> cir) {
+        if (state.getBlock() instanceof MimicBlock && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
+            MimicBlockEntity.MassSnapshot mass = be.massFor(state);
+            if (mass != null) {
+                net.minecraft.world.phys.Vec3 inertia = PhysicsBlockPropertyHelper.getInertia(level, pos, mass.target());
+                cir.setReturnValue(inertia == null ? null : inertia.scale(mass.volumeFraction()));
+            }
+        }
+    }
+
     @Inject(method = "getMass", at = @At("HEAD"), cancellable = true)
     private static void meshcut$mimicMass(BlockGetter level, BlockPos pos, BlockState state,
                                           CallbackInfoReturnable<Double> cir) {

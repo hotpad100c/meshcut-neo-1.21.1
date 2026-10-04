@@ -7,6 +7,7 @@ public final class MeshCutConfig {
     public static final ModConfigSpec SPEC;
     public static final ModConfigSpec.DoubleValue DEBRIS_VOLUME;
     public static final ModConfigSpec.IntValue DEBRIS_SECONDS;
+    public static final ModConfigSpec.DoubleValue GRAB_MAX_FORCE;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -17,6 +18,11 @@ public final class MeshCutConfig {
         DEBRIS_SECONDS = builder
                 .comment("How long such a piece lasts, in seconds.")
                 .defineInRange("lifetimeSeconds", 30, 1, 3600);
+        builder.pop();
+        builder.push("grab");
+        GRAB_MAX_FORCE = builder
+                .comment("The most force a player holding a cut piece by hand can pull it with (as Create Aeronautics' handles).")
+                .defineInRange("maxForce", 120.0, 0.0, 1.0E6);
         builder.pop();
         SPEC = builder.build();
     }

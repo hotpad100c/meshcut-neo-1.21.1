@@ -179,7 +179,8 @@ public final class Bloom {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER) {
             return;
         }
-        MotionBlur.render(event); // before the depth it reads is let go of below
+        // the motion blur reads the opaque scene's depth: taken now, before the snapshot of it is let go of below
+        int depth = sceneDepth();
         if (!usable() || (!active && queued == 0)) {
             queued = 0;
             active = false;
@@ -216,6 +217,11 @@ public final class Bloom {
         for (int i = LEVELS - 1; i > 0; i--) {
             pass(up, mips[i], mips[i - 1], 1);
         }
+        // the blade's trail is made of this frame's glow and bloom (see MotionBlur): drawn while both are at hand
+        MotionBlur.render(event, depth, glow.getColorTextureId(), mips[0].getColorTextureId(), STRENGTH);
+        RenderSystem.disableCull();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
         pass(up, mips[0], main, STRENGTH);
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();

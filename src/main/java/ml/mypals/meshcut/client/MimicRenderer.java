@@ -37,7 +37,7 @@ import java.util.WeakHashMap;
  */
 public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     /** How long the glow on a fresh cut lasts. */
-    private static final double GLOW_TICKS = 600;
+    private static final double GLOW_TICKS = MimicBlockEntity.GLOW_TICKS;
 
     /** What a block draws. Until a worker has cut it up, it draws its model whole. */
     private static final class CacheEntry {
@@ -106,18 +106,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
 
     /** 1 right after the cut, easing down to 0 over {@link #GLOW_TICKS}; 0 once it is over or if there is no glow. */
     private static float glowFade(MimicBlockEntity be, float partialTick) {
-        if (be.getCapMode() != CapMode.LAVA || be.getGlowStart() == MimicBlockEntity.NEVER || be.getLevel() == null) {
-            return 0f;
-        }
-        double age = be.getLevel().getGameTime() + partialTick - be.getGlowStart();
-        if (age < 0) {
-            return 1f;
-        }
-        if (age >= GLOW_TICKS) {
-            return 0f;
-        }
-        double remaining = 1 - age / GLOW_TICKS;
-        return (float) (remaining * remaining);
+        return be.glowFade(partialTick); // the same curve the light it gives off follows
     }
 
     private static CacheEntry build(MimicBlockEntity be) {

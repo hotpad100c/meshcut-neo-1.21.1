@@ -1,35 +1,79 @@
 package ml.mypals.meshcut.item;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.FastColor;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.DyeColor;
+import net.minecraft.world.item.DyeItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
+import net.minecraft.world.item.component.DyedItemColor;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
-/**
- * A hilt that is lit while right-click is held. For as long as it is held the blade extends from the hilt
- * (see {@code Blade}) and everything it sweeps through is cut ({@code LightsaberHandler}); letting go puts it out.
- */
 public class LightsaberItem extends Item {
     public LightsaberItem(Properties properties) {
         super(properties);
     }
 
-    /** Whether the player is holding the blade lit: right-click is down with a saber in the main hand. */
     public static boolean isActive(Player player) {
         return player.isUsingItem() && player.getUsedItemHand() == InteractionHand.MAIN_HAND
                 && player.getUseItem().getItem() instanceof LightsaberItem;
+    }
+
+    public static int getBladeColor(ItemStack stack) {
+        DyedItemColor dyed = stack.get(DataComponents.DYED_COLOR);
+        return dyed == null ? -1 : dyed.rgb() & 0xFFFFFF;
+    }
+
+    public static void mixDye(ItemStack stack, DyeColor dye) {
+        int[] colors;
+        int current = getBladeColor(stack);
+        int added = dye.getTextureDiffuseColor();
+        colors = current == -1 ? new int[] { added } : new int[] { current, added };
+        int r = 0, g = 0, b = 0, brightness = 0;
+        for (int color : colors) {
+            int cr = FastColor.ARGB32.red(color), cg = FastColor.ARGB32.green(color), cb = FastColor.ARGB32.blue(color);
+            brightness += Math.max(cr, Math.max(cg, cb));
+            r += cr;
+            g += cg;
+            b += cb;
+        }
+        int n = colors.length;
+        r /= n;
+        g /= n;
+        b /= n;
+        float averageBrightness = (float) brightness / n;
+        float max = Math.max(r, Math.max(g, b));
+        if (max > 0) {
+            r = (int) (r * averageBrightness / max);
+            g = (int) (g * averageBrightness / max);
+            b = (int) (b * averageBrightness / max);
+        }
+        stack.set(DataComponents.DYED_COLOR, new DyedItemColor((r << 16) | (g << 8) | b, true));
     }
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
         if (hand != InteractionHand.MAIN_HAND) {
+            ItemStack dye = player.getMainHandItem();
+            if (dye.getItem() instanceof DyeItem dyeItem) {
+                if (!level.isClientSide()) {
+                    mixDye(stack, dyeItem.getDyeColor());
+                    dye.consume(1, player);
+                    level.playSound(null, player.getX(), player.getY(), player.getZ(), SoundEvents.DYE_USE,
+                            SoundSource.PLAYERS, 1f, 1f);
+                }
+                return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
+            }
             return InteractionResultHolder.pass(stack);
         }
         player.startUsingItem(hand);
@@ -55,7 +99,6 @@ public class LightsaberItem extends Item {
         }
     }
 
-    /** Swinging it at blocks should not also mine them. */
     @Override
     public boolean canAttackBlock(BlockState state, Level level, BlockPos pos, Player player) {
         return false;

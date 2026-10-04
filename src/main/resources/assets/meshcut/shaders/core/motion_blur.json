@@ -12,6 +12,12 @@
     "samplers": [
         {
             "name": "Sampler0"
+        },
+        {
+            "name": "Sampler1"
+        },
+        {
+            "name": "Sampler2"
         }
     ],
     "uniforms": [
@@ -23,7 +29,7 @@
                 1.0,
                 0.012,
                 0.8,
-                0.0
+                1.4
             ]
         },
         {

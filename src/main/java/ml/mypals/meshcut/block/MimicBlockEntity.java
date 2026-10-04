@@ -27,6 +27,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.neoforge.client.model.data.ModelData;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Vector3dc;
 
@@ -283,6 +284,12 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     @Override
+    public void setRemoved() {
+        ml.mypals.meshcut.physics.MimicFloating.update(level, worldPosition, null, 0);
+        super.setRemoved();
+    }
+
+    @Override
     public void onLoad() {
         super.onLoad();
         updateLight(); // e.g. moved into a sub-level: the light is set for the new place
@@ -314,21 +321,56 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     /** Gives off the light the imitated block does (see {@link MimicBlock#getLightEmission}). */
-    private void updateLight() {
+    void updateLight() {
         // On both sides: the client works out its own lighting, and the synced light data may come later than this
         // block entity's data, so it sets the value itself and relights rather than wait.
         if (level == null) {
             return;
         }
+        // a piece of something that floats still floats (server only; see MimicFloating)
+        if (level instanceof ServerLevel) {
+            ml.mypals.meshcut.physics.MimicFloating.update(level, worldPosition, targetState, MimicShapes.volumeFraction(shapeKey()));
+        }
         var light = level.getAuxLightManager(worldPosition);
-        int emission = targetState.getLightEmission();
+        int emission = lightLevel();
         if (light != null && (light.getLightAt(worldPosition) != emission || (level.isClientSide && emission > 0))) {
             light.setLightAt(worldPosition, emission);
             level.getLightEngine().checkBlock(worldPosition);
         }
+        if (glowLight() > 0) {
+            GlowLight.track(this);
+        }
     }
 
-    /** The pieces this block's cuts have divided it into (cached until the cuts change). */
+    public static int getLight(Level level, BlockPos pos) {
+        return level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.lightLevel() : 0;
+    }
+
+    public int lightLevel() {
+        return Math.max(targetState.getLightEmission(), glowLight());
+    }
+
+    public static final double GLOW_TICKS = 600;
+
+    public int glowLight() {
+        return glowCuts.isEmpty() ? 0 : (int) Math.ceil(15 * glowFade(0));
+    }
+
+    public float glowFade(float partialTick) {
+        if (capMode != CapMode.LAVA || glowStart == NEVER || level == null) {
+            return 0f;
+        }
+        double age = level.getGameTime() + partialTick - glowStart;
+        if (age < 0) {
+            return 1f;
+        }
+        if (age >= GLOW_TICKS) {
+            return 0f;
+        }
+        double remaining = 1 - age / GLOW_TICKS;
+        return (float) (remaining * remaining);
+    }
+
     public CellGrid grid() {
         CellGrid g = grid;
         if (g == null) {
@@ -338,7 +380,6 @@ public class MimicBlockEntity extends BlockEntity {
         return g;
     }
 
-    /** What this block contributes to the connectivity of the structure it is in. */
     public BlockNodes nodes() {
         return BlockNodes.of(grid(), false);
     }
@@ -402,7 +443,7 @@ public class MimicBlockEntity extends BlockEntity {
                 patches.add(Patch.restore(plane.get(0), polygon, p.getBoolean("through")));
             }
         }
-        if (tag.contains("pending")) { // saves from before cuts could stop midway: each was a cut right through
+        if (tag.contains("pending")) {
             List<CutPlane> old = new ArrayList<>();
             readPlanes(tag.getList("pending", Tag.TAG_DOUBLE), old);
             old.forEach(plane -> patches.add(Patch.full(plane)));
@@ -416,17 +457,11 @@ public class MimicBlockEntity extends BlockEntity {
         grid = null;
         version++;
         updateLight();
-        // Moved into a sub-level, or loaded with its chunk: the block was placed before this data arrived, so the
-        // structure graph still thinks it is whole
         if (level instanceof ServerLevel server) {
             WorldGraphs.onNodesChanged(server, worldPosition);
         }
-        // When a chunk arrives, the block entity is created first and filled from the chunk data afterwards, and no
-        // hook tells the model data manager about it. Without this the block's model data stays empty and it is
-        // not drawn until something else (a block update) requests a refresh.
         if (level != null && level.isClientSide) {
             requestModelDataUpdate();
-            // and if the section was already meshed without the data, mesh it again
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 0);
         }
     }
@@ -458,7 +493,7 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     @Override
-    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
+    public @NotNull CompoundTag getUpdateTag(HolderLookup.@NotNull Provider registries) {
         return saveWithoutMetadata(registries);
     }
 

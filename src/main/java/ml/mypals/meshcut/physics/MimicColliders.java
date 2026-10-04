@@ -24,22 +24,14 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
-/**
- * Supplies Sable's Rapier backend with a per-position collider for mimic blocks.
- * <p>
- * Sable caches colliders per {@link BlockState}, which can't express "this stone, cut at this angle", so
- * {@code RapierPhysicsPipelineMixin} routes mimic blocks here instead. Entries are cached per
- * (imitated block, quantised cuts) and live for the lifetime of the JVM.
- */
+
 public final class MimicColliders {
     private static final int MAX_ENTRIES = 16384;
-    /** ...and at most this many coarse ones once that is full; see {@link #coarse}. */
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
 
     private record Pending(ServerLevel level, BlockPos pos) {}
 
-    /** Mimic blocks seen before their block entity existed (chunk loading); refreshed once it does. */
     private static final Set<Pending> PENDING = ConcurrentHashMap.newKeySet();
 
     public static RapierVoxelColliderData resolve(LevelAccelerator accelerator, ServerLevel level, BlockPos pos,
@@ -63,8 +55,6 @@ public final class MimicColliders {
         }
         List<double[]> boxes = MimicShapes.boxes(key);
         if (ENTRIES.size() >= MAX_ENTRIES) {
-            // Native entries can't be freed, so the cache stops growing; a whole block in their place would make
-            // overlapping bodies push each other apart with enormous force. Shapes coarse enough to repeat instead.
             key = coarse(key, boxes);
             entry = ENTRIES.get(key);
             if (entry != null) {
@@ -83,7 +73,7 @@ public final class MimicColliders {
                     PhysicsBlockPropertyHelper.getFriction(target),
                     PhysicsBlockPropertyHelper.getVolume(target) * MimicShapes.volumeFraction(key),
                     PhysicsBlockPropertyHelper.getRestitution(target),
-                    false, null);
+                     false, dev.ryanhcode.sable.api.block.BlockWithSubLevelCollisionCallback.sable$getCallback(target));
             for (double[] b : boxes) {
                 entry.addBox(new Vector3d(b[0], b[1], b[2]), new Vector3d(b[3], b[4], b[5]));
             }
@@ -92,10 +82,7 @@ public final class MimicColliders {
         return entry;
     }
 
-    /**
-     * The shape on a quarter-block grid, in at most four boxes, standing as an uncut block of that shape (so the
-     * same coarse shape is one entry, whatever cuts made it). It weighs what the coarse shape fills.
-     */
+
     private static MimicShapes.Key coarse(MimicShapes.Key key, List<double[]> boxes) {
         List<double[]> snapped = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {

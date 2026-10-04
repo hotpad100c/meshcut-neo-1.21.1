@@ -75,6 +75,9 @@ public class MeshCut {
         COMPONENTS.register(modEventBus);
         LightsaberMotion.register(modEventBus);
         modEventBus.addListener(ml.mypals.meshcut.network.EntityPartsNet::register);
+        modEventBus.addListener(ml.mypals.meshcut.network.GrabNet::register);
+        ml.mypals.meshcut.physics.FragmentGrab.register();
+        ml.mypals.meshcut.physics.MimicFloating.register();
         ml.mypals.meshcut.physics.RagdollJoints.register();
         ml.mypals.meshcut.physics.Debris.register();
         modEventBus.addListener((BuildCreativeModeTabContentsEvent e) -> {
