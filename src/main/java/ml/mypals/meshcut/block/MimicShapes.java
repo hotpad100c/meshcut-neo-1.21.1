@@ -68,7 +68,8 @@ public final class MimicShapes {
         /** What the block is made of before it is cut. */
         public List<double[]> baseBoxes() {
             if (base == null) {
-                return targetBoxes(target);
+                // what it collides with: its collision boxes, or for a block one walks through its outline (see cutBoxes)
+                return cutBoxes(target);
             }
             List<double[]> out = new ArrayList<>(base.size() / 6);
             for (int i = 0; i + 6 <= base.size(); i += 6) {
@@ -113,7 +114,7 @@ public final class MimicShapes {
     /** Fraction (0..1) of the imitated block's collision volume that survives the cuts. */
     public static double volumeFraction(Key key) {
         // a part of an entity weighs by how much of the whole block it fills
-        double full = key.base() != null ? 1 : VoxelBoxes.volume(targetBoxes(key.target()));
+        double full = key.base() != null ? 1 : VoxelBoxes.volume(cutBoxes(key.target()));
         // never zero: a body whose blocks all weigh nothing has no centre of mass, which crashes the physics engine
         return full <= 0 ? 1 : Math.max(MIN_FRACTION, Math.min(1, VoxelBoxes.volume(boxes(key)) / full));
     }
@@ -241,6 +242,11 @@ public final class MimicShapes {
     }
 
     /** Collision boxes of the imitated block on its own, without any cut. */
+    /** Whether the imitated block has collision boxes of its own (otherwise its outline stands in for them). */
+    public static boolean hasCollision(BlockState target) {
+        return !targetBoxes(target).isEmpty();
+    }
+
     public static List<double[]> targetBoxes(BlockState target) {
         return TARGET_BOXES.computeIfAbsent(target, MimicShapes::computeTargetBoxes);
     }

@@ -85,7 +85,7 @@ public class MimicBlockEntity extends BlockEntity {
      * The block's collision geometry as of one version of its data, replaced as a whole: the shape is asked for from
      * other threads too (chunk meshing), which must never see one version's key with another's shape.
      */
-    private record ShapeData(int version, MimicShapes.Key key, VoxelShape shape, double volumeFraction) {}
+    private record ShapeData(int version, MimicShapes.Key key, VoxelShape shape, double volumeFraction, int wholeFaces) {}
 
     @Nullable
     private volatile ShapeData shapeData;
@@ -148,6 +148,22 @@ public class MimicBlockEntity extends BlockEntity {
         return shapeData().shape();
     }
 
+    /**
+     * Whether its face on that side is still whole and opaque, as the imitated block's: it then hides the face of
+     * what lies against it (see {@link MimicBlock#hidesNeighborFace}). Cached per version; asked from meshing threads.
+     */
+    public boolean coversFace(net.minecraft.core.Direction dir) {
+        return (shapeData().wholeFaces() & 1 << dir.get3DDataValue()) != 0;
+    }
+
+    /**
+     * Whether one walks through it, as through what it imitates (a torch, a flower): it then collides with nothing in
+     * the world and with no entity, and only a body it is part of collides with its outline (see MimicColliders).
+     */
+    public boolean passable() {
+        return appearance == null && !MimicShapes.hasCollision(targetState);
+    }
+
     /** Fraction of the imitated block that survives the cuts; scales the physics mass. */
     public double getVolumeFraction() {
         return shapeData().volumeFraction();
@@ -199,7 +215,8 @@ public class MimicBlockEntity extends BlockEntity {
         ShapeData data = shapeData;
         if (data == null || data.version() != v) {
             var key = MimicShapes.Key.of(targetState, planes, excluded, appearance == null ? null : appearance.boxes());
-            data = new ShapeData(v, key, MimicShapes.shape(key), MimicShapes.volumeFraction(key));
+            data = new ShapeData(v, key, MimicShapes.shape(key), MimicShapes.volumeFraction(key),
+                    MimicFaces.wholeFaces(targetState, planes, excluded, patches, appearance != null));
             shapeData = data;
         }
         return data;

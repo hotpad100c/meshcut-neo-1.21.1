@@ -20,8 +20,16 @@ public abstract class VoxelNeighborhoodStateMixin {
     private static void meshcut$mimicSolid(BlockGetter level, BlockPos pos, BlockState state,
                                            CallbackInfoReturnable<Boolean> cir) {
         if (state.getBlock() instanceof MimicBlock) {
-            cir.setReturnValue(true);
+            // a piece of a torch in the world is nothing to the physics engine (see MimicColliders)
+            boolean passable = level.getBlockEntity(pos) instanceof ml.mypals.meshcut.block.MimicBlockEntity be && be.passable();
+            cir.setReturnValue(!passable || meshcut$inPlot(level, pos));
         }
+    }
+
+    private static boolean meshcut$inPlot(BlockGetter level, BlockPos pos) {
+        var container = level instanceof net.minecraft.world.level.Level l
+                ? dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(l) : null;
+        return container == null || container.inBounds(pos); // not knowing: counted solid, as before
     }
 
     @Inject(method = "isFullBlock", at = @At("HEAD"), cancellable = true)

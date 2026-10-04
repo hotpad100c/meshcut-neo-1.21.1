@@ -45,7 +45,17 @@ public final class MimicColliders {
             PENDING.add(new Pending(level, pos.immutable()));
             return fallback.get();
         }
+        if (mimic.passable() && !inPlot(level, pos)) {
+            // a piece of a torch in the world is passed through, as the torch was; one in a sub-level collides with
+            // its outline, or the body it is part of would fall through everything
+            return RapierVoxelColliderData.EMPTY;
+        }
         return entryFor(mimic.shapeKey(), fallback);
+    }
+
+    private static boolean inPlot(ServerLevel level, BlockPos pos) {
+        var container = dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(level);
+        return container != null && container.inBounds(pos);
     }
 
     private static synchronized RapierVoxelColliderData entryFor(MimicShapes.Key key, Supplier<RapierVoxelColliderData> fallback) {

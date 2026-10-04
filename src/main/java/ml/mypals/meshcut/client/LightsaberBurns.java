@@ -32,16 +32,13 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Scorches every model face intersected by the blade's sweep, including faces on both sides of a corner. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberBurns {
-    /** The scorch drawn on block/model surfaces cools and darkens over five seconds. */
     private static final double CHAR_LIFETIME = 100;
     private static final double EMBER_LIFETIME = 50;
     private static final double CHAR_HALF_WIDTH = 0.040;
     private static final double EMBER_HALF_WIDTH = 0.014;
     private static final double LIFT = 0.0025;
-    /** A sub-level's blocks are drawn through its own float transform, whose depth is less exact than the world's. */
     private static final double SUB_LEVEL_LIFT = 4;
     private static final int MAX_MARKS = 1800;
     private static final int MAX_CANDIDATE_BLOCKS = 1024;
@@ -50,7 +47,6 @@ public final class LightsaberBurns {
     private static final Map<UUID, Blade> LAST_BLADE = new HashMap<>();
     @Nullable private static ClientLevel burnLevel;
 
-    /** Once the cut is made the block is another and a mark no longer belongs to it; it dies down over this long. */
     private static final long CLOSING_TICKS = 100;
 
     private static final class Mark {
@@ -276,8 +272,9 @@ public final class LightsaberBurns {
                                  Mark mark, float[] vertices, double lift, float r, float g, float b, float alpha) {
         for (int i = 1; i + 1 < vertices.length / 3; i++) {
             for (int j : new int[]{0, i, i + 1}) {
-                Vec3 p = new Vec3(vertices[j * 3] + mark.block.getX(), vertices[j * 3 + 1] + mark.block.getY(),
-                        vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(pose == null ? lift : lift * SUB_LEVEL_LIFT));
+                // in double: a sub-level's plot lies some twenty million blocks out, where a float misses by whole blocks
+                Vec3 p = new Vec3((double) vertices[j * 3] + mark.block.getX(), (double) vertices[j * 3 + 1] + mark.block.getY(),
+                        (double) vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(pose == null ? lift : lift * SUB_LEVEL_LIFT));
                 if (pose != null) p = pose.transformPosition(p);
                 p = p.subtract(camera);
                 consumer.addVertex(matrix, (float) p.x, (float) p.y, (float) p.z).setColor(r, g, b, alpha);

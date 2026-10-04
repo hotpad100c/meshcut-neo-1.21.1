@@ -31,8 +31,53 @@ public abstract class PhysicsBlockPropertyHelperMixin {
         if (state.getBlock() instanceof MimicBlock && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             MimicBlockEntity.MassSnapshot mass = be.massFor(state);
             if (mass != null) {
-                cir.setReturnValue(PhysicsBlockPropertyHelper.getMass(level, pos, mass.target()) * mass.volumeFraction());
+                double m;
+                if (ml.mypals.meshcut.block.MimicShapes.hasCollision(mass.target())) {
+                    m = PhysicsBlockPropertyHelper.getMass(level, pos, mass.target()) * mass.volumeFraction();
+                } else {
+                    // Sable gives no mass at all to a block one walks through (a torch, a flower, a sign). A piece of
+                    // one collides with its outline instead (see MimicShapes#cutBoxes), and weighs what the block's
+                    // own mass would make that much of a block weigh: a body made only of such pieces must weigh
+                    // something, or it has no centre of mass and brings the physics engine down.
+                    double whole = meshcut$ownMass(mass.target());
+                    double outline = ml.mypals.meshcut.geom.VoxelBoxes.volume(ml.mypals.meshcut.block.MimicShapes.cutBoxes(mass.target()));
+                    m = whole * outline * mass.volumeFraction();
+                }
+                cir.setReturnValue(Double.isFinite(m) && m > MESHCUT_MIN_MASS ? m : MESHCUT_MIN_MASS);
             }
         }
+    }
+
+    /** No mimic weighs less than this. */
+    private static final double MESHCUT_MIN_MASS = 1e-3;
+    /** What Sable gives a whole block whose own mass it cannot be told (the default of its mass property). */
+    private static final double MESHCUT_DEFAULT_MASS = 1.0;
+    private static Object meshcut$massType;
+    private static boolean meshcut$looked;
+
+    /**
+     * The block's own mass, as its physics properties set it, whether or not it is solid. The property's type is
+     * registered through Veil, which is not on our compile path: it is looked up once.
+     */
+    @SuppressWarnings("unchecked")
+    private static double meshcut$ownMass(BlockState target) {
+        try {
+            if (!meshcut$looked) {
+                meshcut$looked = true;
+                Object holder = dev.ryanhcode.sable.physics.config.block_properties.PhysicsBlockPropertyTypes.class
+                        .getField("MASS").get(null);
+                meshcut$massType = holder.getClass().getMethod("get").invoke(holder);
+            }
+            if (meshcut$massType != null) {
+                Object value = ((dev.ryanhcode.sable.mixinterface.block_properties.BlockStateExtension) target).sable$getProperty(
+                        (dev.ryanhcode.sable.physics.config.block_properties.PhysicsBlockPropertyTypes.PhysicsBlockPropertyType<Object>) meshcut$massType);
+                if (value instanceof Double d && d > 0) {
+                    return d;
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            meshcut$massType = null;
+        }
+        return MESHCUT_DEFAULT_MASS;
     }
 }

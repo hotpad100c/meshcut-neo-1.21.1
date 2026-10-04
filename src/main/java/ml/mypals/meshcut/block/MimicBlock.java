@@ -38,6 +38,7 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
@@ -165,6 +166,9 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
 
     @Override
     protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        if (level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.passable()) {
+            return Shapes.empty(); // a piece of a torch is walked through like a torch, in the world and in a sub-level
+        }
         return getShape(state, level, pos, context);
     }
 
@@ -245,35 +249,29 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         return imitated != null ? imitated.getFriction(level, pos, entity) : super.getFriction(state, level, pos, entity);
     }
 
-    /**
-     * It gives off the light of what it imitates. The light level depends on the block entity, which the lighting
-     * engine cannot read (it runs off the main thread, and before block entities are loaded), so the block entity
-     * stores it in NeoForge's auxiliary light data for the chunk, which is saved and synced with the chunk.
-     */
+
     @Override
-    public boolean hasDynamicLightEmission(BlockState state) {
+    public boolean hidesNeighborFace(BlockGetter level, BlockPos pos, BlockState state, BlockState neighborState, Direction dir) {
+        return level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.coversFace(dir);
+    }
+
+    @Override
+    public boolean hasDynamicLightEmission(@NotNull BlockState state) {
         return true;
     }
 
     @Override
-    public int getLightEmission(BlockState state, BlockGetter level, BlockPos pos) {
+    public int getLightEmission(@NotNull BlockState state, BlockGetter level, @NotNull BlockPos pos) {
         var light = level.getAuxLightManager(pos);
         return light == null ? 0 : light.getLightAt(pos);
     }
 
-    // ---------------------------------------------------------------- light
 
-    /**
-     * Light passes through it as through glass, whatever is left of the block. Working it out from the shape would
-     * need the block entity, which the light engine cannot have (it runs off the server thread, where the level
-     * gives no block entities), and costs building the shape on every block change.
-     */
     @Override
     protected boolean propagatesSkylightDown(BlockState state, BlockGetter level, BlockPos pos) {
         return state.getFluidState().isEmpty();
     }
 
-    /** It does not darken its neighbours' corners either, as glass does not. */
     @Override
     protected float getShadeBrightness(BlockState state, BlockGetter level, BlockPos pos) {
         return 1.0F;

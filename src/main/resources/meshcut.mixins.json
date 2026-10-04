@@ -3,6 +3,7 @@
   "package": "ml.mypals.meshcut.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BlockFaceCullingMixin",
     "EntitySaveMixin",
     "FloatingBlockControllerAccessor",
     "FloatingClusterContainerMixin",
@@ -12,6 +13,7 @@
     "PistonMovingBlockEntityMixin",
     "PhysicsBlockPropertyHelperMixin",
     "RapierPhysicsPipelineMixin",
+    "SubLevelPhysicsSystemMixin",
     "VoxelNeighborhoodStateMixin"
   ],
   "client": [
