@@ -81,7 +81,7 @@ public final class LightsaberRenderer {
         for (var entry : blades.entrySet()) {
             Blade blade = entry.getValue();
             drawBlade(consumer, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
-                    time, entry.getKey(), palettes.get(entry.getKey()));
+                    time, entry.getKey(), palettes.get(entry.getKey()), !Bloom.usable());
         }
         buffers.endBatch(beamType);
         if (Bloom.usable() && !blades.isEmpty()) { // the same beam again, into the glow buffer
@@ -89,7 +89,7 @@ public final class LightsaberRenderer {
             for (var entry : blades.entrySet()) {
                 Blade blade = entry.getValue();
                 drawBlade(glow, matrix, blade.base().subtract(camera), blade.tip().subtract(camera),
-                        time, entry.getKey(), palettes.get(entry.getKey()));
+                        time, entry.getKey(), palettes.get(entry.getKey()), true);
             }
             Bloom.flush(BloomRenderTypes.QUADS);
         }
@@ -112,7 +112,7 @@ public final class LightsaberRenderer {
     }
 
     private static void drawBlade(VertexConsumer consumer, Matrix4f matrix, Vec3 base, Vec3 tip,
-                                  double time, UUID owner, Palette palette) {
+                                  double time, UUID owner, Palette palette, boolean includeHalo) {
         if (base.distanceToSqr(tip) < 1e-4) return;
         // Continuous game-time oscillation avoids frame-dependent random jumps and freezes when paused.
         double phase = (owner.hashCode() & 0xffff) * (Math.PI * 2 / 65536);
@@ -124,8 +124,12 @@ public final class LightsaberRenderer {
         Vec3 shimmer = sideways.scale(Math.sin(time * 1.3 + phase) * 0.003)
                 .add(upwards.scale(Math.sin(time * 1.9 + phase) * 0.003));
         // Only the glow wavers; the emitter, core and cutting segment retain their exact alignment.
-        prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), palette.halo(), (float) (1 + pulse));
-        prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), palette.glow(), (float) (1 + pulse));
+        // With bloom, broad translucent shells are emission sources only. Drawing their hard end faces
+        // directly over the scene makes the tip look like a translucent aperture instead of scattered light.
+        if (includeHalo) {
+            prism(consumer, matrix, base, tip.add(shimmer), 0.040 * (1 + pulse), palette.halo(), (float) (1 + pulse));
+            prism(consumer, matrix, base, tip.add(shimmer.scale(0.5)), 0.021 * (1 + pulse), palette.glow(), (float) (1 + pulse));
+        }
         prism(consumer, matrix, base, tip, 0.008 * (1 + pulse * 0.4), CORE, 1f);
     }
 

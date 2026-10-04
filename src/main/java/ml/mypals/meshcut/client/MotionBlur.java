@@ -33,7 +33,7 @@ import java.util.UUID;
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MotionBlur {
     private static final double SHUTTER_TICKS = 0.7;
-    private static final int POSES = 10;
+    private static final int POSES = 6; // must match motion_blur.fsh and its declared JSON uniforms
     private static final float WIDTH = 0.012f;
     private static final float GAIN = 1f;
 
@@ -106,7 +106,7 @@ public final class MotionBlur {
                 maxY = Math.max(maxY, Math.max(base.y, tip.y));
                 valid++;
             }
-            if (valid < 2) {
+            if (valid < 2 || b[0][3] < 0.5f) {
                 continue;
             }
             if (!prepared) {

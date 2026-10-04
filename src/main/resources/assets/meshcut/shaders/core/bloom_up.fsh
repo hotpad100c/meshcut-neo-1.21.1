@@ -7,16 +7,18 @@ uniform float Strength;
 in vec2 texCoord;
 out vec4 fragColor;
 
-// Dual-filter upsample: eight taps in a tent around the pixel.
+// Centred Gaussian approximation: a separable 1-2-1 kernel, including the centre.
+// The previous hollow eight-tap diamond can expose its aperture shape around small emitters.
 void main() {
-    vec2 h = TexelSize * 0.5;
-    vec4 sum = texture(Sampler0, texCoord + vec2(-h.x * 2.0, 0.0));
-    sum += texture(Sampler0, texCoord + vec2(-h.x, h.y)) * 2.0;
-    sum += texture(Sampler0, texCoord + vec2(0.0, h.y * 2.0));
-    sum += texture(Sampler0, texCoord + vec2(h.x, h.y)) * 2.0;
-    sum += texture(Sampler0, texCoord + vec2(h.x * 2.0, 0.0));
-    sum += texture(Sampler0, texCoord + vec2(h.x, -h.y)) * 2.0;
-    sum += texture(Sampler0, texCoord + vec2(0.0, -h.y * 2.0));
-    sum += texture(Sampler0, texCoord + vec2(-h.x, -h.y)) * 2.0;
-    fragColor = vec4(sum.rgb / 12.0 * Strength, 0.0);
+    vec2 h = TexelSize;
+    vec3 sum = texture(Sampler0, texCoord).rgb * 4.0;
+    sum += texture(Sampler0, texCoord + vec2(h.x, 0.0)).rgb * 2.0;
+    sum += texture(Sampler0, texCoord - vec2(h.x, 0.0)).rgb * 2.0;
+    sum += texture(Sampler0, texCoord + vec2(0.0, h.y)).rgb * 2.0;
+    sum += texture(Sampler0, texCoord - vec2(0.0, h.y)).rgb * 2.0;
+    sum += texture(Sampler0, texCoord + h).rgb;
+    sum += texture(Sampler0, texCoord - h).rgb;
+    sum += texture(Sampler0, texCoord + vec2(h.x, -h.y)).rgb;
+    sum += texture(Sampler0, texCoord + vec2(-h.x, h.y)).rgb;
+    fragColor = vec4(sum / 16.0 * Strength, 0.0);
 }
