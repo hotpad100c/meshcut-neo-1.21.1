@@ -107,7 +107,7 @@ neoForge {
         // applies to all the run configs above
         configureEach {
             // `gradlew runClient -Pmeshcut.maxEntries=64` reaches the game as -Dmeshcut.maxEntries=64
-            ['meshcut.maxEntries', 'meshcut.diag', 'meshcut.vbo'].each { key ->
+            ['meshcut.maxEntries', 'meshcut.diag', 'meshcut.vbo', 'meshcut.regionOrders'].each { key ->
                 if (project.hasProperty(key)) {
                     systemProperty key, project.property(key)
                 }
@@ -238,6 +238,14 @@ def checkCurveFragments = tasks.register('checkCurveFragments', JavaExec) {
 }
 tasks.named('check').configure { dependsOn checkCurveFragments }
 
+def checkIncrementalFragments = tasks.register('checkIncrementalFragments', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.geom.IncrementalFragmentsTest'
+}
+tasks.named('check').configure { dependsOn checkIncrementalFragments }
+
 def checkStrokeSimplifier = tasks.register('checkStrokeSimplifier', JavaExec) {
     group = 'verification'
     description = 'Checks stroke simplification error bounds and interaction numeric limits without GameTest.'
@@ -270,3 +278,19 @@ idea {
         downloadJavadoc = true
     }
 }
+
+ def checkGlowQuads = tasks.register('checkGlowQuads', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.geom.GlowQuadsTest'
+}
+tasks.named('check').configure { dependsOn checkGlowQuads }
+
+def checkRegionMerge = tasks.register('checkRegionMerge', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.cut.graph.RegionMergeTest'
+}
+tasks.named('check').configure { dependsOn checkRegionMerge }

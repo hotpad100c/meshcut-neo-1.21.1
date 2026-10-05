@@ -35,7 +35,6 @@ public final class SmoothFragments {
         final List<Face> faces;
         final int[] ids;
         final boolean[] positive;
-        boolean kept;
 
         Piece(List<Face> faces, int[] ids, boolean[] positive) {
             this.faces = faces;
@@ -46,6 +45,37 @@ public final class SmoothFragments {
 
     /** A visible polygon of the boundary, wound counter-clockwise seen from outside, with its plane's identity. */
     public record Boundary(double[] verts, double nx, double ny, double nz, String key) {}
+
+    private record SplitPlane(int id, CutPlane plane, boolean material) {}
+    private record CellKey(int cell, List<SplitPlane> cuts) {}
+    /** Immutable partitions, shared across block versions and detached fragments. Never cache ownership. */
+    private static final Map<CellKey, List<Piece>> PARTITIONS = new java.util.LinkedHashMap<>(128, 0.75f, true);
+    private static int cachedPieces;
+    private static final int MAX_CACHED_PIECES = 32768;
+    private static final int MAX_CACHED_CELLS = 8192;
+    private int reusedCells, extendedCells, rebuiltCells;
+
+    public record CacheStats(int reusedCells, int extendedCells, int rebuiltCells) {}
+    public CacheStats cacheStats() { return new CacheStats(reusedCells, extendedCells, rebuiltCells); }
+    public static void clearCellCache() {
+        synchronized (PARTITIONS) { PARTITIONS.clear(); cachedPieces = 0; }
+    }
+
+    private static List<Piece> cached(CellKey key) {
+        synchronized (PARTITIONS) { return PARTITIONS.get(key); }
+    }
+
+    private static void remember(CellKey key, List<Piece> pieces) {
+        synchronized (PARTITIONS) {
+            List<Piece> old = PARTITIONS.put(key, List.copyOf(pieces));
+            cachedPieces += pieces.size() - (old == null ? 0 : old.size());
+            var entries = PARTITIONS.entrySet().iterator();
+            while (cachedPieces > MAX_CACHED_PIECES || PARTITIONS.size() > MAX_CACHED_CELLS) {
+                cachedPieces -= entries.next().getValue().size();
+                entries.remove();
+            }
+        }
+    }
 
     private final boolean[] mask;
     private final List<Patch> patches;
@@ -60,9 +90,9 @@ public final class SmoothFragments {
     private final List<CutPlane> transitions = new ArrayList<>();
 
     public SmoothFragments(boolean[] mask, List<Patch> patches, List<CutPlane> real) {
-        this.mask = mask;
-        this.patches = patches;
-        this.real = real;
+        this.mask = mask.clone();
+        this.patches = List.copyOf(patches);
+        this.real = List.copyOf(real);
         planes.addAll(real);
         patchBounds = new double[patches.size()][6];
         for (int i = 0; i < patchBounds.length; i++) {
@@ -191,9 +221,31 @@ public final class SmoothFragments {
                 crossing.add(k);
             }
         }
-        List<Piece> pieces = new ArrayList<>();
-        pieces.add(new Piece(box(b), new int[0], new boolean[0]));
-        for (int k : crossing) {
+        List<SplitPlane> cuts = crossing.stream()
+                .map(k -> new SplitPlane(k, planes.get(k), k < real.size())).toList();
+        CellKey key = new CellKey(cell, cuts);
+        List<Piece> pieces = cached(key);
+        int start = cuts.size();
+        if (pieces != null) {
+            reusedCells++;
+        } else {
+            start = cuts.size() - 1;
+            for (; start > 0; start--) {
+                pieces = cached(new CellKey(cell, List.copyOf(cuts.subList(0, start))));
+                if (pieces != null) break;
+            }
+            if (pieces == null) {
+                start = 0;
+                pieces = List.of(new Piece(box(b), new int[0], new boolean[0]));
+                rebuiltCells++;
+            } else {
+                extendedCells++;
+            }
+        }
+        for (int at = start; at < crossing.size(); at++) {
+            // Preserve the full rebuild's complexity limit, including on a cached prefix.
+            if (pieces.size() > MAX_PIECES) break;
+            int k = crossing.get(at);
             List<Piece> next = new ArrayList<>();
             for (Piece piece : pieces) {
                 Piece[] halves = split(piece, k);
@@ -214,11 +266,13 @@ public final class SmoothFragments {
                 break;
             }
         }
+        if (start < cuts.size() || cuts.isEmpty()) remember(key, pieces);
         int kept = 0;
+        List<Piece> selected = new ArrayList<>();
         for (Piece piece : pieces) {
-            piece.kept = belongs(inside(piece));
-            if (piece.kept) {
+            if (belongs(inside(piece))) {
                 kept++;
+                selected.add(piece);
             }
         }
         if (kept == 0) {
@@ -227,18 +281,10 @@ public final class SmoothFragments {
         boolean cutByReal = crossing.stream().anyMatch(k -> k < real.size());
         if (kept == pieces.size() && !cutByReal) { // the planes in here separate nothing: the cell is kept whole
             Piece one = new Piece(box(b), new int[0], new boolean[0]);
-            one.kept = true;
             whole[cell] = true;
             return new Piece[]{one};
         }
-        Piece[] out = new Piece[kept];
-        int i = 0;
-        for (Piece piece : pieces) {
-            if (piece.kept) {
-                out[i++] = piece;
-            }
-        }
-        return out;
+        return selected.toArray(Piece[]::new);
     }
 
     private static boolean side(Piece piece, CutPlane plane) {

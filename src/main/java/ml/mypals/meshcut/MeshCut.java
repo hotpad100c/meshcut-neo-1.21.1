@@ -85,6 +85,9 @@ public class MeshCut {
 
     public MeshCut(IEventBus modEventBus, net.neoforged.fml.ModContainer container) {
         container.registerConfig(net.neoforged.fml.config.ModConfig.Type.SERVER, MeshCutConfig.SPEC);
+        container.registerConfig(net.neoforged.fml.config.ModConfig.Type.CLIENT, MeshCutClientConfig.SPEC);
+        modEventBus.addListener((net.neoforged.fml.event.config.ModConfigEvent.Loading event) -> MeshCutConfig.loaded(event));
+        modEventBus.addListener((net.neoforged.fml.event.config.ModConfigEvent.Reloading event) -> MeshCutConfig.loaded(event));
         BLOCKS.register(modEventBus);
         BLOCK_ENTITIES.register(modEventBus);
         ITEMS.register(modEventBus);
@@ -101,6 +104,7 @@ public class MeshCut {
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.physics.FragmentBudget::onServerTick);
+        NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.physics.WoodDebris::tick);
         NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onInvulnerabilityCheck);
@@ -111,6 +115,7 @@ public class MeshCut {
             SlashService.clear();
             MimicColliders.clear();
             ml.mypals.meshcut.physics.FragmentBudget.clear();
+            ml.mypals.meshcut.physics.WoodDebris.clear();
         });
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.ChunkEvent.Unload e) -> {
             if (e.getLevel() instanceof net.minecraft.server.level.ServerLevel server) {

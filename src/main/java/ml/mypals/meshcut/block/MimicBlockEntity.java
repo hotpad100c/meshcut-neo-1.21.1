@@ -117,6 +117,15 @@ public class MimicBlockEntity extends BlockEntity {
         return glowStart;
     }
 
+    /** Cutting/moving a fragment must not treat all its inherited cuts as fresh burns. */
+    public record GlowHistory(long start, List<CutPlane> glowing, List<CutPlane> knownCuts) {
+        public GlowHistory { glowing = List.copyOf(glowing); knownCuts = List.copyOf(knownCuts); }
+    }
+
+    public GlowHistory glowHistory() {
+        return new GlowHistory(glowStart, glowCuts, allCuts(planes, excluded, patches.stream().map(Patch::plane).toList()));
+    }
+
     public int getVersion() {
         return version;
     }
@@ -235,8 +244,20 @@ public class MimicBlockEntity extends BlockEntity {
     /** @param entity for a part of a cut-up entity, what it looked like; null for a block */
     public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
                           List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag, @Nullable EntityAppearance entity) {
+        configure(target, newPlanes, newExcluded, newPatches, mode, beTag, entity, null);
+    }
+
+    public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
+                          List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag,
+                          @Nullable EntityAppearance entity, @Nullable GlowHistory inherited) {
         // the cut planes it has now that it did not have before are what this change opened
-        List<CutPlane> before = allCuts(planes, excluded, patches.stream().map(Patch::plane).toList());
+        List<CutPlane> before = inherited == null
+                ? allCuts(planes, excluded, patches.stream().map(Patch::plane).toList()) : inherited.knownCuts();
+        if (inherited != null) {
+            glowStart = inherited.start();
+            glowCuts.clear();
+            glowCuts.addAll(inherited.glowing());
+        }
         List<CutPlane> after = allCuts(newPlanes, newExcluded, newPatches.stream().map(Patch::plane).toList());
         if (MimicBlock.glowingCuts()) {
             List<CutPlane> fresh = new ArrayList<>();
@@ -273,7 +294,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     private static List<CutPlane> allCuts(List<CutPlane> planes, List<List<CutPlane>> excluded, List<CutPlane> patches) {
         List<CutPlane> all = new ArrayList<>(planes);
-        excluded.forEach(all::addAll);
+        // Excluded regions encode fragment ownership/voxel boxes, not newly burnt blade surfaces.
         all.addAll(patches);
         return all;
     }
@@ -388,9 +409,7 @@ public class MimicBlockEntity extends BlockEntity {
             return 0f;
         }
         double age = level.getGameTime() + partialTick - glowStart;
-        if (age < 0) {
-            return 1f;
-        }
+        if (age < 0) return 0f; // future/mismatched timestamps must never revive a cooled cut
         if (age >= GLOW_TICKS) {
             return 0f;
         }

@@ -72,7 +72,8 @@ public final class CutService {
      * that still has to be emptied and saved before the block is replaced by mimics.
      */
     record Piece(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, List<Patch> patches,
-                 CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe, @Nullable EntityAppearance entity) {
+                 CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe, @Nullable EntityAppearance entity,
+                 @Nullable MimicBlockEntity.GlowHistory glow) {
         /** What there is of it to cut: the part of an entity it holds, or the imitated block's shape. */
         List<double[]> cutBoxes() {
             return entity != null ? entity.boxes() : MimicShapes.cutBoxes(target);
@@ -194,7 +195,7 @@ public final class CutService {
             Split s = splits.get(p);
             Piece piece = s.piece();
             CutPlane half = plusSide ? s.keep().flipped() : s.keep();
-            MimicBlock.place(level, p, piece.target(), with(piece.planes(), half), piece.excluded(), piece.patches(), piece.mode(), piece.beTag(), piece.entity());
+            MimicBlock.place(level, p, piece.target(), with(piece.planes(), half), piece.excluded(), piece.patches(), piece.mode(), piece.beTag(), piece.entity(), piece.glow());
         }
     }
 
@@ -294,7 +295,7 @@ public final class CutService {
             for (var e : splits.entrySet()) {
                 Split s = e.getValue();
                 MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep().flipped()),
-                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
+                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity(), s.piece().glow());
             }
             // 2. every connected group on the normal side becomes its own sub-level
             for (List<BlockPos> comp : components(plus)) {
@@ -311,7 +312,7 @@ public final class CutService {
             for (var e : splits.entrySet()) {
                 Split s = e.getValue();
                 MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep()),
-                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity());
+                        s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity(), s.piece().glow());
             }
         } finally {
             if (placeholder != null) {
@@ -360,7 +361,7 @@ public final class CutService {
         if (state.getBlock() instanceof MimicBlock) {
             return level.getBlockEntity(pos) instanceof MimicBlockEntity be
                     ? new Piece(be.getTargetState(), new ArrayList<>(be.getPlanes()), new ArrayList<>(be.getExcluded()),
-                    new ArrayList<>(be.getPatches()), be.getCapMode(), be.getTargetBeTag(), false, be.getAppearance())
+                    new ArrayList<>(be.getPatches()), be.getCapMode(), be.getTargetBeTag(), false, be.getAppearance(), be.glowHistory())
                     : null;
         }
         if (state.getBlock() instanceof LiquidBlock || state.getRenderShape() == RenderShape.INVISIBLE
@@ -370,7 +371,7 @@ public final class CutService {
         if (state.hasBlockEntity() && !canSpill(level, pos)) {
             return null; // holds more than can be spilled (a drawer of thousands): it is not cut
         }
-        return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity(), null);
+        return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity(), null, null);
     }
 
     /** Whether what the block holds can all be spilled when it is cut (see {@link #MAX_SPILLED}). */
@@ -415,7 +416,7 @@ public final class CutService {
             spillContents(level, pos, be);
             tag = be.saveWithoutMetadata(level.registryAccess());
         }
-        return new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false, piece.entity());
+        return new Piece(piece.target(), piece.planes(), piece.excluded(), piece.patches(), piece.mode(), tag, false, piece.entity(), piece.glow());
     }
 
     static void spillContents(ServerLevel level, BlockPos pos, BlockEntity be) {
@@ -486,6 +487,7 @@ public final class CutService {
     }
 
     static ServerSubLevel assemble(ServerLevel level, List<BlockPos> blocks) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("CutService.assemble")) {
         BlockPos anchor=blocks.getFirst();
         Map<BlockPos,Piece> snapshots=new LinkedHashMap<>();
         for(BlockPos pos:blocks) {
@@ -497,10 +499,12 @@ public final class CutService {
             ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, null);
         }
         double volume = ml.mypals.meshcut.physics.FragmentBudget.volumeOf(level, blocks);
+        boolean wooden = ml.mypals.meshcut.physics.WoodDebris.eligible(level, blocks, volume);
         try {
             ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.getFirst(), blocks, BoundingBox3i.from(blocks));
             if(made!=null) {
                 ml.mypals.meshcut.physics.FragmentBudget.made(level, made, volume);
+                if (wooden) ml.mypals.meshcut.physics.WoodDebris.made(level, made);
                 BlockPos plotAnchor=made.getPlot().getCenterBlock();
                 for(var entry:snapshots.entrySet()) {
                     BlockPos old=entry.getKey();Piece expected=entry.getValue();
@@ -511,7 +515,7 @@ public final class CutService {
                             && (!be.getTargetState().equals(expected.target()) || !be.getPlanes().equals(expected.planes())
                             || !be.getPatches().equals(expected.patches()) || !be.getExcluded().equals(expected.excluded()))) {
                         MimicBlock.place(level,moved,expected.target(),expected.planes(),expected.excluded(),expected.patches(),
-                                expected.mode(),expected.beTag(),expected.entity());
+                                expected.mode(),expected.beTag(),expected.entity(),expected.glow());
                     }
                 }
             }
@@ -522,6 +526,8 @@ public final class CutService {
         } catch (RuntimeException e) {
             MeshCut.LOGGER.error("Failed to assemble {} cut blocks into a sub-level", blocks.size(), e);
             return null;
+        }
+    
         }
     }
 

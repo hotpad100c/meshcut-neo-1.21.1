@@ -5,10 +5,10 @@ import ml.mypals.meshcut.MeshCut;
 /**
  * Where a laggy physics step comes from. Rapier's step is native code that a Java profiler cannot see into, so what is
  * counted here is what is fed to it: the timing of each step, how many bodies are awake, and how many colliders (and
- * boxes in them) the mimic blocks have made. Logged every {@link #EVERY} steps; {@code -Dmeshcut.diag=false} turns it off.
+ * boxes in them) the mimic blocks have made. Logged every {@link #EVERY} steps; {@code -Dmeshcut.diag=true} turns it on (off by default).
  */
 public final class PhysicsDiag {
-    private static final boolean ENABLED = !"false".equalsIgnoreCase(System.getProperty("meshcut.diag"));
+
     private static final int EVERY = 100;
 
     private static long total;
@@ -18,7 +18,7 @@ public final class PhysicsDiag {
     private static long lastBoxes;
 
     public static boolean enabled() {
-        return ENABLED;
+        return ml.mypals.meshcut.MeshCutSettings.diagnostics();
     }
 
     public static void step(long nanos, int activeBodies) {

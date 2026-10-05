@@ -21,12 +21,48 @@ final class LightsaberSurfaces {
         }
     };
 
+    private static final java.util.Set<MimicRenderData> BUILDING = new java.util.HashSet<>();
+    private static long generation;
+
     static List<MeshPoly> at(ClientLevel level, BlockPos pos) {
+        return prepare(level, pos);
+    }
+
+    private static List<MeshPoly> prepare(ClientLevel level, BlockPos pos) {
         var state = level.getBlockState(pos);
         if (state.isAir()) return List.of();
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity mimic) {
             var data = mimic.renderData();
-            return CUT_MODELS.computeIfAbsent(data, LightsaberSurfaces::cutModel);
+            List<MeshPoly> cached = CUT_MODELS.get(data);
+            if (cached != null) return cached;
+            // Model capture must stay on the client thread. Geometry work must not stall contact ticks.
+            if (BUILDING.size() >= 16 || !BUILDING.add(data)) return List.of();
+            long epoch = generation;
+            try {
+                ModelCapturer.CapturedMesh source = data.entity() == null
+                        ? ModelCapturer.capture(data.target(), data.beTag()) : MimicMesh.entityPart(data.entity());
+                MimicMesh.async(() -> {
+                    try {
+                        List<MeshPoly> done = MimicMesh.contactModel(source, data);
+                        net.minecraft.client.Minecraft.getInstance().execute(() -> {
+                            if (epoch != generation) return;
+                            BUILDING.remove(data);
+                            CUT_MODELS.put(data, done);
+                        });
+                    } catch (RuntimeException ex) {
+                        net.minecraft.client.Minecraft.getInstance().execute(() -> {
+                            if (epoch != generation) return;
+                            BUILDING.remove(data);
+                            CUT_MODELS.put(data, List.of());
+                            ml.mypals.meshcut.MeshCut.LOGGER.error("Preparing saber contact geometry failed", ex);
+                        });
+                    }
+                });
+            } catch (RuntimeException ex) {
+                BUILDING.remove(data);
+                throw ex;
+            }
+            return List.of();
         }
         if (ModelCapturer.hasBlockEntityRenderer(state)) {
             var be = level.getBlockEntity(pos);
@@ -40,14 +76,11 @@ final class LightsaberSurfaces {
         return level.getBlockEntity(pos) instanceof MimicBlockEntity mimic ? mimic.renderData() : level.getBlockState(pos);
     }
 
-    private static List<MeshPoly> cutModel(MimicRenderData data) {
-        ModelCapturer.CapturedMesh source = data.entity() == null
-                ? ModelCapturer.capture(data.target(), data.beTag()) : MimicMesh.entityPart(data.entity());
-        return MimicMesh.cutModel(source.byType(), source.opaque(), source.capUv(), null, data, RenderType.solid())
-                .values().stream().flatMap(List::stream).toList();
+    static void clear() {
+        generation++;
+        BUILDING.clear();
+        CUT_MODELS.clear();
     }
-
-    static void clear() { CUT_MODELS.clear(); }
 
     private LightsaberSurfaces() {}
 }

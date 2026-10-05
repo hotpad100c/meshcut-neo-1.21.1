@@ -169,11 +169,15 @@ public final class SectionIndex {
     // ---------------------------------------------------------------- building
 
     private void rebuild() {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SectionIndex.rebuild")) {
         rebuildNodes();
         rebuildGroups();
+    
+        }
     }
 
     private void rebuildNodes() {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SectionIndex.rebuildNodes")) {
         nodes.clear();
         liveRegions = 0;
         java.util.Arrays.fill(regionAt, -1);
@@ -188,10 +192,11 @@ public final class SectionIndex {
                 }
             }
         }
-        // greedy boxes, trying every order of growing along the axes and keeping the one with the fewest boxes
         List<int[]> best = null;
         int[][] orders = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
-        for (int[] order : orders) {
+        int attempts = ml.mypals.meshcut.MeshCutSettings.allRegionOrders() ? orders.length : 1;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            int[] order = orders[attempt];
             List<int[]> boxes = greedyBoxes(order);
             if (best == null || boxes.size() < best.size()) {
                 best = boxes;
@@ -201,9 +206,10 @@ public final class SectionIndex {
             addRegion(b[0], b[1], b[2], b[3], b[4], b[5]);
         }
         builtRegions = liveRegions;
+    
+        }
     }
 
-    /** Boxes of ordinary blocks: from each free block, grow along the axes in the given order while whole rows are free. */
     private List<int[]> greedyBoxes(int[] order) {
         boolean[] taken = new boolean[CELLS];
         List<int[]> boxes = new ArrayList<>();
@@ -233,7 +239,6 @@ public final class SectionIndex {
         return boxes;
     }
 
-    /** Whether the layer just past the box on the axis is all free ordinary blocks. */
     private boolean slabFree(int[] lo, int[] hi, int axis, boolean[] taken) {
         int[] from = lo.clone(), to = hi.clone();
         from[axis] = to[axis] = hi[axis] + 1;
@@ -284,6 +289,7 @@ public final class SectionIndex {
     }
 
     private void rebuildGroups() {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SectionIndex.rebuildGroups")) {
         groups.clear();
         int[] parent = new int[nodes.size()];
         for (int i = 0; i < parent.length; i++) {
@@ -326,6 +332,8 @@ public final class SectionIndex {
             });
             g.nodes.add(node);
             node.group = g;
+        }
+    
         }
     }
 

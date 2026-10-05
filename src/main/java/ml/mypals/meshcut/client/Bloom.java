@@ -193,13 +193,14 @@ public final class Bloom {
         begin();
         MultiBufferSource.BufferSource buffers = BUFFERS;
         if (queued > 0) {
-            VertexConsumer consumer = buffers.getBuffer(BloomRenderTypes.TRIANGLES);
+            VertexConsumer consumer = buffers.getBuffer(BloomRenderTypes.CUT_TRIANGLES);
             for (int i = 0; i < queued; i += 7) {
                 consumer.addVertex(queue[i], queue[i + 1], queue[i + 2])
                         .setColor(queue[i + 3], queue[i + 4], queue[i + 5], queue[i + 6]);
             }
             queued = 0;
         }
+        buffers.endBatch(BloomRenderTypes.CUT_TRIANGLES);
         buffers.endBatch(BloomRenderTypes.TRIANGLES);
         buffers.endBatch(BloomRenderTypes.QUADS);
         active = false;

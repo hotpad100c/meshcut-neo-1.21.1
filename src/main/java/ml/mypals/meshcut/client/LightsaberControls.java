@@ -33,6 +33,19 @@ public final class LightsaberControls {
         event.setCanceled(true);
     }
 
+    @SubscribeEvent
+    public static void toggleBlade(InputEvent.MouseButton.Pre event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (event.getButton() != org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT || mc.screen != null
+                || mc.player == null || !(mc.player.getMainHandItem().getItem() instanceof LightsaberItem item)) return;
+        // Hold mode uses vanilla use-key state and its release packet.
+        if (!ml.mypals.meshcut.MeshCutClientConfig.toggleSaber()) return;
+        event.setCanceled(true);
+        if (event.getAction() == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
+            item.use(mc.level, mc.player, net.minecraft.world.InteractionHand.MAIN_HAND);
+            PacketDistributor.sendToServer(new LightsaberNet.Toggle());
+        }
+    }
     private static LocalPlayer owner;
     private static SaberControl control;
     private static Object session;

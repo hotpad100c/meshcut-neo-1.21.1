@@ -29,6 +29,7 @@
     "ModelPartMixin",
     "LightsaberArmPoseMixin",
     "LightsaberMouseMixin",
+    "LightsaberToggleMixin",
     "LightsaberOffhandMixin"
   ],
   "injectors": {

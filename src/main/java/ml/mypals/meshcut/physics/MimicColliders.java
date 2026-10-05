@@ -31,7 +31,7 @@ public final class MimicColliders {
      * cut block costs Rapier a cuboid test against every box it touches, so the shape count drives the step time
      * (measured: 40 to 70 ms at 600 exact shapes, 5 to 10 ms at 64). {@code -Dmeshcut.maxEntries=N} overrides it.
      */
-    private static final int MAX_ENTRIES = Integer.getInteger("meshcut.maxEntries", 64);
+
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
 
@@ -75,14 +75,14 @@ public final class MimicColliders {
             return entry;
         }
         List<double[]> boxes = MimicShapes.boxes(key);
-        if (ENTRIES.size() >= MAX_ENTRIES) {
+        if (ENTRIES.size() >= ml.mypals.meshcut.MeshCutSettings.maxEntries()) {
             coarsened++;
             key = coarse(key, boxes);
             entry = ENTRIES.get(key);
             if (entry != null) {
                 return entry;
             }
-            if (ENTRIES.size() >= MAX_ENTRIES + MAX_COARSE) {
+            if (ENTRIES.size() >= ml.mypals.meshcut.MeshCutSettings.maxEntries() + MAX_COARSE) {
                 overflowFallbacks++;
                 return fallback.get();
             }

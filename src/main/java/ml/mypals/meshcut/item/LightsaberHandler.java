@@ -25,12 +25,13 @@ public final class LightsaberHandler {
     private static final double MAX_TIP_SPEED = 30;
     /** Slower than this the blade is standing still and sweeps nothing. */
     private static final double MIN_TIP_SPEED = 0.01;
-    /** The item's maximum use duration bounds storage without applying blocks before release. */
+    /** The item's maximum use duration bounds storage in each settlement interval. */
     private static final int MAX_SWIPES = 72000;
 
     private static final class Swing {
         final ResourceKey<Level> dimension;
         final Object session;
+        int elapsed;
         final List<SlashService.Swipe> swipes = new ArrayList<>();
         final List<Blade> pending = new ArrayList<>();
 
@@ -107,7 +108,7 @@ public final class LightsaberHandler {
             LAST.remove(id);
             INBOX.remove(id);
             HEARD.remove(id);
-            finish(player); // let go: the cut is over
+            finish(player); // switched off or changed item: settle the remaining stroke
             return;
         }
         List<Blade> blades = INBOX.remove(id);
@@ -118,6 +119,11 @@ public final class LightsaberHandler {
         }
         for (Blade now : blades) {
             step(player, id, now);
+        }
+        Swing swing = SWINGS.get(id);
+        if (swing != null && ++swing.elapsed >= ml.mypals.meshcut.MeshCutConfig.SETTLEMENT_TICKS.get()) {
+            finish(player);
+            // LAST remains the start of the next segment; never bridge across a missing blade sample.
         }
     }
 
@@ -158,10 +164,13 @@ public final class LightsaberHandler {
         }
         try {
             swing.flush();
+            long start = System.nanoTime();
             var result=SlashService.slashBlocks(player.serverLevel(), swing.swipes, CapMode.LAVA, player);
-            if(result!=null) {
-                MeshCut.LOGGER.info("Applied saber stroke: {} swipes, {} static blocks, {} sub-levels cut, {} sub-levels created",
+            if(result!=null && ml.mypals.meshcut.MeshCutSettings.diagnostics()) {
+                MeshCut.LOGGER.debug("Applied saber stroke: {} swipes, {} static blocks, {} sub-levels cut, {} sub-levels created",
                         swing.swipes.size(),result.staticBlocks(),result.subLevelsCut(),result.subLevelsCreated());
+                if (ml.mypals.meshcut.MeshCutSettings.diagnostics())
+                    MeshCut.LOGGER.debug("[meshcut diag] saber settlement: {} ms", (System.nanoTime()-start)/1e6);
             }
         } catch (RuntimeException e) {
             MeshCut.LOGGER.error("Applying a lightsaber swing failed", e);

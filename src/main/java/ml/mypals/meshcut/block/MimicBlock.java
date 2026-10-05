@@ -103,6 +103,12 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
                              @Nullable EntityAppearance entity) {
+        place(level, pos, target, planes, excluded, patches, mode, beTag, entity, null);
+    }
+
+    public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
+                             List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
+                             @Nullable EntityAppearance entity, @Nullable MimicBlockEntity.GlowHistory inherited) {
         if (entity != null && ml.mypals.meshcut.geom.VoxelBoxes.remainingVolume(entity.boxes(), planes, excluded) < EMPTY_BODY_VOLUME) {
             // nothing of the body is left in this block (it was all cut away, or only ever passed by): it goes, or
             // it would hold together what is no longer touching
@@ -121,7 +127,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             boolean slot = level.getBlockState(pos).getValue(REFRESH);
             be.beginMassTransition(fresh, slot);
-            be.configure(target, planes, excluded, patches, mode, beTag, entity);
+            be.configure(target, planes, excluded, patches, mode, beTag, entity, inherited);
             refreshPhysics(level, pos); // flips REFRESH: Sable re-reads collider and mass, old slot -> new slot
             be.endMassTransition();
         }

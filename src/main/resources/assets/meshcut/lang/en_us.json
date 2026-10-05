@@ -21,7 +21,8 @@
   "tooltip.meshcut.laser_dye": "Gun in offhand + dye in main hand: right-click to dye",
   "itemGroup.meshcut": "MeshCut",
   "tooltip.meshcut.saber_length": "Blade length: %s%%",
-  "tooltip.meshcut.saber_controls": "Hold right-click to ignite;Ctrl + scroll to adjust length",
+  "tooltip.meshcut.saber_controls": "Right-click to toggle; cuts settle automatically; Ctrl + scroll adjusts length",
+  "tooltip.meshcut.saber_controls_hold": "Hold right-click to activate; release to switch off; Ctrl + scroll adjusts length",
   "tooltip.meshcut.saber_connections": "Hold %s to view connections: blue fragment, orange contacts",
   "tooltip.meshcut.saber_dye": "Saber in offhand + dye in main hand: right-click to dye",
   "tooltip.meshcut.saber_gestures": "Press %s for a swing;Hold %s and move the mouse to reposition"

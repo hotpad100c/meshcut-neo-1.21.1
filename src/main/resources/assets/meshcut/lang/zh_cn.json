@@ -21,7 +21,8 @@
   "tooltip.meshcut.laser_dye": "副手持枪，主手持染料，右键染色",
   "itemGroup.meshcut": "网格切割",
   "tooltip.meshcut.saber_length": "剑刃长度：%s%%",
-  "tooltip.meshcut.saber_controls": "按住右键开剑， Ctrl＋滚轮调整长度",
+  "tooltip.meshcut.saber_controls": "单击右键开关光剑，定时结算切割；Ctrl＋滚轮调整长度",
+  "tooltip.meshcut.saber_controls_hold": "长按右键开启光剑，松开关闭；Ctrl＋滚轮调整长度",
   "tooltip.meshcut.saber_connections": "按住 %s 查看连接：蓝色为碎片，橙色为连接",
   "tooltip.meshcut.saber_dye": "副手持剑，主手持染料;右键染色",
   "tooltip.meshcut.saber_gestures": "按 %s 随机挥剑;按住 %s 用鼠标调整剑的位置"

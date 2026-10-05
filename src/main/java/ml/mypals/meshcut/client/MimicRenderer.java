@@ -88,9 +88,8 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
                 for (MeshPoly poly : layer.getValue()) {
                     emit(consumer, pose, poly, tint(be, state, poly.tintIndex()), packedLight, 1f, triangles);
                 }
-                if (buffer instanceof MultiBufferSource.BufferSource bs) {
-                    bs.endBatch(layer.getKey());
-                }
+                // The level renderer submits the shared layer once. Flushing per fragment repeatedly sorts,
+                // uploads and draws translucent geometry, and prevents batching across fragments.
             }
         }
 
@@ -102,14 +101,10 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
             org.joml.Vector3f at = new org.joml.Vector3f();
             int[] corner = new int[3];
             List<MeshPoly> glow = MimicMesh.glowPolys(be.renderData());
-            // made once in white and tinted by the shader colour, which is where the cooling goes
-            boolean drawn = MimicVbos.enabled() && MimicVbos.drawGlow(be, glow, Sheets.translucentCullBlockSheet(), pose,
-                    packedLight, 1f, (heat >> 8 & 255) / 255f, (heat & 255) / 255f, fade);
-            VertexConsumer consumer = drawn ? null : buffer.getBuffer(Sheets.translucentCullBlockSheet());
+            // Small cached polygons share one layer across blocks; colour/fade are per-vertex, not shader state.
+            VertexConsumer consumer = buffer.getBuffer(Sheets.translucentCullBlockSheet());
             for (MeshPoly poly : glow) {
-                if (!drawn) {
-                    emit(consumer, pose, poly, heat, packedLight, fade, false);
-                }
+                emit(consumer, pose, poly, heat, packedLight, fade, false);
                 if (bloom) { // the lava also glows: queued, to be drawn into the glow buffer later in the frame
                     float[] v = poly.verts();
                     for (int i = 1; i + 1 < poly.vertexCount(); i++) {

@@ -38,3 +38,4 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+/libs/dev.ryanhcode.sable.sable-sable_rapier-1.21.1-2.0.6.jar

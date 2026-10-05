@@ -13,9 +13,16 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
+import org.jetbrains.annotations.NotNull;
 
 @EventBusSubscriber(modid = MeshCut.MODID, bus = EventBusSubscriber.Bus.MOD)
 public final class LightsaberNet {
+    public record Toggle() implements CustomPacketPayload {
+        public static final Type<Toggle> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_toggle"));
+        public static final StreamCodec<FriendlyByteBuf, Toggle> CODEC = StreamCodec.of((buf, p) -> {}, buf -> new Toggle());
+        @Override public @NotNull Type<Toggle> type() { return TYPE; }
+    }
+
     public record Length(float scale) implements CustomPacketPayload {
         public static final Type<Length> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_length"));
         public static final StreamCodec<FriendlyByteBuf, Length> CODEC = StreamCodec.of(
@@ -27,7 +34,7 @@ public final class LightsaberNet {
         public static final StreamCodec<FriendlyByteBuf, Input> CODEC = StreamCodec.of(
                 (buf, input) -> { buf.writeFloat(input.yaw); buf.writeFloat(input.pitch); buf.writeFloat(input.x); buf.writeFloat(input.y); },
                 buf -> new Input(buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
-        @Override public Type<Input> type() { return TYPE; }
+        @Override public @NotNull Type<Input> type() { return TYPE; }
     }
 
     /**
@@ -40,7 +47,7 @@ public final class LightsaberNet {
         public static final StreamCodec<FriendlyByteBuf, Swing> CODEC = StreamCodec.of(
                 (buf, s) -> { buf.writeFloat(s.bx); buf.writeFloat(s.by); buf.writeFloat(s.bz); buf.writeFloat(s.dx); buf.writeFloat(s.dy); buf.writeFloat(s.dz); },
                 buf -> new Swing(buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
-        @Override public Type<Swing> type() { return TYPE; }
+        @Override public @NotNull Type<Swing> type() { return TYPE; }
     }
 
     public record Target(int id, float yaw, float pitch, float x, float y, float length) implements CustomPacketPayload {
@@ -48,7 +55,7 @@ public final class LightsaberNet {
         public static final StreamCodec<FriendlyByteBuf, Target> CODEC = StreamCodec.of(
                 (buf, target) -> { buf.writeVarInt(target.id); buf.writeFloat(target.yaw); buf.writeFloat(target.pitch); buf.writeFloat(target.x); buf.writeFloat(target.y); buf.writeFloat(target.length); },
                 buf -> new Target(buf.readVarInt(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat()));
-        @Override public Type<Target> type() { return TYPE; }
+        @Override public @NotNull Type<Target> type() { return TYPE; }
     }
 
     public record Gesture(int preset, int seed) implements CustomPacketPayload {
@@ -56,12 +63,17 @@ public final class LightsaberNet {
         public static final StreamCodec<FriendlyByteBuf, Gesture> CODEC = StreamCodec.of(
                 (buf, gesture) -> { buf.writeVarInt(gesture.preset); buf.writeInt(gesture.seed); },
                 buf -> new Gesture(buf.readVarInt(), buf.readInt()));
-        @Override public Type<Gesture> type() { return TYPE; }
+        @Override public @NotNull Type<Gesture> type() { return TYPE; }
     }
 
     @SubscribeEvent
     public static void register(RegisterPayloadHandlersEvent event) {
-        var registrar = event.registrar("3");
+        var registrar = event.registrar("4");
+        registrar.playToServer(Toggle.TYPE, Toggle.CODEC, (toggle, context) -> context.enqueueWork(() -> {
+            var player = context.player();
+            if (player.getMainHandItem().getItem() instanceof LightsaberItem item)
+                item.use(player.level(), player, net.minecraft.world.InteractionHand.MAIN_HAND);
+        }));
         registrar.playToServer(Length.TYPE, Length.CODEC, (length, context) -> context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player && Float.isFinite(length.scale))
                 LightsaberItem.setLengthScale(player.getMainHandItem(), length.scale);

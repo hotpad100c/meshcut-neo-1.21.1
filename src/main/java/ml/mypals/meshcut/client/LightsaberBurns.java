@@ -48,6 +48,8 @@ public final class LightsaberBurns {
     @Nullable private static ClientLevel burnLevel;
 
     private static final long CLOSING_TICKS = 100;
+    // Cosmetic contacts may skip a frame; actual server cuts are unaffected.
+    private static long contactDeadline;
 
     private static final class Mark {
         final long time;
@@ -91,6 +93,10 @@ public final class LightsaberBurns {
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
+        collectTick(event);
+    }
+
+    private static void collectTick(ClientTickEvent.Post event) {
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft.level;
         if (level != burnLevel) {
@@ -101,8 +107,9 @@ public final class LightsaberBurns {
         long now = level.getGameTime();
         while (!MARKS.isEmpty() && now - MARKS.peekFirst().time > CHAR_LIFETIME) MARKS.pollFirst();
         // Geometry invalidation needs a tick check, not thousands of block-entity lookups per render frame.
+        Map<BlockPos, Object> versions = new java.util.HashMap<>();
         MARKS.removeIf(mark -> {
-            if (LightsaberSurfaces.version(level, mark.block) == mark.version) return false;
+            if (versions.computeIfAbsent(mark.block, pos -> LightsaberSurfaces.version(level, pos)) == mark.version) return false;
             if (level.getBlockState(mark.block).isAir()) return true; // the block went with a fragment
             if (mark.closedAt < 0) { // cut: the mark cools and darkens for a few seconds instead of vanishing at once
                 mark.closedHeat = mark.heat(now);
@@ -111,6 +118,7 @@ public final class LightsaberBurns {
             return now - mark.closedAt > CLOSING_TICKS;
         });
         LAST_BLADE.keySet().removeIf(id -> level.getPlayerByUUID(id) == null);
+        contactDeadline = System.nanoTime() + 3_000_000L;
         var container = SubLevelContainer.getContainer(level);
         for (Player player : level.players()) {
             if (!LightsaberItem.isActive(player)) {
@@ -166,6 +174,7 @@ public final class LightsaberBurns {
         Contact closest = null;
         Vec3 origin = pose == null ? sweep[0] : pose.transformPosition(sweep[0]);
         for (BlockPos cursor : BlockPos.betweenClosed(min, max)) {
+            if (System.nanoTime() >= contactDeadline) return closest;
             boolean inPlot = container != null && container.inBounds(cursor);
             if (inPlot != (subLevel != null) || !level.hasChunkAt(cursor) || level.getBlockState(cursor).isAir()) continue;
             if (subLevel != null) {
@@ -178,6 +187,7 @@ public final class LightsaberBurns {
                     sweep[i].y - block.getY(), sweep[i].z - block.getZ());
             Object version = LightsaberSurfaces.version(level, block);
             for (var face : LightsaberSurfaces.at(level, block)) {
+                if (System.nanoTime() >= contactDeadline) return closest;
                 for (int[] indices : SWEEP_TRIANGLES) {
                     Vector3d[] triangle = {quad[indices[0]], quad[indices[1]], quad[indices[2]]};
                     float[] charred = SaberScorch.project(face, triangle, CHAR_HALF_WIDTH);

@@ -194,7 +194,10 @@ public final class SlashService {
     /** Entity contact was already handled while holding the saber; release only applies the recorded world stroke. */
     public static CutService.Result slashBlocks(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                 @Nullable net.minecraft.world.entity.Entity wielder) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.begin()) {
         return slashSwing(level, swipes, mode, wielder, false);
+    
+        }
     }
 
     private static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
@@ -220,11 +223,15 @@ public final class SlashService {
 
     private static CutService.Result cutWith(ServerLevel level, List<Sweep> sweeps, CapMode mode,
                                                 @Nullable net.minecraft.world.entity.Entity wielder) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.cutWith")) {
         return cutWith(level, sweeps, mode, wielder, true);
+    
+        }
     }
 
     private static CutService.Result cutWith(ServerLevel level, List<Sweep> sweeps, CapMode mode,
                                              @Nullable net.minecraft.world.entity.Entity wielder, boolean entities) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.cutWith")) {
         java.util.Set<ServerSubLevel> alreadyCutBodies = entities ? cutEntities(level, sweeps, mode, wielder)
                 : java.util.Set.of();
 
@@ -266,6 +273,8 @@ public final class SlashService {
 
         int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
         return new CutService.Result(staticBlocks, cutLevels, created[0]);
+    
+        }
     }
 
     /** Immediate entity-only contact, including a motionless blade. Never processes world blocks. */
@@ -353,6 +362,7 @@ public final class SlashService {
      */
     private static void collect(Map<BlockPos, List<StrokeFit.Fragment>> out, Vector3d n, Vector3d center, Vector3d[] quad,
                                 List<Vec3> samples, @Nullable Pose3dc pose, Predicate<BlockPos> accept) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.collect")) {
         double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
         double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
         for (Vector3d q : quad) {
@@ -405,10 +415,13 @@ public final class SlashService {
                     out.computeIfAbsent(cell.immutable(),k->new ArrayList<>()).add(new StrokeFit.Fragment(tn,motion,clipped));
             }
         }
+    
+        }
     }
 
     /** Bounded triangles, never upgraded to an infinite cut or averaged across a bend. */
     private static Map<BlockPos,List<Patch>> surfacePatches(Map<BlockPos,List<StrokeFit.Fragment>> fragments) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.surfacePatches")) {
         Map<BlockPos,List<Patch>> result=new LinkedHashMap<>();
         fragments.forEach((pos, parts)-> {
             List<Patch> patches=new ArrayList<>();
@@ -421,6 +434,8 @@ public final class SlashService {
             result.put(pos,patches);
         });
         return result;
+    
+        }
     }
 
     @Nullable
@@ -469,6 +484,7 @@ public final class SlashService {
      */
     private static int process(ServerLevel level, @Nullable ServerSubLevel sub, Map<BlockPos, List<Patch>> cells,
                                CapMode mode, int[] created) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.process")) {
         Domain dom = new Domain(level, mode, sub);
 
         // 1. every block a patch passes through remembers it
@@ -514,7 +530,7 @@ public final class SlashService {
                 List<List<CutPlane>> emptyCells=VoxelFragments.excluded(grid,all);
                 for(List<CutPlane> hole:emptyCells) if(!holes.contains(hole)) holes.add(hole);
                 burned=grid.filledCells()<CellGrid.of(piece.planes(),piece.excluded(),List.of(),piece.cutBoxes()).filledCells();
-                CutService.Piece now=new CutService.Piece(piece.target(),planes,VoxelFragments.compact(holes),merged,piece.mode(),piece.beTag(),piece.undetachedBe(),piece.entity());
+                CutService.Piece now=new CutService.Piece(piece.target(),planes,VoxelFragments.compact(holes),merged,piece.mode(),piece.beTag(),piece.undetachedBe(),piece.entity(),piece.glow());
                 Info info = new Info(fixed, now, merged);
                 info.burned = burned;
                 dom.infos.put(fixed, info);
@@ -528,6 +544,8 @@ public final class SlashService {
         // swing, it need not be the first swipe's)
         Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
         return resolve(level, sub, dom, hits, nl, dl, new Vec3(world.x, world.y, world.z), created, true);
+    
+        }
     }
 
     /** Who moves out of the structure, and which of the blocks that were cut are severed. */
@@ -545,6 +563,7 @@ public final class SlashService {
      */
     private static int resolve(ServerLevel level, @Nullable ServerSubLevel sub, Domain dom, List<Info> hits,
                                Vector3d nl, double dl, Vec3 nWorld, int[] created, boolean applyUnsevered) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.resolve")) {
         // 2. which pieces are connected to which
         Map<Node, Integer> comp = new HashMap<>();
         Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp);
@@ -657,12 +676,15 @@ public final class SlashService {
             refreshMass(level, sub);
         }
         return hits.size();
+    
+        }
     }
 
     /** 6. Moves the groups out, then puts the pieces that stay in place. */
     private static void moveOut(ServerLevel level, @Nullable ServerSubLevel sub, Domain dom, Plan plan,
                                 Map<Integer, List<Spec>> specs, Map<BlockPos, CompoundTag> beTags,
                                 Vector3d nl, double dl, Vec3 nWorld, int[] created) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.moveOut")) {
         for (int id : plan.movers()) {
             StructureGraph.Closure closure = plan.closures().get(id);
             long[] packed = closure.positions();
@@ -699,6 +721,8 @@ public final class SlashService {
                     place(level, spec.info(), spec.planes(), spec.excluded(), spec.patches(), beTags);
                 }
             }
+        }
+    
         }
     }
 
@@ -884,7 +908,7 @@ public final class SlashService {
         if (created[0] > 0) {
             LAST_SPLIT.put(new Recheck(level, pos), level.getGameTime());
             createdThisTick += created[0];
-            MeshCut.LOGGER.info("Re-examined the cut block at {}{}: {} piece(s) came loose", pos,
+            if (ml.mypals.meshcut.MeshCutSettings.diagnostics()) MeshCut.LOGGER.debug("Re-examined the cut block at {}{}: {} piece(s) came loose", pos,
                     sub == null ? "" : " (in a sub-level)", created[0]);
         }
     }
@@ -902,6 +926,7 @@ public final class SlashService {
      * @return the structures that are not attached, by id
      */
     private static Map<Integer, StructureGraph.Closure> components(Domain dom, List<Info> hits, Map<Node, Integer> comp) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.components")) {
         Map<Long, BlockNodes> over = new HashMap<>();
         List<StructureGraph.NodeRef> seeds = new ArrayList<>();
         for (Info hit : hits) {
@@ -923,6 +948,8 @@ public final class SlashService {
             }
         }
         return byId;
+    
+        }
     }
 
     private static int supportingNeighbours(Domain dom,Info hit) {
@@ -1006,7 +1033,7 @@ public final class SlashService {
                               List<Patch> patches, Map<BlockPos, CompoundTag> beTags) {
         CutService.Piece piece = info.piece;
         MimicBlock.place(level, info.pos, piece.target(), planes, excluded, patches, piece.mode(),
-                beTags.getOrDefault(info.pos, piece.beTag()), piece.entity());
+                beTags.getOrDefault(info.pos, piece.beTag()), piece.entity(), piece.glow());
     }
 
     private SlashService() {}

@@ -23,7 +23,9 @@ public class LightsaberItem extends Item {
     public void appendHoverText(ItemStack stack, TooltipContext context, java.util.List<net.minecraft.network.chat.Component> tooltip,
                                 net.minecraft.world.item.TooltipFlag flag) {
         tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_length", Math.round(lengthScale(stack)*100)));
-        tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_controls"));
+        tooltip.add(net.minecraft.network.chat.Component.translatable(
+                ml.mypals.meshcut.MeshCutClientConfig.toggleSaber()
+                        ? "tooltip.meshcut.saber_controls" : "tooltip.meshcut.saber_controls_hold"));
         tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_connections",
                 net.minecraft.network.chat.Component.keybind("key.meshcut.connections")));
         tooltip.add(net.minecraft.network.chat.Component.translatable("tooltip.meshcut.saber_gestures",
@@ -97,6 +99,10 @@ public class LightsaberItem extends Item {
                 return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
             }
             return InteractionResultHolder.pass(stack);
+        }
+        if (isActive(player)) {
+            player.releaseUsingItem();
+            return InteractionResultHolder.consume(stack);
         }
         player.startUsingItem(hand);
         LightsaberMotion.begin(player);

@@ -27,6 +27,12 @@ import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MeshCutClient {
     @SubscribeEvent
+    public static void beginFrame(net.neoforged.neoforge.client.event.RenderLevelStageEvent event) {
+        if (event.getStage() == net.neoforged.neoforge.client.event.RenderLevelStageEvent.Stage.AFTER_SKY)
+            MimicVbos.beginFrame();
+    }
+
+    @SubscribeEvent
     public static void registerRenderers(EntityRenderersEvent.RegisterRenderers event) {
         event.registerBlockEntityRenderer(MeshCut.MIMIC_BE.get(), MimicRenderer::new);
     }
