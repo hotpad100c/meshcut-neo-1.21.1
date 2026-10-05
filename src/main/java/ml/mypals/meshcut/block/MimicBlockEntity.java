@@ -267,9 +267,16 @@ public class MimicBlockEntity extends BlockEntity {
                 }
             }
             if (!fresh.isEmpty()) {
-                glowCuts.clear();
-                glowCuts.addAll(fresh);
-                glowStart = level == null ? NEVER : level.getGameTime();
+                long now = level == null ? NEVER : level.getGameTime();
+                if (glowStart != NEVER && now != NEVER && now - glowStart < GLOW_TICKS) {
+                    for (CutPlane p : fresh) {
+                        if (glowCuts.stream().noneMatch(p::sameAs)) glowCuts.add(p);
+                    }
+                } else {
+                    glowCuts.clear();
+                    glowCuts.addAll(fresh);
+                }
+                glowStart = now;
             }
         }
         this.appearance = entity;
@@ -294,8 +301,12 @@ public class MimicBlockEntity extends BlockEntity {
 
     private static List<CutPlane> allCuts(List<CutPlane> planes, List<List<CutPlane>> excluded, List<CutPlane> patches) {
         List<CutPlane> all = new ArrayList<>(planes);
-        // Excluded regions encode fragment ownership/voxel boxes, not newly burnt blade surfaces.
         all.addAll(patches);
+        for (List<CutPlane> hole : ml.mypals.meshcut.geom.VoxelFragments.smoothHoles(excluded)) {
+            for (CutPlane p : hole) {
+                all.add(p.flipped());
+            }
+        }
         return all;
     }
 
@@ -405,10 +416,14 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     public float glowFade(float partialTick) {
-        if (capMode != CapMode.LAVA || glowStart == NEVER || level == null) {
+        return glowFade(partialTick, level == null ? 0 : level.getGameTime());
+    }
+
+    public float glowFade(float partialTick, long gameTime) {
+        if (capMode != CapMode.LAVA || glowStart == NEVER) {
             return 0f;
         }
-        double age = level.getGameTime() + partialTick - glowStart;
+        double age = gameTime + partialTick - glowStart;
         if (age < 0) return 0f; // future/mismatched timestamps must never revive a cooled cut
         if (age >= GLOW_TICKS) {
             return 0f;

@@ -1,0 +1,7 @@
+{
+    "vertex": "meshcut:bloom",
+    "fragment": "meshcut:depth_copy",
+    "attributes": [ "Position" ],
+    "samplers": [ { "name": "Sampler0" } ],
+    "uniforms": []
+}

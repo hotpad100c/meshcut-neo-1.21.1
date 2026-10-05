@@ -124,7 +124,10 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
 
     /** 1 right after the cut, easing down to 0 over {@link #GLOW_TICKS}; 0 once it is over or if there is no glow. */
     private static float glowFade(MimicBlockEntity be, float partialTick) {
-        return be.glowFade(partialTick); // the same curve the light it gives off follows
+        long time = net.minecraft.client.Minecraft.getInstance().level != null
+                ? net.minecraft.client.Minecraft.getInstance().level.getGameTime()
+                : (be.getLevel() != null ? be.getLevel().getGameTime() : 0);
+        return be.glowFade(partialTick, time);
     }
 
     private static CacheEntry build(MimicBlockEntity be) {

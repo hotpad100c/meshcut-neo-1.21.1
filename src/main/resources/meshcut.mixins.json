@@ -24,6 +24,7 @@
     "PistonHeadRendererMixin",
     "HumanoidModelGrabMixin",
     "PoseStackMixin",
+    "GameRendererBloomMixin",
     "ModelPartAccessor",
     "ModelPartCubeMixin",
     "ModelPartMixin",

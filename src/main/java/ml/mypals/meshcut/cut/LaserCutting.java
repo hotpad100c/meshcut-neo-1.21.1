@@ -92,7 +92,7 @@ public final class LaserCutting {
             boolean glow=MimicBlock.glowingCuts();
             MimicBlock.setGlowingCuts(true);
             try {
-                MimicBlock.place(level,pos,piece.target(),piece.planes(),holes,piece.patches(),piece.mode(),piece.beTag(),piece.entity());
+                MimicBlock.place(level,pos,piece.target(),piece.planes(),holes,piece.patches(),piece.mode(),piece.beTag(),piece.entity(),piece.glow());
             } finally { MimicBlock.setGlowingCuts(glow); }
             SlashService.queueRecheck(level,pos);
         }

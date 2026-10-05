@@ -65,7 +65,7 @@ public final class LightsaberRenderer {
             blades.put(player.getUUID(), Blade.of(player, partialTick));
             palettes.put(player.getUUID(), Palette.of(player));
         }
-        if (!Bloom.usable() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
+        if (!Bloom.defersHands() && minecraft.player != null && minecraft.options.getCameraType().isFirstPerson()
                 && !minecraft.options.hideGui && LightsaberMotion.isVisible(minecraft.player)) {
             LightsaberHands.render(minecraft.player, blades.get(minecraft.player.getUUID()), partialTick,
                     camera, matrix, buffers);
@@ -94,7 +94,7 @@ public final class LightsaberRenderer {
 
     @SubscribeEvent(priority = EventPriority.LOW)
     public static void renderHands(RenderLevelStageEvent event) {
-        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER || !Bloom.usable()) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER || !Bloom.defersHands()) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();

@@ -66,7 +66,7 @@ public final class MotionBlur {
         Bloom.wantDepth();
     }
 
-    static void render(RenderLevelStageEvent event, int depth, int glow, int bloom, float strength) {
+    static void render(Bloom.Frame frame, int depth, int glow, int bloom, float strength) {
         if (shader == null || HISTORY.isEmpty()) {
             return;
         }
@@ -75,10 +75,9 @@ public final class MotionBlur {
             HISTORY.clear();
             return;
         }
-        double now = minecraft.level.getGameTime() + event.getPartialTick().getGameTimeDeltaPartialTick(true);
-        Matrix4f toClip = new Matrix4f(RenderSystem.getProjectionMatrix()).mul(RenderSystem.getModelViewMatrix())
-                .mul(event.getPoseStack().last().pose());
-        Vec3 camera = event.getCamera().getPosition();
+        double now = minecraft.level.getGameTime() + frame.partial();
+        Matrix4f toClip = frame.toClip();
+        Vec3 camera = frame.camera();
         RenderTarget main = minecraft.getMainRenderTarget();
         boolean prepared = false;
         for (Iterator<Map.Entry<UUID, ArrayDeque<Pose>>> it = HISTORY.entrySet().iterator(); it.hasNext(); ) {

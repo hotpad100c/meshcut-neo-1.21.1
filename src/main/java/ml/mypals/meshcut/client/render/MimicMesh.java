@@ -610,7 +610,9 @@ public final class MimicMesh {
             // Old saves may still contain synthetic voxel exclusion planes in glowCuts.
             List<CutPlane> actual = data.glowCuts().stream().filter(cut ->
                     data.planes().stream().anyMatch(cut::sameAs)
-                            || data.patches().stream().anyMatch(patch -> cut.sameAs(patch.plane()))).toList();
+                            || data.patches().stream().anyMatch(patch -> cut.sameAs(patch.plane()))
+                            || ml.mypals.meshcut.geom.VoxelFragments.smoothHoles(data.excluded()).stream()
+                                    .anyMatch(h -> h.stream().anyMatch(cut::sameAs))).toList();
             done = CoarseGlow.build(actual, data.patches(), data.planes(), data.excluded(),
                     data.entity() == null ? ml.mypals.meshcut.block.MimicShapes.cutBoxes(data.target()) : data.entity().boxes(),
                     new float[]{lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()}, lava);
