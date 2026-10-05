@@ -96,14 +96,20 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
 
         float fade = glowFade(be, partialTick);
         if (fade > 0f) {
-            VertexConsumer consumer = buffer.getBuffer(Sheets.translucentCullBlockSheet());
             // cooling: white-hot at first, then orange, then a dull red as the lava dies
             int heat = 0xFF0000 | Math.round(55 + 200 * fade) << 8 | Math.round(25 + 230 * fade * fade);
             boolean bloom = Bloom.usable();
             org.joml.Vector3f at = new org.joml.Vector3f();
             int[] corner = new int[3];
-            for (MeshPoly poly : MimicMesh.glowPolys(be.renderData())) {
-                emit(consumer, pose, poly, heat, packedLight, fade, false);
+            List<MeshPoly> glow = MimicMesh.glowPolys(be.renderData());
+            // made once in white and tinted by the shader colour, which is where the cooling goes
+            boolean drawn = MimicVbos.enabled() && MimicVbos.drawGlow(be, glow, Sheets.translucentCullBlockSheet(), pose,
+                    packedLight, 1f, (heat >> 8 & 255) / 255f, (heat & 255) / 255f, fade);
+            VertexConsumer consumer = drawn ? null : buffer.getBuffer(Sheets.translucentCullBlockSheet());
+            for (MeshPoly poly : glow) {
+                if (!drawn) {
+                    emit(consumer, pose, poly, heat, packedLight, fade, false);
+                }
                 if (bloom) { // the lava also glows: queued, to be drawn into the glow buffer later in the frame
                     float[] v = poly.verts();
                     for (int i = 1; i + 1 < poly.vertexCount(); i++) {

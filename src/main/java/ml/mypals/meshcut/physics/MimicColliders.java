@@ -26,7 +26,12 @@ import java.util.function.Supplier;
 
 
 public final class MimicColliders {
-    private static final int MAX_ENTRIES = 16384;
+    /**
+     * How many exact collider shapes are made before new ones are snapped to a coarser grid and shared. Every box of a
+     * cut block costs Rapier a cuboid test against every box it touches, so the shape count drives the step time
+     * (measured: 40 to 70 ms at 600 exact shapes, 5 to 10 ms at 64). {@code -Dmeshcut.maxEntries=N} overrides it.
+     */
+    private static final int MAX_ENTRIES = Integer.getInteger("meshcut.maxEntries", 64);
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
 

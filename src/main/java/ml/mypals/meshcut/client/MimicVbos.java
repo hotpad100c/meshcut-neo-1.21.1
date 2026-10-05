@@ -52,9 +52,26 @@ final class MimicVbos {
             this.be = new WeakReference<>(be);
         }
 
+        // the glow of a fresh cut: made once in white, tinted and faded by the shader colour each frame
+        Object glowSource;
+        int glowLight;
+        int glowBuiltAt;
+        final Matrix3f glowMade = new Matrix3f();
+        final Matrix3f glowLast = new Matrix3f();
+        int glowStable;
+        VertexBuffer glow;
+
         void close() {
             buffers.values().forEach(VertexBuffer::close);
             buffers.clear();
+            closeGlow();
+        }
+
+        void closeGlow() {
+            if (glow != null) {
+                glow.close();
+                glow = null;
+            }
         }
     }
 
@@ -123,6 +140,64 @@ final class MimicVbos {
             type.clearRenderState();
         }
         return rest;
+    }
+
+    /**
+     * The glow over the cut faces, drawn from a buffer made once: only the colour changes as it cools, and that is the
+     * shader colour. Returns false when it could not be drawn this way (the caller draws it directly).
+     */
+    static boolean drawGlow(MimicBlockEntity be, List<MeshPoly> polys, RenderType type, PoseStack.Pose pose, int light,
+                            float r, float g, float b, float a) {
+        if (polys.isEmpty()) {
+            return true;
+        }
+        if (++frames % SWEEP_EVERY == 0) {
+            sweep();
+        }
+        Entry entry = ENTRIES.computeIfAbsent(be, Entry::new);
+        Matrix3f normal = pose.normal();
+        boolean rebuild = entry.glowSource != polys || entry.glow == null
+                || entry.glowLight != light && frames - entry.glowBuiltAt >= RELIGHT_FRAMES;
+        if (!rebuild) {
+            if (!near(entry.glowMade, normal, NORMAL_TOLERANCE)) {
+                entry.glowStable = near(entry.glowLast, normal, 1e-3f) ? entry.glowStable + 1 : 0;
+                rebuild = entry.glowStable >= SETTLE_FRAMES;
+            } else {
+                entry.glowStable = 0;
+            }
+            entry.glowLast.set(normal);
+        }
+        if (rebuild) {
+            entry.closeGlow();
+            entry.glowSource = polys;
+            entry.glowLight = light;
+            entry.glowBuiltAt = frames;
+            entry.glowMade.set(normal);
+            entry.glowLast.set(normal);
+            entry.glowStable = 0;
+            entry.glow = build(type, polys, normal, light, index -> 0xFFFFFF);
+        }
+        if (entry.glow == null) {
+            return false;
+        }
+        Matrix4f modelView = new Matrix4f(RenderSystem.getModelViewMatrix()).mul(pose.pose());
+        type.setupRenderState();
+        ShaderInstance shader = RenderSystem.getShader();
+        if (shader != null) {
+            RenderSystem.setShaderColor(r, g, b, a);
+            // the glow lies in the very plane of the cut face under it, and its matrix is worked out another way than
+            // the one that placed that face: pulled a little towards the viewer, as vanilla layers decals
+            RenderSystem.enablePolygonOffset();
+            RenderSystem.polygonOffset(-1f, -10f);
+            entry.glow.bind();
+            entry.glow.drawWithShader(modelView, RenderSystem.getProjectionMatrix(), shader);
+            VertexBuffer.unbind();
+            RenderSystem.polygonOffset(0f, 0f);
+            RenderSystem.disablePolygonOffset();
+            RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+        }
+        type.clearRenderState();
+        return true;
     }
 
     private static VertexBuffer build(RenderType type, List<MeshPoly> polys, Matrix3f normal, int light, IntUnaryOperator tint) {

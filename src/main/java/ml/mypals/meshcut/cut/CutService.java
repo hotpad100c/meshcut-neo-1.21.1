@@ -496,9 +496,11 @@ public final class CutService {
         if (source != null) {
             ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, null);
         }
+        double volume = ml.mypals.meshcut.physics.FragmentBudget.volumeOf(level, blocks);
         try {
             ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.getFirst(), blocks, BoundingBox3i.from(blocks));
             if(made!=null) {
+                ml.mypals.meshcut.physics.FragmentBudget.made(level, made, volume);
                 BlockPos plotAnchor=made.getPlot().getCenterBlock();
                 for(var entry:snapshots.entrySet()) {
                     BlockPos old=entry.getKey();Piece expected=entry.getValue();

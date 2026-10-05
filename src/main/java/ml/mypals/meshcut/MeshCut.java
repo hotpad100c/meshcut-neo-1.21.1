@@ -100,6 +100,7 @@ public class MeshCut {
         NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) ->
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);
+        NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.physics.FragmentBudget::onServerTick);
         NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onInvulnerabilityCheck);
@@ -109,6 +110,7 @@ public class MeshCut {
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> {
             SlashService.clear();
             MimicColliders.clear();
+            ml.mypals.meshcut.physics.FragmentBudget.clear();
         });
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.level.ChunkEvent.Unload e) -> {
             if (e.getLevel() instanceof net.minecraft.server.level.ServerLevel server) {
