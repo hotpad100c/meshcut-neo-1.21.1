@@ -1,6 +1,7 @@
 package ml.mypals.meshcut.cut;
 
 import dev.ryanhcode.sable.Sable;
+import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import ml.mypals.meshcut.geom.PolygonCapsule;
 import net.minecraft.core.BlockPos;
@@ -17,15 +18,7 @@ import org.joml.Vector3d;
 
 import java.util.List;
 
-/**
- * Lets AnvilCraft's laser blocks cut. Deliberately free of AnvilCraft types: the mixin hands over plain geometry, so
- * this class stays loadable (and AnvilCraft stays optional) whatever the dependency scope is.
- *
- * <p>AnvilCraft's beam only sees the blocks of the grid its laser stands in (the world, or one sub-level's plot). What
- * it stops at is burnt away at the head of the beam, a capsule through that one block. What lies across the border
- * (a sub-level the laser of the world points at, or the world seen from a laser on a sub-level) it knows nothing of;
- * that is found here and sliced along the beam like with the saber, since no part of it is in the laser's own grid.
- */
+
 public final class AnvilLaserBeam {
     /** Cutting costs far more than AnvilCraft's own per-tick beam update. */
     private static final int INTERVAL = 4;
@@ -48,6 +41,12 @@ public final class AnvilLaserBeam {
      */
     public static void emit(Level level, BlockPos origin, BlockPos target, Direction direction, boolean blocked, int strength, int ticks) {
         if (!(level instanceof ServerLevel server) || strength <= 0) return;
+        // How often it is called is up to AnvilCraft: what counts is the time since this laser last cut.
+        Key laser = new Key(server, origin.immutable());
+        long now = server.getGameTime();
+        Long lastRun = LAST_RUN.get(laser);
+        boolean due = lastRun == null || now - lastRun >= INTERVAL;
+        if (due) LAST_RUN.put(laser, now);
         Vec3 dir = new Vec3(direction.getStepX(), direction.getStepY(), direction.getStepZ());
         Vec3 face = origin.getCenter().add(dir.scale(0.5));
         SubLevel sub = Sable.HELPER.getContaining(server, origin);
@@ -58,7 +57,7 @@ public final class AnvilLaserBeam {
         Vec3 headEnd = blocked ? target.getCenter().add(dir.scale(0.5)) : null;
         Vec3 beamEnd = world(sub, headEnd != null ? headEnd : target.getCenter());
 
-        if (ticks % INTERVAL == 0) {
+        if (due) {
             // What the beam stops at, in its own grid: only the head of the beam is burnt, not the way to it.
             if (headEnd != null) {
                 // The capsule reaches back past its start by its own radius, so keep that clear of the emitter.
@@ -75,7 +74,7 @@ public final class AnvilLaserBeam {
 
         // Across the border. The laser may be carried along (a sub-level moves), so the beam is followed every tick:
         // each tick's blade position sweeps a surface from the last one, and the surfaces are settled together.
-        Key key = new Key(server, origin.immutable());
+        Key key = laser;
         Vec3 hit = crossing(server, sub, worldFace, worldDir, headEnd != null ? beamEnd : null);
         State state = STATES.get(key);
         if (hit == null) {
@@ -94,7 +93,8 @@ public final class AnvilLaserBeam {
         Blade from = last != null ? last : new Blade(base.subtract(side), tip.subtract(side));
         state.pending.add(new SlashService.Swipe(from, new Blade(base.add(side), tip.add(side))));
         state.last = new Blade(base.subtract(side), tip.subtract(side));
-        if (ticks % INTERVAL == 0 || state.pending.size() >= 8) flush(server, state);
+        state.emitter = sub instanceof ServerSubLevel body ? body : null;
+        if (due || state.pending.size() >= 8) flush(server, state);
     }
 
     /** The first block the beam meets that is not in the laser's own grid, if the laser's own grid did not stop it first. */
@@ -116,11 +116,12 @@ public final class AnvilLaserBeam {
         if (state.pending.isEmpty()) return;
         var swipes = List.copyOf(state.pending);
         state.pending.clear();
-        SlashService.slashBlocks(server, swipes, CapMode.LAVA, null);
+        SlashService.slashBlocksOutside(server, swipes, CapMode.LAVA, state.emitter);
     }
 
     /** Lasers that were removed or switched off leave their last surface behind. */
     private static void expire(long now) {
+        LAST_RUN.values().removeIf(t -> now - t > 200);
         STATES.entrySet().removeIf(e -> {
             if (now - e.getValue().seen < 40) return false;
             flush(e.getKey().level(), e.getValue());
@@ -134,13 +135,17 @@ public final class AnvilLaserBeam {
         final List<SlashService.Swipe> pending = new java.util.ArrayList<>();
         Blade last;
         long seen;
+        /** The body the laser stands on (null: the static world); its blocks are not cut. */
+        ServerSubLevel emitter;
     }
 
     private static final java.util.Map<Key, State> STATES = new java.util.HashMap<>();
+    private static final java.util.Map<Key, Long> LAST_RUN = new java.util.HashMap<>();
 
     /** Forgets every beam: they belong to a server that has stopped. */
     public static void clear() {
         STATES.clear();
+        LAST_RUN.clear();
     }
 
     private static void entities(ServerLevel server, Vec3 start, Vec3 end, double width, int radius) {

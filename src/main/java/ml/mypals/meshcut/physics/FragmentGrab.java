@@ -91,6 +91,7 @@ public final class FragmentGrab {
             return 2;
         }
         if (!canPull(player, sub)) return 3;
+        CutMarks.keep(sub); // held by hand: it is not to be cleared away
         float clamped = (float) Math.max(MIN_DISTANCE, Math.min(distance, reach));
         Grab grab = GRABS.get(player.getUUID());
         if (grab != null && grab.body.equals(body) && grab.level == level) {

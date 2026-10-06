@@ -91,6 +91,14 @@ public final class SlashService {
             this.grid = CellGrid.EMPTY;
         }
 
+        /** A block as its own block entity already holds it: its cells are known, not worked out again. */
+        Info(BlockPos pos, CutService.Piece piece, CellGrid grid) {
+            this.pos = pos;
+            this.piece = piece;
+            this.patches = piece.patches();
+            this.grid = grid;
+        }
+
         Info(BlockPos pos, @Nullable CutService.Piece piece, List<Patch> patches) {
             this.pos = pos;
             this.piece = piece;
@@ -171,7 +179,9 @@ public final class SlashService {
                 return null;
             }
             CutService.Piece piece = CutService.pieceAt(level, pos, mode);
-            Info info = piece == null ? new Info(pos, null, List.of()) : new Info(pos, piece, piece.patches());
+            Info info = piece == null ? new Info(pos, null, List.of())
+                    : level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.getAppearance() == piece.entity()
+                    ? new Info(pos, piece, be.grid()) : new Info(pos, piece, piece.patches());
             infos.put(pos, info);
             return info;
         }
@@ -197,6 +207,24 @@ public final class SlashService {
     public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                @Nullable net.minecraft.world.entity.Entity wielder) {
         return slashSwing(level, swipes, mode, wielder, true);
+    }
+
+    /** Whose blocks a cut leaves alone: one sub-level, or the static world (a laser must not cut what it stands on). */
+    private static final ThreadLocal<Object> PROTECTED = new ThreadLocal<>();
+    private static final Object STATIC_WORLD = new Object();
+
+    /**
+     * Like {@link #slashBlocks}, but nothing of {@code emitterBody} (the static world if null) is cut: the surface a
+     * beam sweeps starts at its emitter, and a body that moves carries the emitter through it.
+     */
+    public static CutService.Result slashBlocksOutside(ServerLevel level, List<Swipe> swipes, CapMode mode,
+                                                       @Nullable ServerSubLevel emitterBody) {
+        PROTECTED.set(emitterBody != null ? emitterBody : STATIC_WORLD);
+        try {
+            return slashBlocks(level, swipes, mode, null);
+        } finally {
+            PROTECTED.remove();
+        }
     }
 
     /** Entity contact was already handled while holding the saber; release only applies the recorded world stroke. */
@@ -258,7 +286,7 @@ public final class SlashService {
         List<ServerSubLevel> subLevels = new ArrayList<>();
         for (SubLevel s : Sable.HELPER.getAllIntersecting(level,
                 new BoundingBox3d(minX - 1, minY - 1, minZ - 1, maxX + 1, maxY + 1, maxZ + 1))) {
-            if (s instanceof ServerSubLevel ss && !ss.isRemoved() && !alreadyCutBodies.contains(ss)) {
+            if (s instanceof ServerSubLevel ss && !ss.isRemoved() && !alreadyCutBodies.contains(ss) && ss != PROTECTED.get()) {
                 subLevels.add(ss);
             }
         }
@@ -275,9 +303,10 @@ public final class SlashService {
                 quad[i] = new Vector3d(sweep.quad()[i].x, sweep.quad()[i].y, sweep.quad()[i].z);
             }
             collect(worldFragments, n, center, quad, sweep.samples(), null,
-                    cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell)));
+                    cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell))
+                            && level.isLoaded(cell) && !level.getBlockState(cell).isAir()); // empty space is not worth clipping
         }
-        int staticBlocks = process(level, null, surfacePatches(worldFragments), mode, created);
+        int staticBlocks = PROTECTED.get() == STATIC_WORLD ? 0 : process(level, null, surfacePatches(worldFragments), mode, created);
 
         int cutLevels = cutSubLevels(level, sweeps, subLevels, mode, created);
         return new CutService.Result(staticBlocks, cutLevels, created[0]);
@@ -401,16 +430,23 @@ public final class SlashService {
         }
         // which way the blade travelled across the quad
         Vector3d motion = new Vector3d(quad[3]).sub(quad[0]).add(new Vector3d(quad[2]).sub(quad[1])).mul(0.5);
+        // Keep each triangle in its own plane, including twisted blade sweeps. (The planes do not depend on the cell.)
+        int[][] triangles = {{0,1,2},{0,2,3}};
+        Vector3d[] normals = new Vector3d[2];
+        for (int t = 0; t < 2; t++) {
+            int[] triangle = triangles[t];
+            Vector3d tn = new Vector3d(quad[triangle[1]]).sub(quad[triangle[0]])
+                    .cross(new Vector3d(quad[triangle[2]]).sub(quad[triangle[0]]));
+            if (tn.lengthSquared() >= 1e-12) normals[t] = tn.normalize();
+        }
         for (BlockPos cell : candidates) {
             if (!accept.test(cell)) {
                 continue;
             }
-            // Keep each triangle in its own plane, including twisted blade sweeps.
-            for (int[] triangle : new int[][]{{0,1,2},{0,2,3}}) {
-                Vector3d tn = new Vector3d(quad[triangle[1]]).sub(quad[triangle[0]])
-                        .cross(new Vector3d(quad[triangle[2]]).sub(quad[triangle[0]]));
-                if (tn.lengthSquared() < 1e-12) continue;
-                tn.normalize();
+            for (int t = 0; t < 2; t++) {
+                int[] triangle = triangles[t];
+                Vector3d tn = normals[t];
+                if (tn == null) continue;
                 float[] polygon = new float[9];
                 for (int i=0;i<3;i++) {
                     Vector3d q=quad[triangle[i]];
@@ -420,7 +456,7 @@ public final class SlashService {
                 }
                 float[] clipped=Patch.clipToCube(polygon);
                 if (clipped.length>=9 && Patch.area(clipped)>1e-7)
-                    out.computeIfAbsent(cell.immutable(),k->new ArrayList<>()).add(new StrokeFit.Fragment(tn,motion,clipped));
+                    out.computeIfAbsent(cell.immutable(),k->new ArrayList<>()).add(new StrokeFit.Fragment(new Vector3d(tn),motion,clipped));
             }
         }
     
@@ -517,7 +553,7 @@ public final class SlashService {
                 }
                 List<Patch> before = new ArrayList<>(merged);
                 // Never convex-hull distinct surfaces or forget earlier connections.
-                if (!merged.contains(patch)) merged.add(patch);
+                if (merged.stream().noneMatch(old -> old.equals(patch) || old.covers(patch))) merged.add(patch);
                 if (!merged.equals(before)) {
                     changed = true;
                     if (nl == null) { // which way the parts are pushed apart is judged by the first cut
@@ -539,7 +575,8 @@ public final class SlashService {
                 for(List<CutPlane> hole:emptyCells) if(!holes.contains(hole)) holes.add(hole);
                 burned=grid.filledCells()<CellGrid.of(piece.planes(),piece.excluded(),List.of(),piece.cutBoxes()).filledCells();
                 CutService.Piece now=new CutService.Piece(piece.target(),planes,VoxelFragments.compact(holes),merged,piece.mode(),piece.beTag(),piece.undetachedBe(),piece.entity(),piece.glow());
-                Info info = new Info(fixed, now, merged);
+                // the cells were just worked out for exactly this: slivers are empty in it as they are in the holes
+                Info info = new Info(fixed, now, grid);
                 info.burned = burned;
                 dom.infos.put(fixed, info);
                 hits.add(info);
@@ -801,6 +838,12 @@ public final class SlashService {
      * been through many incremental updates; this makes sure the sub-level ends up with the true values.
      */
     private static void refreshMass(ServerLevel level, ServerSubLevel sub) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.refreshMass")) {
+            refreshMassUntimed(level, sub);
+        }
+    }
+
+    private static void refreshMassUntimed(ServerLevel level, ServerSubLevel sub) {
         var container = SubLevelContainer.getContainer(level);
         if (container == null) {
             return;
@@ -1086,8 +1129,10 @@ public final class SlashService {
     private static void place(ServerLevel level, Info info, List<CutPlane> planes, List<List<CutPlane>> excluded,
                               List<Patch> patches, Map<BlockPos, CompoundTag> beTags) {
         CutService.Piece piece = info.piece;
-        MimicBlock.place(level, info.pos, piece.target(), planes, excluded, patches, piece.mode(),
-                beTags.getOrDefault(info.pos, piece.beTag()), piece.entity(), piece.glow());
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.place")) {
+            MimicBlock.place(level, info.pos, piece.target(), planes, excluded, patches, piece.mode(),
+                    beTags.getOrDefault(info.pos, piece.beTag()), piece.entity(), piece.glow());
+        }
     }
 
     private SlashService() {}

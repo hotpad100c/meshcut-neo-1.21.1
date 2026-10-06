@@ -64,6 +64,9 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
     @Override
     public void render(MimicBlockEntity be, float partialTick, PoseStack poseStack, MultiBufferSource buffer,
                        int packedLight, int packedOverlay) {
+        if (be.isPending()) {
+            return; // nothing is known of it yet; not the default block
+        }
         BlockState state = be.getTargetState();
         PoseStack.Pose pose = poseStack.last();
 

@@ -60,7 +60,7 @@ public final class MimicBakedModel implements IDynamicBakedModel {
     @Nullable
     private static MimicMesh meshFor(ModelData data) {
         MimicRenderData render = data.get(MimicRenderData.PROPERTY);
-        return render == null ? null : MimicMesh.of(render);
+        return render == null ? null : MimicMesh.of(render, data.get(MimicRenderData.POS));
     }
 
     @Override

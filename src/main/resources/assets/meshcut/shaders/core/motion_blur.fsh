@@ -56,7 +56,7 @@ void main() {
             vec2 t = mix(A[i].zw, A[i + 1].zw, u) * scale;
             vec2 d = t - b;
             float age = mix(B[i].z, B[i + 1].z, u);
-            float w = smoothstep(0.0, 0.12, age) * (1.0 - age) * (1.0 - age);
+            float w = (1.0 - age) * (1.0 - age);
             weightSum += w;
             float s = clamp(dot(p - b, d) / max(dot(d, d), 1e-8), 0.0, 1.0);
             vec2 past = b + d * s;

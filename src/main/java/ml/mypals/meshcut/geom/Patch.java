@@ -110,6 +110,30 @@ public final class Patch {
         return Math.abs(dot) > 0.96 && offset < 0.12;
     }
 
+    /**
+     * Whether this cut already is the other: the same plane (to a hair), and everything of the other inside this one.
+     * A swing over a spot that was cut before makes patches that differ only in the last bits of their floats.
+     */
+    public boolean covers(Patch other) {
+        double dot = plane.nx() * other.plane.nx() + plane.ny() * other.plane.ny() + plane.nz() * other.plane.nz();
+        double offset = dot >= 0 ? Math.abs(plane.d() - other.plane.d()) : Math.abs(plane.d() + other.plane.d());
+        if (Math.abs(dot) < 0.9999 || offset > 1e-3) {
+            return false;
+        }
+        if (through) {
+            return true;
+        }
+        if (other.through) {
+            return false;
+        }
+        for (int i = 0; i < other.polygon.length; i += 3) {
+            if (!containsProjected(other.polygon[i], other.polygon[i + 1], other.polygon[i + 2], 1e-3)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** The cut made by both: the smallest convex polygon in this plane that contains both patches. */
     public Patch union(Patch other) {
         if (through || other.through) {
@@ -155,7 +179,14 @@ public final class Patch {
         return true;
     }
 
+    private double orientation; // 0 until worked out; not part of the value
+
     private double orientationSign() {
+        if (orientation != 0) return orientation;
+        return orientation = computeOrientationSign();
+    }
+
+    private double computeOrientationSign() {
         double sx = 0, sy = 0, sz = 0;
         int n = vertexCount();
         for (int i = 0; i < n; i++) {

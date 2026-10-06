@@ -119,8 +119,8 @@ public final class FragmentBudget {
                     }
                     state.byVolume.pollFirst();
                     state.byAge.remove(smallest);
-                    if (smallest.sub.isRemoved()) {
-                        continue;
+                    if (smallest.sub.isRemoved() || CutMarks.isKept(smallest.sub)) {
+                        continue; // gone, or somebody holds on to it
                     }
                     burn(level, container, smallest.sub);
                     burnt++;

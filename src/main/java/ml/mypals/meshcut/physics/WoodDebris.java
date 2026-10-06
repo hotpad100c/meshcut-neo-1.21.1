@@ -40,7 +40,7 @@ public final class WoodDebris {
     public static void tick(ServerTickEvent.Post event) {
         for (var it = BURNING.iterator(); it.hasNext();) {
             Burning entry = it.next();
-            if (entry.sub.isRemoved()) { it.remove(); continue; }
+            if (entry.sub.isRemoved() || CutMarks.isKept(entry.sub)) { it.remove(); continue; }
             long age = entry.level.getGameTime() - entry.born;
             var at = entry.sub.logicalPose().position();
             if (age % 5 == 0) {

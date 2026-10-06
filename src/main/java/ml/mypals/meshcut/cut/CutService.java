@@ -503,6 +503,7 @@ public final class CutService {
         try {
             ServerSubLevel made = SubLevelAssemblyHelper.assembleBlocks(level, blocks.getFirst(), blocks, BoundingBox3i.from(blocks));
             if(made!=null) {
+                ml.mypals.meshcut.physics.CutMarks.made(made, level.getGameTime());
                 ml.mypals.meshcut.physics.FragmentBudget.made(level, made, volume);
                 if (wooden) ml.mypals.meshcut.physics.WoodDebris.made(level, made);
                 BlockPos plotAnchor=made.getPlot().getCenterBlock();

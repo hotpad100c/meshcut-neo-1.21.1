@@ -100,6 +100,7 @@ public class MeshCut {
         ml.mypals.meshcut.physics.MimicFloating.register();
         ml.mypals.meshcut.physics.RagdollJoints.register();
         ml.mypals.meshcut.physics.Debris.register();
+        ml.mypals.meshcut.physics.CutMarks.register();
         NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent e) ->
                 MeshCutCommand.register(e.getDispatcher(), e.getBuildContext()));
         NeoForge.EVENT_BUS.addListener(MimicColliders::onServerTick);

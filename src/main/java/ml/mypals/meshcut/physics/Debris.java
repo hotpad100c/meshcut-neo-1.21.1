@@ -52,17 +52,18 @@ public final class Debris {
             if (++ticks % CHECK_EVERY != 0) {
                 return;
             }
+            long now = level.getGameTime();
+            expire(container, now);
             double maxVolume = MeshCutConfig.DEBRIS_VOLUME.get();
             if (maxVolume <= 0) {
                 since.clear();
                 return;
             }
-            long now = level.getGameTime();
             long lifetime = MeshCutConfig.DEBRIS_SECONDS.get() * 20L;
             try {
                 java.util.Set<UUID> seen = new java.util.HashSet<>();
                 for (ServerSubLevel sub : java.util.List.copyOf(((dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer) container).getAllSubLevels())) {
-                    if (sub.isRemoved() || !isDebris(sub, maxVolume)) {
+                    if (sub.isRemoved() || CutMarks.isKept(sub) || !isDebris(sub, maxVolume)) {
                         continue;
                     }
                     UUID id = sub.getUniqueId();
@@ -77,6 +78,31 @@ public final class Debris {
                 since.keySet().retainAll(seen);
             } catch (RuntimeException e) {
                 MeshCut.LOGGER.error("Clearing away the small pieces of cuts failed", e);
+            }
+        }
+
+        /**
+         * Every piece a cut made goes after a while, unless somebody has held or clicked it. Sable draws a sub-level at
+         * the size it was made at (the scale of a pose is not sent to clients), so it cannot be seen to shrink: it poofs.
+         */
+        private void expire(SubLevelContainer container, long now) {
+            long lifetime = MeshCutConfig.PIECE_EXPIRE_MINUTES.get() * 1200L;
+            if (lifetime <= 0) {
+                return;
+            }
+            try {
+                for (ServerSubLevel sub : java.util.List.copyOf(((dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer) container).getAllSubLevels())) {
+                    long born = CutMarks.bornAt(sub);
+                    if (sub.isRemoved() || born < 0 || CutMarks.isKept(sub) || now - born < lifetime) {
+                        continue;
+                    }
+                    Vector3dc at = sub.logicalPose().position();
+                    level.sendParticles(ParticleTypes.POOF, at.x(), at.y(), at.z(), 6, 0.25, 0.25, 0.25, 0.01);
+                    container.removeSubLevel(sub, SubLevelRemovalReason.REMOVED);
+                    since.remove(sub.getUniqueId());
+                }
+            } catch (RuntimeException e) {
+                MeshCut.LOGGER.error("Clearing away the old pieces of cuts failed", e);
             }
         }
 

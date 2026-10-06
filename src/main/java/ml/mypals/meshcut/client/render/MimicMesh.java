@@ -33,7 +33,7 @@ public final class MimicMesh {
     private static final int MAX_CACHED = 4096;
     private static final double SLIT_WIDTH = 0.08;
 
-    private static final Cache<MimicRenderData, MimicMesh> CACHE = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
+    private static final Cache<MimicRenderData.Geometry, MimicMesh> CACHE = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
     private static final Cache<MimicRenderData, List<MeshPoly>> GLOW = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
     private static final Object CACHE_LOCK = new Object();
     private static volatile long generation;
@@ -45,13 +45,13 @@ public final class MimicMesh {
     private static final Cache<MimicRenderData, SmoothFragments> FRAGMENTS = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(512).build();
     private static final java.util.concurrent.ExecutorService WORKERS = java.util.concurrent.Executors.newFixedThreadPool(
-            Math.clamp(Runtime.getRuntime().availableProcessors() / 4, 1, 3), task -> {
+            Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 2, 6), task -> {
                 Thread thread = new Thread(task, "meshcut-mesh");
                 thread.setDaemon(true);
                 thread.setPriority(Thread.MIN_PRIORITY + 1);
                 return thread;
             });
-    private static final Map<MimicRenderData, Boolean> BUILDING = new ConcurrentHashMap<>();
+    private static final Map<MimicRenderData.Geometry, Boolean> BUILDING = new ConcurrentHashMap<>();
     private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
@@ -187,27 +187,16 @@ public final class MimicMesh {
         if (mesh != null) {
             return mesh;
         }
-        mesh = CACHE.getIfPresent(data);
+        mesh = CACHE.getIfPresent(data.geometry());
         if (mesh == null && onRenderThread()) {
-            if (BUILDING.putIfAbsent(data, Boolean.TRUE) == null) {
-                async(() -> {
-                    try {
-                        MimicMesh built = build(data);
-                        synchronized (CACHE_LOCK) {
-                            if (epoch == generation) CACHE.put(data, built);
-                        }
-                    } finally {
-                        BUILDING.remove(data);
-                    }
-                });
-            }
+            schedule(data, null);
             return EMPTY; // not cached: the next frame asks again
         }
         if (mesh == null) {
             mesh = build(data);
             synchronized (CACHE_LOCK) {
                 if (epoch != generation) return EMPTY;
-                CACHE.put(data, mesh);
+                CACHE.put(data.geometry(), mesh);
             }
         }
         synchronized (CACHE_LOCK) {
@@ -217,12 +206,97 @@ public final class MimicMesh {
         return mesh;
     }
 
+    /** What each block was last drawn as, so a block being re-cut keeps its look until the new mesh is ready. */
+    private static final Map<Long, MimicMesh> LAST = new ConcurrentHashMap<>();
+    /** The blocks waiting for a mesh that is being built. */
+    private static final Map<MimicRenderData.Geometry, java.util.Set<Long>> WAITING = new ConcurrentHashMap<>();
+
+    /**
+     * The mesh of a block in the chunk. Chunk builder threads must not be held up by cutting a model (it takes long, and
+     * every builder thread would be busy with it): if the mesh is not at hand it is built on a mesh worker, and the block
+     * shows what it showed before until the section is rebuilt with the new one.
+     */
+    public static MimicMesh of(MimicRenderData data, @Nullable net.minecraft.core.BlockPos pos) {
+        if (pos == null) {
+            return of(data);
+        }
+        long epoch = generation;
+        MimicMesh mesh = BY_IDENTITY.getIfPresent(data);
+        if (mesh == null) {
+            mesh = CACHE.getIfPresent(data.geometry());
+            if (mesh == null) {
+                MimicMesh before = LAST.get(pos.asLong());
+                if (before != null || onRenderThread()) {
+                    // A block that is being cut again keeps showing what it showed until the new mesh is ready.
+                    schedule(data, pos);
+                    mesh = CACHE.getIfPresent(data.geometry()); // finished meanwhile: nobody would tell this block
+                    if (mesh == null) {
+                        return before != null ? before : EMPTY;
+                    }
+                } else {
+                    // A block with nothing to show yet is built right here: it would be missing until something else
+                    // rebuilt its section, and a first mesh is cheap beside a re-cut one.
+                    mesh = build(data);
+                    synchronized (CACHE_LOCK) {
+                        if (epoch != generation) return EMPTY;
+                        CACHE.put(data.geometry(), mesh);
+                    }
+                }
+            }
+            synchronized (CACHE_LOCK) {
+                if (epoch != generation) return EMPTY;
+                BY_IDENTITY.put(data, mesh);
+            }
+        }
+        if (LAST.size() > 8192) LAST.clear();
+        LAST.put(pos.asLong(), mesh);
+        return mesh;
+    }
+
+    private static void schedule(MimicRenderData data, @Nullable net.minecraft.core.BlockPos pos) {
+        if (pos != null) {
+            WAITING.computeIfAbsent(data.geometry(), k -> ConcurrentHashMap.newKeySet()).add(pos.asLong());
+        }
+        if (BUILDING.putIfAbsent(data.geometry(), Boolean.TRUE) != null) {
+            return;
+        }
+        long epoch = generation;
+        async(() -> {
+            try {
+                MimicMesh built = build(data);
+                synchronized (CACHE_LOCK) {
+                    if (epoch == generation) CACHE.put(data.geometry(), built);
+                }
+            } finally {
+                BUILDING.remove(data.geometry());
+                java.util.Set<Long> waiting = WAITING.remove(data.geometry());
+                if (waiting != null && !waiting.isEmpty()) {
+                    Minecraft.getInstance().execute(() -> redraw(waiting));
+                }
+            }
+        });
+    }
+
+    /** Has the sections of these blocks rebuilt, now that their meshes are there. */
+    private static void redraw(java.util.Set<Long> positions) {
+        var level = Minecraft.getInstance().level;
+        if (level == null) return;
+        for (long packed : positions) {
+            var pos = net.minecraft.core.BlockPos.of(packed);
+            var state = level.getBlockState(pos);
+            if (state.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock) {
+                level.sendBlockUpdated(pos, state, state, 0);
+            }
+        }
+    }
+
     public static void clearCache() {
         synchronized (CACHE_LOCK) {
             generation++;
             CACHE.invalidateAll();
             GLOW.invalidateAll();
             BY_IDENTITY.invalidateAll();
+            LAST.clear();
             GLOW_BY_IDENTITY.invalidateAll();
             FRAGMENTS.invalidateAll();
             SmoothFragments.clearCellCache();
@@ -343,6 +417,19 @@ public final class MimicMesh {
     }
 
     private static MimicMesh build(MimicRenderData data) {
+        long began = System.nanoTime();
+        MimicMesh mesh = buildMesh(data);
+        long ms = (System.nanoTime() - began) / 1_000_000;
+        if (ms >= 10 && ml.mypals.meshcut.MeshCutSettings.diagnostics()) {
+            int quads = 0;
+            for (List<BakedQuad> side : mesh.merged) quads += side.size();
+            ml.mypals.meshcut.MeshCut.LOGGER.info("[meshcut diag] built a block mesh in {} ms: {} excluded regions ({} planes), {} patches, {} quads",
+                    ms, data.excluded().size(), data.excluded().stream().mapToInt(List::size).sum(), data.patches().size(), quads);
+        }
+        return mesh;
+    }
+
+    private static MimicMesh buildMesh(MimicRenderData data) {
         if (data.entity() != null) {
             return EMPTY; // drawn by the block entity renderer: entity textures are not in the block atlas
         }
@@ -353,6 +440,8 @@ public final class MimicMesh {
 
         Map<RenderType, List<MeshPoly>> clipped = cutModel(model.byChunkType(), model.opaque(), model.particleUv(),
                 model.particle(), data, RenderType.cutout());
+        // the cuts leave a surface in thousands of small pieces: one polygon again where they fit together
+        clipped.replaceAll((type, polys) -> PolyMerge.merge(polys));
 
         Map<RenderType, List<BakedQuad>[]> byLayer = new LinkedHashMap<>();
         clipped.forEach((type, polys) -> {

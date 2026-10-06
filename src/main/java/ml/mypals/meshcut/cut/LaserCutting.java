@@ -8,6 +8,7 @@ import ml.mypals.meshcut.block.MimicBlock;
 import ml.mypals.meshcut.block.MimicBlockEntity;
 import ml.mypals.meshcut.block.MimicShapes;
 import ml.mypals.meshcut.geom.CellGrid;
+import ml.mypals.meshcut.geom.HoleReducer;
 import ml.mypals.meshcut.geom.PolygonCapsule;
 import ml.mypals.meshcut.geom.Polytope;
 import ml.mypals.meshcut.physics.RagdollJoints;
@@ -33,6 +34,12 @@ public final class LaserCutting {
         for(var body:subs) vaporize(level,body,a,b,radius);
     }
     public static void vaporize(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, int radius) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.begin()) {
+            vaporizeBlocks(level, sub, worldA, worldB, radius);
+        }
+    }
+
+    private static void vaporizeBlocks(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, int radius) {
         Vector3d a = new Vector3d(worldA.x,worldA.y,worldA.z), b = new Vector3d(worldB.x,worldB.y,worldB.z);
         if (sub != null) {
             if (sub.isRemoved()) return;
@@ -56,8 +63,10 @@ public final class LaserCutting {
         for(int x=minX;x<=maxX;x++) for(int y=minY;y<=maxY;y++) for(int z=minZ;z<=maxZ;z++) {
             var pos=new BlockPos(x,y,z);
             if(!level.hasChunkAt(pos) || Sable.HELPER.getContaining(level,pos)!=sub) continue;
-            var local=PolygonCapsule.local(capsule,x,y,z);
-            if(Polytope.volume(local)>1e-8 && CutService.pieceAt(level,pos,CapMode.LAVA)!=null) affected.add(pos);
+            // The capsule's polygon circumscribes the true one by at most 1/cos(15 degrees); the cube sticks out half its diagonal.
+            double near=r*1.04+0.8661;
+            if(distanceSquared(a,b,x+0.5,y+0.5,z+0.5)>near*near) continue;
+            if(CutService.pieceAt(level,pos,CapMode.LAVA)!=null) affected.add(pos);
         }
         if(affected.isEmpty()) return;
         if(sub instanceof ServerSubLevel server) RagdollJoints.noteSplit(level,server,null);
@@ -74,8 +83,16 @@ public final class LaserCutting {
     }
 
     private static boolean vaporizeBlock(ServerLevel level, BlockPos pos, List<CutPlane> hole) {
+        // Only what the block can see of the hole is kept: a few planes of its 62.
+        var reduced=HoleReducer.reduce(hole);
+        if(reduced==null) return false;
+        hole=reduced.planes();
         var piece=CutService.pieceAt(level,pos,CapMode.LAVA);
         if(piece==null) return false;
+        for(var old:piece.excluded()) {
+            // already burnt away, or burnt away by something bigger
+            if(CutPlane.sameRegion(old,hole) || HoleReducer.contains(old,reduced.vertices())) return false;
+        }
         var shape=level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.cutBoxes() : MimicShapes.cutBoxes(piece.target());
         boolean intersects=false;
         for(var box:shape) {
@@ -86,7 +103,6 @@ public final class LaserCutting {
         }
         if(!intersects) return false;
         var holes=new ArrayList<>(piece.excluded());
-        if(holes.stream().anyMatch(old->CutPlane.sameRegion(old,hole))) return false;
         holes.add(hole);
         // Cells still determine support; the region cutting the visible triangles stays polygonal.
         var grid=CellGrid.of(piece.planes(),holes,piece.patches(),shape);
@@ -97,10 +113,19 @@ public final class LaserCutting {
             boolean glow=MimicBlock.glowingCuts();
             MimicBlock.setGlowingCuts(true);
             try {
+                MimicBlockEntity.presetGrid(grid);
                 MimicBlock.place(level,pos,piece.target(),piece.planes(),holes,piece.patches(),piece.mode(),piece.beTag(),piece.entity(),piece.glow());
-            } finally { MimicBlock.setGlowingCuts(glow); }
+            } finally { MimicBlockEntity.presetGrid(null); MimicBlock.setGlowingCuts(glow); }
         }
         return true;
+    }
+    /** Squared distance from a point to the segment a-b. */
+    private static double distanceSquared(Vector3d a, Vector3d b, double x, double y, double z) {
+        double dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
+        double length=dx*dx+dy*dy+dz*dz;
+        double t=length<1e-12 ? 0 : Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy+(z-a.z)*dz)/length));
+        double px=a.x+dx*t-x, py=a.y+dy*t-y, pz=a.z+dz*t-z;
+        return px*px+py*py+pz*pz;
     }
     private LaserCutting() {}
 }

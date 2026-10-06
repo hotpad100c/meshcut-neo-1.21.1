@@ -6,6 +6,7 @@ import ml.mypals.meshcut.cut.CutPlane;
 import ml.mypals.meshcut.cut.graph.BlockNodes;
 import ml.mypals.meshcut.cut.graph.WorldGraphs;
 import ml.mypals.meshcut.geom.CellGrid;
+import ml.mypals.meshcut.geom.HoleReducer;
 import ml.mypals.meshcut.geom.Patch;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -40,6 +41,29 @@ public class MimicBlockEntity extends BlockEntity {
     public static final long NEVER = Long.MIN_VALUE;
 
     private BlockState targetState = Blocks.STONE.defaultBlockState();
+    /**
+     * Whether this block entity has been given its data. A client creates one the moment the block update arrives and
+     * is only told what it holds by the next packet, with chunk meshing running in between: until then it must not
+     * show the default (stone).
+     */
+    private boolean configured;
+    /** On a client: the block a mimic replaced, by position, so it looks as before until its data arrives. */
+    private static final java.util.Map<Long, BlockState> REPLACED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static void rememberReplaced(BlockPos pos, BlockState old) {
+        if (REPLACED.size() > 4096) REPLACED.clear();
+        REPLACED.put(pos.asLong(), old);
+    }
+
+    @Nullable
+    private BlockState replaced() {
+        return configured ? null : REPLACED.get(worldPosition.asLong());
+    }
+
+    /** Nothing is known of what to draw yet (a client waiting for data): draw nothing rather than the default. */
+    public boolean isPending() {
+        return !configured && replaced() == null;
+    }
     /** Cuts that have really separated this piece from the rest of its block: they shape its collision and mass. */
     /** Guards the three lists below: meshing threads read them while the main thread rewrites them. */
     private final Object cutLock = new Object();
@@ -97,7 +121,8 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     public BlockState getTargetState() {
-        return targetState;
+        BlockState replaced = replaced();
+        return replaced != null ? replaced : targetState;
     }
 
     public List<CutPlane> getPlanes() {
@@ -261,16 +286,21 @@ public class MimicBlockEntity extends BlockEntity {
         List<CutPlane> after = allCuts(newPlanes, newExcluded, newPatches.stream().map(Patch::plane).toList());
         if (MimicBlock.glowingCuts()) {
             List<CutPlane> fresh = new ArrayList<>();
+            PlaneSet known = new PlaneSet(before);
             for (CutPlane p : after) {
-                if (before.stream().noneMatch(p::sameAs)) {
+                if (!known.has(p)) {
                     fresh.add(p);
                 }
             }
             if (!fresh.isEmpty()) {
                 long now = level == null ? NEVER : level.getGameTime();
                 if (glowStart != NEVER && now != NEVER && now - glowStart < GLOW_TICKS) {
+                    PlaneSet glowing = new PlaneSet(glowCuts);
                     for (CutPlane p : fresh) {
-                        if (glowCuts.stream().noneMatch(p::sameAs)) glowCuts.add(p);
+                        if (!glowing.has(p)) {
+                            glowCuts.add(p);
+                            glowing.add(p);
+                        }
                     }
                 } else {
                     glowCuts.clear();
@@ -281,11 +311,11 @@ public class MimicBlockEntity extends BlockEntity {
         }
         this.appearance = entity;
         this.targetState = target;
+        this.configured = true;
         this.targetBeTag = beTag;
         // the arguments may be views of our own lists
         List<CutPlane> planesCopy = List.copyOf(newPlanes);
-        List<List<CutPlane>> excludedCopy = new ArrayList<>();
-        newExcluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
+        List<List<CutPlane>> excludedCopy = reducedRegions(newExcluded);
         List<Patch> patchesCopy = List.copyOf(newPatches);
         synchronized (cutLock) {
             this.planes.clear();
@@ -297,6 +327,55 @@ public class MimicBlockEntity extends BlockEntity {
         }
         this.capMode = mode;
         changed();
+    }
+
+    /** Saves from before regions were cut down hold the capsule's 62 planes. */
+    private static final int LEGACY_REGION_PLANES = 40;
+
+    /** Planes found again in about constant time (what {@code noneMatch(p::sameAs)} over a list does in a loop). */
+    private static final class PlaneSet {
+        private final java.util.Map<Long, List<CutPlane>> buckets = new java.util.HashMap<>();
+
+        PlaneSet(List<CutPlane> planes) {
+            planes.forEach(this::add);
+        }
+
+        private static long key(CutPlane p) {
+            // facing either way is the same plane: take the normal whose first non-zero part is positive
+            double s = p.nx() > 1e-6 || p.nx() > -1e-6 && (p.ny() > 1e-6 || p.ny() > -1e-6 && p.nz() >= 0) ? 1 : -1;
+            long x = Math.round(s * p.nx() * 100), y = Math.round(s * p.ny() * 100), z = Math.round(s * p.nz() * 100);
+            return (x + 128) | (y + 128) << 8 | (z + 128) << 16;
+        }
+
+        void add(CutPlane p) {
+            buckets.computeIfAbsent(key(p), k -> new ArrayList<>(2)).add(p);
+        }
+
+        boolean has(CutPlane p) {
+            List<CutPlane> bucket = buckets.get(key(p));
+            if (bucket != null) {
+                for (CutPlane q : bucket) {
+                    if (p.sameAs(q)) return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /** Copies the regions, each cut down to the planes that matter inside this block (see {@link HoleReducer}). */
+    private static List<List<CutPlane>> reducedRegions(List<List<CutPlane>> regions) {
+        List<List<CutPlane>> out = new ArrayList<>(regions.size());
+        for (List<CutPlane> region : regions) {
+            if (region.size() <= 12) {
+                out.add(List.copyOf(region)); // a lattice box or a burn prism: already as small as it gets
+                continue;
+            }
+            var reduced = HoleReducer.reduce(region);
+            if (reduced != null) {
+                out.add(List.copyOf(reduced.planes()));
+            }
+        }
+        return out;
     }
 
     private static List<CutPlane> allCuts(List<CutPlane> planes, List<List<CutPlane>> excluded, List<CutPlane> patches) {
@@ -312,6 +391,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     public void setTargetState(BlockState targetState) {
         this.targetState = targetState;
+        this.configured = true;
         changed();
     }
 
@@ -329,7 +409,8 @@ public class MimicBlockEntity extends BlockEntity {
             synchronized (cutLock) {
                 List<List<CutPlane>> excludedCopy = new ArrayList<>();
                 excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
-                data = new MimicRenderData(targetState, targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
+                BlockState replaced = replaced();
+                data = new MimicRenderData(replaced != null ? replaced : targetState, replaced != null ? null : targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
                         List.copyOf(patches), capMode, appearance, List.copyOf(glowCuts));
             }
             renderData = data;
@@ -339,7 +420,7 @@ public class MimicBlockEntity extends BlockEntity {
 
     @Override
     public ModelData getModelData() {
-        return ModelData.builder().with(MimicRenderData.PROPERTY, renderData()).build();
+        return isPending() ? ModelData.EMPTY : ModelData.builder().with(MimicRenderData.PROPERTY, renderData()).with(MimicRenderData.POS, worldPosition.immutable()).build();
     }
 
     @Override
@@ -365,9 +446,24 @@ public class MimicBlockEntity extends BlockEntity {
         }
     }
 
+    /** A grid the caller has just worked out for exactly what it is about to configure: not worked out twice. */
+    private static final ThreadLocal<CellGrid> PRESET_GRID = new ThreadLocal<>();
+
+    public static void presetGrid(@Nullable CellGrid grid) {
+        if (grid == null) PRESET_GRID.remove();
+        else PRESET_GRID.set(grid);
+    }
+
     private void changed() {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("MimicBlockEntity.changed")) {
+            changedUntimed();
+        }
+    }
+
+    private void changedUntimed() {
         renderData = null;
-        grid = null;
+        grid = PRESET_GRID.get();
+        PRESET_GRID.remove();
         version++;
         setChanged();
         if (level != null) {
@@ -482,6 +578,8 @@ public class MimicBlockEntity extends BlockEntity {
         super.loadAdditional(tag, registries);
         if (tag.contains("target")) {
             targetState = NbtUtils.readBlockState(registries.lookupOrThrow(Registries.BLOCK), tag.getCompound("target"));
+            configured = true;
+            REPLACED.remove(worldPosition.asLong());
         }
         synchronized (cutLock) {
             readPlanes(tag.getList("planes", Tag.TAG_DOUBLE), planes);
@@ -489,7 +587,8 @@ public class MimicBlockEntity extends BlockEntity {
             for (Tag region : tag.getList("excluded", Tag.TAG_LIST)) {
                 List<CutPlane> regionPlanes = new ArrayList<>();
                 readPlanes((ListTag) region, regionPlanes);
-                excluded.add(regionPlanes);
+                excluded.add(regionPlanes.size() > LEGACY_REGION_PLANES ? reducedRegions(List.of(regionPlanes)).stream().findFirst().orElse(null) : regionPlanes);
+                if (excluded.get(excluded.size() - 1) == null) excluded.remove(excluded.size() - 1);
             }
             patches.clear();
             for (Tag t : tag.getList("patches", Tag.TAG_COMPOUND)) {

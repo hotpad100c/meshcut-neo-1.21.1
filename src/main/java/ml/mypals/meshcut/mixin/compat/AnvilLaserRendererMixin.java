@@ -1,22 +1,25 @@
 package ml.mypals.meshcut.mixin.compat;
 
-import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
-import com.llamalad7.mixinextras.sugar.Local;
-import dev.ryanhcode.sable.Sable;
-import ml.mypals.meshcut.cut.AnvilLaserSync;
-import net.minecraft.world.level.block.entity.BlockEntity;
+import com.mojang.blaze3d.vertex.PoseStack;
+import dev.dubhe.anvilcraft.block.entity.BaseLaserBlockEntity;
+import ml.mypals.meshcut.client.AnvilLaserDraw;
+import net.minecraft.client.renderer.MultiBufferSource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+/**
+ * A laser on a sub-level is drawn by {@link AnvilLaserDraw} (with the pose of the body, whatever renderer pipeline is in
+ * use), so AnvilCraft's own block entity renderer leaves it alone: it would draw it a second time, or not at all.
+ */
 @Pseudo
 @Mixin(targets = "dev.dubhe.anvilcraft.client.renderer.blockentity.LaserBlockRenderer", remap = false)
 public abstract class AnvilLaserRendererMixin {
-    @ModifyExpressionValue(require = 0, method = "render*", at = @At(value = "INVOKE",
-            target = "Ldev/dubhe/anvilcraft/client/renderer/RenderState;isEnhancedRenderingAvailable()Z"))
-    private boolean meshcut$drawOnSubLevel(boolean enhanced, @Local(argsOnly = true) BlockEntity be) {
-        boolean onSub = be.getLevel() != null && Sable.HELPER.getContaining(be.getLevel(), be.getBlockPos()) != null;
-        if (onSub) AnvilLaserSync.debugRender(be, enhanced);
-        return enhanced && !onSub;
+    @Inject(require = 0, method = "render", at = @At("HEAD"), cancellable = true)
+    private void meshcut$leaveSubLevelLasers(BaseLaserBlockEntity be, float partialTick, PoseStack poseStack,
+                                             MultiBufferSource buffer, int packedLight, int packedOverlay, CallbackInfo ci) {
+        if (AnvilLaserDraw.onSubLevel(be)) ci.cancel();
     }
 }

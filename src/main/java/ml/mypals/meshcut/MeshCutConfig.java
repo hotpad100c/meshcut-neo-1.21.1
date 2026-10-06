@@ -6,6 +6,7 @@ public final class MeshCutConfig {
     public static final ModConfigSpec SPEC;
     public static final ModConfigSpec.DoubleValue DEBRIS_VOLUME;
     public static final ModConfigSpec.IntValue DEBRIS_SECONDS;
+    public static final ModConfigSpec.IntValue PIECE_EXPIRE_MINUTES;
     public static final ModConfigSpec.IntValue SURGE_PIECES;
     public static final ModConfigSpec.IntValue SURGE_SECONDS;
     public static final ModConfigSpec.DoubleValue SURGE_MAX_VOLUME;
@@ -19,46 +20,64 @@ public final class MeshCutConfig {
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
-        builder.push("physics");
+        builder.translation("meshcut.config.physics").push("physics");
         MAX_ENTRIES = builder.comment("Number of unique precise mimic collider entries before coarse collision is used. Restart the game to rebuild existing colliders.")
+                .translation("meshcut.config.physics.maxEntries")
                 .worldRestart().defineInRange("maxEntries", 64, 0, 65536);
-        builder.pop().push("cutting");
+        builder.pop().translation("meshcut.config.cutting").push("cutting");
         REGION_ALL_ORDERS = builder.comment("Try all six greedy region merging orders. More CPU work; normally leave disabled.")
+                .translation("meshcut.config.cutting.tryAllRegionOrders")
                 .define("tryAllRegionOrders", false);
         SETTLEMENT_TICKS = builder.comment("Ticks between automatic lightsaber cut settlements (20 ticks = one second).")
+                .translation("meshcut.config.cutting.settlementTicks")
                 .defineInRange("settlementTicks", 40, 1, 1200);
-        builder.pop().push("diagnostics");
+        builder.pop().translation("meshcut.config.diagnostics").push("diagnostics");
         DIAGNOSTICS = builder.comment("Enable detailed physics and cut timing logs.")
+                .translation("meshcut.config.diagnostics.enabled")
                 .define("enabled", false);
         builder.pop();
-        builder.push("debris");
+        builder.translation("meshcut.config.debris").push("debris");
         DEBRIS_VOLUME = builder
                 .comment("A piece cut off with less material than this, in blocks, disappears after a while (0 keeps all).")
+                .translation("meshcut.config.debris.maxVolume")
                 .defineInRange("maxVolume", 0.5, 0.0, 64.0);
         DEBRIS_SECONDS = builder
                 .comment("How long such a piece lasts, in seconds.")
+                .translation("meshcut.config.debris.lifetimeSeconds")
                 .defineInRange("lifetimeSeconds", 30, 1, 3600);
+        PIECE_EXPIRE_MINUTES = builder
+                .comment("Every sub-level a cut makes poofs away this many minutes after it was made (0 keeps them).",
+                        "A piece that somebody has held by hand or clicked is never cleared away, by this or by the other",
+                        "settings here and under surge and woodBurning.")
+                .translation("meshcut.config.debris.expireMinutes")
+                .defineInRange("expireMinutes", 5, 0, 10080);
         builder.pop();
-        builder.push("surge");
+        builder.translation("meshcut.config.surge").push("surge");
         SURGE_PIECES = builder
                 .comment("When more pieces than this are made within the window, the smallest are burnt up (0 keeps all).")
+                .translation("meshcut.config.surge.maxPieces")
                 .defineInRange("maxPieces", 20, 0, 100000);
         SURGE_SECONDS = builder
                 .comment("The window, in seconds, in which the pieces are counted.")
+                .translation("meshcut.config.surge.windowSeconds")
                 .defineInRange("windowSeconds", 5, 1, 600);
         SURGE_MAX_VOLUME = builder
                 .comment("A piece with at least this much material, in blocks, is never burnt up.")
+                .translation("meshcut.config.surge.maxVolume")
                 .defineInRange("maxVolume", 8.0, 0.0, 4096.0);
         builder.pop();
-        builder.push("woodBurning");
+        builder.translation("meshcut.config.woodBurning").push("woodBurning");
         WOOD_VOLUME = builder.comment("Detached all-wood cut fragments up to this volume burn away; 0 disables.")
+                .translation("meshcut.config.woodBurning.maxVolume")
                 .defineInRange("maxVolume", 8.0, 0.0, 4096.0);
         WOOD_SECONDS = builder.comment("Seconds of sparks and smoke before a wooden fragment disappears.")
+                .translation("meshcut.config.woodBurning.seconds")
                 .defineInRange("seconds", 3, 1, 600);
         builder.pop();
-        builder.push("grab");
+        builder.translation("meshcut.config.grab").push("grab");
         GRAB_MAX_FORCE = builder
                 .comment("The most force a player holding a cut piece by hand can pull it with (as Create Aeronautics' handles).")
+                .translation("meshcut.config.grab.maxForce")
                 .defineInRange("maxForce", 120.0, 0.0, 1.0E6);
         builder.pop();
         SPEC = builder.build();

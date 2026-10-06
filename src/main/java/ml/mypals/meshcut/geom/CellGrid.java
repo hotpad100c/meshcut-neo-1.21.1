@@ -148,6 +148,12 @@ public final class CellGrid {
      *              that can be cut, not a whole block of it.
      */
     public static CellGrid of(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches, List<double[]> shape) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.phase("CellGrid.of")) {
+            return build(real, excluded, patches, shape);
+        }
+    }
+
+    private static CellGrid build(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches, List<double[]> shape) {
         if (isWhole(shape)) {
             shape = null;
         }

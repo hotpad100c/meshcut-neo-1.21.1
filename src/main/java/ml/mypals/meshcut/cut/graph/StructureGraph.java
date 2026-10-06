@@ -171,9 +171,9 @@ public final class StructureGraph {
      * @return one closure per set of pieces that are joined; pieces whose block is absent are left out
      */
     public List<Closure> closures(Iterable<NodeRef> seeds, Map<Long, BlockNodes> overlay) {
-        boolean hypothetical = overlay != null && !overlay.isEmpty();
+        boolean hypothetical = false;
         Map<Long, SectionIndex> views = new HashMap<>();
-        if (hypothetical) {
+        if (overlay != null && !overlay.isEmpty()) {
             Map<Long, int[]> origin = new HashMap<>();
             Map<Long, Map<Integer, BlockNodes>> bySection = new HashMap<>();
             overlay.forEach((p, nodes) -> {
@@ -182,13 +182,23 @@ public final class StructureGraph {
                 origin.putIfAbsent(k, new int[]{x >> 4, y >> 4, z >> 4});
                 bySection.computeIfAbsent(k, kk -> new HashMap<>()).put(SectionIndex.cell(x & 15, y & 15, z & 15), nodes);
             });
-            bySection.forEach((k, cells) -> {
-                int[] at = origin.get(k);
+            for (var entry : bySection.entrySet()) {
+                int[] at = origin.get(entry.getKey());
                 SectionIndex base = section(at[0], at[1], at[2]);
-                if (base != null) {
-                    views.put(k, base.overlaid(cells));
+                if (base == null) {
+                    continue;
                 }
-            });
+                // A block that is already as the overlay says changes nothing: the section as it is can be searched,
+                // without rebuilding a copy of it, and what is found is as good as any other search.
+                entry.getValue().entrySet().removeIf(e -> {
+                    BlockNodes now = base.blockAt(e.getKey());
+                    return now != null && e.getValue().sameAs(now);
+                });
+                if (!entry.getValue().isEmpty()) {
+                    views.put(entry.getKey(), base.overlaid(entry.getValue()));
+                    hypothetical = true;
+                }
+            }
         }
 
         List<Closure> out = new ArrayList<>();
@@ -234,6 +244,7 @@ public final class StructureGraph {
         visited.add(start);
         queue.add(start);
         boolean attached = false;
+        boolean unloaded = false;
         int blocks = 0;
         search:
         while (!queue.isEmpty()) {
@@ -253,6 +264,7 @@ public final class StructureGraph {
                 SectionIndex other = view(views, nx >> 4, ny >> 4, nz >> 4);
                 if (other == null) {
                     attached = true; // not loaded: could be anything
+                    unloaded = true;
                     break search;
                 }
                 looked.add(other);
@@ -274,7 +286,7 @@ public final class StructureGraph {
             assigned.put(g, closure);
         }
         if (!hypothetical) {
-            remember(closure, looked);
+            remember(closure, looked, unloaded);
         }
         return closure;
     }
@@ -292,9 +304,10 @@ public final class StructureGraph {
 
     // ---------------------------------------------------------------- what a search found, kept with the groups
 
-    private void remember(Closure closure, Set<SectionIndex> looked) {
+    private void remember(Closure closure, Set<SectionIndex> looked, boolean unloaded) {
         SectionIndex.Island info = new SectionIndex.Island();
         info.attached = closure.attached;
+        info.unloaded = unloaded;
         info.epoch = epoch;
         // every section the search looked at counts, the neighbours too: a block placed next to the island
         // changes what it is joined to
@@ -315,16 +328,15 @@ public final class StructureGraph {
         if (info == null) {
             return null;
         }
-        if (info.attached) {
-            if (info.epoch != epoch) {
-                return null; // something changed somewhere: it may no longer be too big to follow
-            }
-        } else {
-            for (int i = 0; i < info.sections.length; i++) {
-                SectionIndex s = info.sections[i];
-                if (s.version() != info.versions[i] || cache.get(key(s.sx, s.sy, s.sz)) != s) {
-                    return null;
-                }
+        if (info.unloaded && info.epoch != epoch) {
+            return null; // it stopped at a chunk that was not there: anything may have been loaded since
+        }
+        // Too big to follow, or an island: either way the search ran through these sections only, and finds the same
+        // again while none of them has changed.
+        for (int i = 0; i < info.sections.length; i++) {
+            SectionIndex s = info.sections[i];
+            if (s.version() != info.versions[i] || cache.get(key(s.sx, s.sy, s.sz)) != s) {
+                return null;
             }
         }
         List<SectionIndex.Group> members = new ArrayList<>(List.of(info.members));

@@ -69,6 +69,8 @@ public final class SectionIndex {
     /** Whether a group is cut off from everything but itself, found by a search that crossed sections. */
     static final class Island {
         boolean attached;
+        /** The search gave up at a section that was not loaded (rather than at the size it was willing to follow). */
+        boolean unloaded;
         long epoch;
         SectionIndex[] sections;
         int[] versions;

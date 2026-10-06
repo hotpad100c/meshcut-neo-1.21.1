@@ -20,6 +20,17 @@ public abstract class LevelChunkMixin {
     @Final
     private Level level;
 
+    /** A client is told of a mimic before it is told what the mimic holds: remember what it replaces meanwhile. */
+    @Inject(method = "setBlockState", at = @At("HEAD"))
+    private void meshcut$replaced(BlockPos pos, BlockState state, boolean isMoving, CallbackInfoReturnable<BlockState> cir) {
+        if (level.isClientSide && state.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock) {
+            BlockState old = ((LevelChunk) (Object) this).getBlockState(pos);
+            if (!old.isAir() && !(old.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock)) {
+                ml.mypals.meshcut.block.MimicBlockEntity.rememberReplaced(pos, old);
+            }
+        }
+    }
+
     @Inject(method = "setBlockState", at = @At("RETURN"))
     private void meshcut$blockChanged(BlockPos pos, BlockState state, boolean isMoving, CallbackInfoReturnable<BlockState> cir) {
         BlockState old = cir.getReturnValue();

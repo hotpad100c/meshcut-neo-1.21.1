@@ -32,6 +32,7 @@ final class LightsaberSurfaces {
         var state = level.getBlockState(pos);
         if (state.isAir()) return List.of();
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity mimic) {
+            if (mimic.isPending()) return List.of();
             var data = mimic.renderData();
             List<MeshPoly> cached = CUT_MODELS.get(data);
             if (cached != null) return cached;

@@ -16,12 +16,14 @@
     "SubLevelPhysicsSystemMixin",
     "VoxelNeighborhoodStateMixin",
     "compat.AnvilLaserBlockEntityMixin",
-    "compat.AnvilLaserSyncMixin"
+    "compat.AnvilLaserSyncMixin",
+    "compat.AnvilLaserPassMixin"
   ],
   "client": [
     "compat.FlywheelVisualizationMixin",
     "compat.AnvilLaserPipelineMixin",
     "compat.AnvilLaserRendererMixin",
+    "compat.AnvilLaserTrackMixin",
     "compat.CitadelModelBoxMixin",
     "compat.GeckoRenderUtilsMixin",
     "compat.SimpleBedrockModelRendererMixin",
