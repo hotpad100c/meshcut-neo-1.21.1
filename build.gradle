@@ -167,12 +167,16 @@ dependencies {
     // http://www.gradle.org/docs/current/userguide/artifact_dependencies_tutorial.html
     // http://www.gradle.org/docs/current/userguide/dependency_management.html
     dependencies {
+        // Sable
         implementation "maven.modrinth:T9PomCSv:fg9dTRz9"
-        // Sable bundles its companion API via jar-in-jar, which isn't on the compile classpath.
-        // Extracted from META-INF/jarjar of the Sable 2.0.6 jar; re-extract when bumping Sable.
-        compileOnly files("libs/sable-companion-common-1.21.1-1.6.0.jar")
-        // The Rapier physics backend is jar-in-jar too; we mixin into its pipeline to give cut blocks real colliders.
-        compileOnly files("libs/dev.ryanhcode.sable.sable-sable_rapier-1.21.1-2.0.6.jar")
+            // Sable bundles its companion API via jar-in-jar, which isn't on the compile classpath.
+            // Extracted from META-INF/jarjar of the Sable 2.0.6 jar; re-extract when bumping Sable.
+            compileOnly files("libs/sable-companion-common-1.21.1-1.6.0.jar")
+            // The Rapier physics backend is jar-in-jar too; we mixin into its pipeline to give cut blocks real colliders.
+            compileOnly files("libs/dev.ryanhcode.sable.sable-sable_rapier-1.21.1-2.0.6.jar")
+
+        //AnvilCraft
+        implementation "maven.modrinth:vuISAWPc:skyc2AT4"
     }
 }
 

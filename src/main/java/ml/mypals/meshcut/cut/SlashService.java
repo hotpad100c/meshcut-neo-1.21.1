@@ -83,6 +83,14 @@ public final class SlashService {
         /** Weakly supported cut blocks release all their local pieces together. */
         boolean detached;
 
+        /** A block that was removed entirely: it holds nothing, but what was beside it may have come loose. */
+        Info(BlockPos pos) {
+            this.pos = pos;
+            this.piece = null;
+            this.patches = List.of();
+            this.grid = CellGrid.EMPTY;
+        }
+
         Info(BlockPos pos, @Nullable CutService.Piece piece, List<Patch> patches) {
             this.pos = pos;
             this.piece = piece;
@@ -843,6 +851,7 @@ public final class SlashService {
     /** Forgets what was queued: it belongs to a server that has stopped. */
     public static void clear() {
         RECHECKS.clear();
+        AnvilLaserBeam.clear();
         LAST_SPLIT.clear();
         createdThisTick = 0;
     }
@@ -873,6 +882,51 @@ public final class SlashService {
                 MeshCut.LOGGER.error("Re-examining the cut block at {} failed", r.pos(), e);
             }
         }
+    }
+
+    /**
+     * Settles what a tool that carved blocks out directly (the laser) left behind: the blocks it changed, whether they
+     * remain as cut mimics or are gone, and whatever they held up. Everything that no longer hangs together leaves
+     * as its own sub-level, the way it would after a sweep of the blade.
+     *
+     * @param nl,dl a plane through the cut in the frame of {@code sub} (the world if null); it only decides which way
+     *              the parts that come loose are pushed
+     */
+    public static void settleCut(ServerLevel level, @Nullable ServerSubLevel sub, java.util.Collection<BlockPos> changed,
+                                 Vector3d nl, double dl) {
+        if (changed.isEmpty() || sub != null && sub.isRemoved()) {
+            return;
+        }
+        Domain dom = new Domain(level, CapMode.LAVA, sub);
+        List<Info> hits = new ArrayList<>();
+        for (BlockPos pos : changed) {
+            if (!dom.inside(pos) || !dom.loaded(pos)) {
+                continue;
+            }
+            Info info;
+            if (level.getBlockState(pos).getBlock() instanceof MimicBlock) {
+                info = dom.info(pos);
+                if (info == null) {
+                    continue;
+                }
+            } else {
+                info = new Info(pos);
+                dom.infos.put(pos, info);
+            }
+            info.burned = true; // look at what lies beside it as well: the cut may have left it unattached
+            hits.add(info);
+        }
+        if (hits.isEmpty()) {
+            return;
+        }
+        Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
+        int[] created = {0};
+        try {
+            resolve(level, sub, dom, hits, nl, dl, new Vec3(world.x, world.y, world.z), created, false);
+        } catch (RuntimeException e) {
+            MeshCut.LOGGER.error("Settling the cut at {} failed", hits.get(0).pos, e);
+        }
+        createdThisTick += created[0];
     }
 
     private static void recheck(ServerLevel level, BlockPos pos) {
@@ -1018,7 +1072,7 @@ public final class SlashService {
     private static Map<BlockPos, CompoundTag> detachBlockEntities(ServerLevel level, List<Info> hits) {
         Map<BlockPos, CompoundTag> tags = new HashMap<>();
         for (Info hit : hits) {
-            if (hit.piece.undetachedBe()) {
+            if (hit.piece != null && hit.piece.undetachedBe()) {
                 BlockEntity be = level.getBlockEntity(hit.pos);
                 if (be != null) {
                     CutService.spillContents(level, hit.pos, be);

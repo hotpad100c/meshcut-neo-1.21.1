@@ -571,11 +571,7 @@ public final class MimicMesh {
                     }
                 }
                 List<MeshPoly> wall = CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite);
-                for (List<CutPlane> other : excluded) { // nothing is behind a wall where another part was cut out too
-                    if (other != region && !wall.isEmpty()) {
-                        wall = MeshClipper.subtract(wall, other);
-                    }
-                }
+                wall = HoleWalls.exposed(wall, r, excluded); // nothing is behind a wall where another part was cut out too
                 for (MeshPoly face : wall) {
                     if (backed(face, region, planes, excluded)) {
                         faces.add(face);

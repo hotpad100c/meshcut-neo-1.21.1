@@ -28,6 +28,9 @@ public final class CellGrid {
     /** Every cell is part of one piece: the block has no cuts. */
     public static final CellGrid FULL = new CellGrid();
 
+    /** Nothing is left of the block: it has no pieces at all. */
+    public static final CellGrid EMPTY = new CellGrid(0);
+
     private final int[] comp = new int[CELLS];
     private final int[] size;
     /** Face {@code f} = axis*2 + (positive side ? 0 : 1); cell index along it: the two other axes, in order. */
@@ -38,6 +41,14 @@ public final class CellGrid {
         size = new int[]{CELLS};
         for (int[] face : faces) {
             java.util.Arrays.fill(face, 0);
+        }
+    }
+
+    private CellGrid(int none) {
+        java.util.Arrays.fill(comp, -1);
+        size = new int[0];
+        for (int[] face : faces) {
+            java.util.Arrays.fill(face, -1);
         }
     }
 

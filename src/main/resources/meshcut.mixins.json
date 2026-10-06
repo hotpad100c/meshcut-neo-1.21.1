@@ -14,10 +14,14 @@
     "PhysicsBlockPropertyHelperMixin",
     "RapierPhysicsPipelineMixin",
     "SubLevelPhysicsSystemMixin",
-    "VoxelNeighborhoodStateMixin"
+    "VoxelNeighborhoodStateMixin",
+    "compat.AnvilLaserBlockEntityMixin",
+    "compat.AnvilLaserSyncMixin"
   ],
   "client": [
     "compat.FlywheelVisualizationMixin",
+    "compat.AnvilLaserPipelineMixin",
+    "compat.AnvilLaserRendererMixin",
     "compat.CitadelModelBoxMixin",
     "compat.GeckoRenderUtilsMixin",
     "compat.SimpleBedrockModelRendererMixin",

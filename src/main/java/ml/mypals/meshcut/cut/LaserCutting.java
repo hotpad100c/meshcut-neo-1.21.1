@@ -12,7 +12,6 @@ import ml.mypals.meshcut.geom.PolygonCapsule;
 import ml.mypals.meshcut.geom.Polytope;
 import ml.mypals.meshcut.physics.RagdollJoints;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Vector3d;
@@ -62,15 +61,21 @@ public final class LaserCutting {
         }
         if(affected.isEmpty()) return;
         if(sub instanceof ServerSubLevel server) RagdollJoints.noteSplit(level,server,null);
+        List<BlockPos> changed=new ArrayList<>();
         for(var pos:affected) {
             if(sub!=null && sub.isRemoved()) break;
-            vaporizeBlock(level,pos,PolygonCapsule.local(capsule,pos.getX(),pos.getY(),pos.getZ()));
+            if(vaporizeBlock(level,pos,PolygonCapsule.local(capsule,pos.getX(),pos.getY(),pos.getZ()))) changed.add(pos);
         }
+        // Whatever the beam left disconnected (inside a block, or between blocks) comes apart now, like after a slash.
+        Vector3d axis=new Vector3d(b).sub(a);
+        if(axis.lengthSquared()<1e-12) axis.set(0,0,1); else axis.normalize();
+        Vector3d side=axis.cross(Math.abs(axis.y)>0.9 ? new Vector3d(1,0,0) : new Vector3d(0,1,0),new Vector3d()).normalize();
+        SlashService.settleCut(level,sub instanceof ServerSubLevel server ? server : null,changed,side,side.dot(a));
     }
 
-    private static void vaporizeBlock(ServerLevel level, BlockPos pos, List<CutPlane> hole) {
+    private static boolean vaporizeBlock(ServerLevel level, BlockPos pos, List<CutPlane> hole) {
         var piece=CutService.pieceAt(level,pos,CapMode.LAVA);
-        if(piece==null) return;
+        if(piece==null) return false;
         var shape=level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.cutBoxes() : MimicShapes.cutBoxes(piece.target());
         boolean intersects=false;
         for(var box:shape) {
@@ -79,9 +84,9 @@ public final class LaserCutting {
             material.addAll(ml.mypals.meshcut.geom.VoxelFragments.planes(box));
             if(Polytope.volume(material)>1e-8) { intersects=true; break; }
         }
-        if(!intersects) return;
+        if(!intersects) return false;
         var holes=new ArrayList<>(piece.excluded());
-        if(holes.stream().anyMatch(old->CutPlane.sameRegion(old,hole))) return;
+        if(holes.stream().anyMatch(old->CutPlane.sameRegion(old,hole))) return false;
         holes.add(hole);
         // Cells still determine support; the region cutting the visible triangles stays polygonal.
         var grid=CellGrid.of(piece.planes(),holes,piece.patches(),shape);
@@ -94,9 +99,8 @@ public final class LaserCutting {
             try {
                 MimicBlock.place(level,pos,piece.target(),piece.planes(),holes,piece.patches(),piece.mode(),piece.beTag(),piece.entity(),piece.glow());
             } finally { MimicBlock.setGlowingCuts(glow); }
-            SlashService.queueRecheck(level,pos);
         }
-        for(var direction:Direction.values()) SlashService.queueRecheck(level,pos.relative(direction));
+        return true;
     }
     private LaserCutting() {}
 }
