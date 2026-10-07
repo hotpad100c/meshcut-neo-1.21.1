@@ -15,7 +15,6 @@ public abstract class AnvilLaserTrackMixin {
     @Inject(require = 0, method = "clearRemoved", at = @At("TAIL"))
     private void meshcut$track(CallbackInfo ci) {
         BaseLaserBlockEntity self = (BaseLaserBlockEntity) (Object) this;
-        self.
         if (self.getLevel() != null && self.getLevel().isClientSide()) AnvilLaserDraw.track(self);
     }
 }

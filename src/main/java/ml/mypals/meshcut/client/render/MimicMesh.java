@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class MimicMesh {
     private static final int SIDES = 7; // the six directions, then "null" (never culled)
-    private static final ResourceLocation LAVA = ResourceLocation.withDefaultNamespace("block/lava_still");
+    /** The glow has no texture of its own: a plain white one, so that only its colour (and the bloom) shows. */
+    private static final ResourceLocation FLAT = ResourceLocation.withDefaultNamespace("block/white_concrete");
     private static final float GLOW_LIFT = 0.002f;
     private static final int GLOW_ARGB = 0x99FFFFFF;
     private static final int SCRATCH_ARGB = 0xFF2A1A12;
@@ -52,17 +53,25 @@ public final class MimicMesh {
                 return thread;
             });
     private static final Map<MimicRenderData.Geometry, Boolean> BUILDING = new ConcurrentHashMap<>();
-    private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null);
+    private static final MimicMesh EMPTY = new MimicMesh(new LinkedHashMap<>(), null, null);
 
     private final Map<RenderType, List<BakedQuad>[]> byLayer;
     private final List<BakedQuad>[] merged;
     private final ChunkRenderTypeSet layers;
     @Nullable
     private final TextureAtlasSprite particle;
+    /**
+     * The faces cuts have opened in this block, exactly as they are in the mesh (null: not known, a block drawn by a block
+     * entity renderer). The glow of a fresh cut is these faces, picked by their plane: nothing is cut a second time.
+     */
+    @Nullable
+    private final List<MeshPoly> cutFaces;
 
     @SuppressWarnings("unchecked")
-    private MimicMesh(Map<RenderType, List<BakedQuad>[]> byLayer, @Nullable TextureAtlasSprite particle) {
+    private MimicMesh(Map<RenderType, List<BakedQuad>[]> byLayer, @Nullable TextureAtlasSprite particle,
+                      @Nullable List<MeshPoly> cutFaces) {
         this.byLayer = byLayer;
+        this.cutFaces = cutFaces;
         this.particle = particle;
         this.layers = byLayer.isEmpty() ? ChunkRenderTypeSet.none() : ChunkRenderTypeSet.of(byLayer.keySet().toArray(new RenderType[0]));
         this.merged = new List[SIDES];
@@ -295,6 +304,7 @@ public final class MimicMesh {
             generation++;
             CACHE.invalidateAll();
             GLOW.invalidateAll();
+            SLIT_GLOW.invalidateAll();
             BY_IDENTITY.invalidateAll();
             LAST.clear();
             GLOW_BY_IDENTITY.invalidateAll();
@@ -438,8 +448,16 @@ public final class MimicMesh {
         }
         ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
 
-        Map<RenderType, List<MeshPoly>> clipped = cutModel(model.byChunkType(), model.opaque(), model.particleUv(),
-                model.particle(), data, RenderType.cutout());
+        List<MeshPoly> caps = new ArrayList<>();
+        CAPS_OUT.set(caps);
+        Map<RenderType, List<MeshPoly>> clipped;
+        try {
+            clipped = cutModel(model.byChunkType(), model.opaque(), model.particleUv(),
+                    model.particle(), data, RenderType.cutout());
+        } finally {
+            CAPS_OUT.remove();
+        }
+        caps = PolyMerge.merge(caps);
         // the cuts leave a surface in thousands of small pieces: one polygon again where they fit together
         clipped.replaceAll((type, polys) -> PolyMerge.merge(polys));
 
@@ -459,7 +477,7 @@ public final class MimicMesh {
             }
             byLayer.put(type, sides);
         });
-        return new MimicMesh(byLayer, model.particle());
+        return new MimicMesh(byLayer, model.particle(), caps);
     }
 
     /**
@@ -498,6 +516,9 @@ public final class MimicMesh {
                 .values().stream().flatMap(List::stream).toList();
     }
 
+    /** Where {@link #cutModel} puts the cut faces it makes, if the caller wants them apart from the rest of the mesh. */
+    private static final ThreadLocal<List<MeshPoly>> CAPS_OUT = new ThreadLocal<>();
+
     public static Map<RenderType, List<MeshPoly>> cutModel(Map<RenderType, List<MeshPoly>> byType, List<MeshPoly> opaque,
                                                            float[] uv, Object sprite, MimicRenderData data, RenderType capLayer) {
         return cutModel(byType, opaque, uv, sprite, data, capLayer, true);
@@ -524,6 +545,7 @@ public final class MimicMesh {
             List<MeshPoly> caps=fragment.caps(capBase,uv,sprite,data.entity()==null);
             for(List<CutPlane> hole:holes) caps=MeshClipper.subtract(caps,hole);
             caps.addAll(fragment.clip(holeFaces(capBase,data.planes(),holes,uv,sprite)));
+            if (CAPS_OUT.get() != null) CAPS_OUT.get().addAll(caps);
             out.computeIfAbsent(capLayer,k->new ArrayList<>()).addAll(caps);
             return out;
         }
@@ -538,6 +560,7 @@ public final class MimicMesh {
             List<MeshPoly> caps = new ArrayList<>(cutCaps(capBase, region, data.excluded(), uv, sprite));
             caps.addAll(holeFaces(capBase, region, data.excluded(), uv, sprite));
             if (!caps.isEmpty()) {
+                if (CAPS_OUT.get() != null) CAPS_OUT.get().addAll(caps);
                 out.computeIfAbsent(capLayer, k -> new ArrayList<>()).addAll(caps);
             }
         }
@@ -675,39 +698,134 @@ public final class MimicMesh {
      * The glowing lava layer over the cut faces, as polygons in block-local coordinates. It is not part of the chunk
      * mesh: {@code MimicRenderer} draws it for a while after the cut and lets it fade. Render thread only.
      */
-    public static List<MeshPoly> glowPolys(MimicRenderData data) {
+    public static List<MeshPoly> glowPolys(MimicRenderData data, long position) {
         long epoch = generation;
         List<MeshPoly> cached = GLOW_BY_IDENTITY.getIfPresent(data);
         if (cached != null) {
             return cached;
         }
-        cached = GLOW.getIfPresent(data);
-        if (cached != null) {
+        if (data.capMode() != CapMode.LAVA || data.glowCuts().isEmpty()) {
             synchronized (CACHE_LOCK) {
                 if (epoch != generation) return List.of();
-                GLOW_BY_IDENTITY.put(data, cached);
+                GLOW_BY_IDENTITY.put(data, List.of());
             }
-            return cached;
+            GLOW_SHOWN.remove(position);
+            return List.of();
         }
-        List<MeshPoly> done = List.of();
-        if (data.capMode() == CapMode.LAVA && !data.glowCuts().isEmpty()) {
-            TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(LAVA);
-            // Old saves may still contain synthetic voxel exclusion planes in glowCuts.
-            List<CutPlane> actual = data.glowCuts().stream().filter(cut ->
-                    data.planes().stream().anyMatch(cut::sameAs)
-                            || data.patches().stream().anyMatch(patch -> cut.sameAs(patch.plane()))
-                            || ml.mypals.meshcut.geom.VoxelFragments.smoothHoles(data.excluded()).stream()
-                                    .anyMatch(h -> h.stream().anyMatch(cut::sameAs))).toList();
-            done = CoarseGlow.build(actual, data.patches(), data.planes(), data.excluded(),
-                    data.entity() == null ? ml.mypals.meshcut.block.MimicShapes.cutBoxes(data.target()) : data.entity().boxes(),
-                    new float[]{lava.getU0(), lava.getV0(), lava.getU1(), lava.getV1()}, lava);
+        TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(FLAT);
+        // the mesh of the block knows its cut faces (it is cut on a worker if it is not there yet)
+        MimicMesh mesh = CACHE.getIfPresent(data.geometry());
+        if (mesh == null) {
+            of(data);
+            return GLOW_SHOWN.getOrDefault(position, List.of());
+        }
+        List<MeshPoly> glow;
+        if (mesh.cutFaces != null) {
+            // The faces of the recent cuts are taken from the mesh as they are (same shape, same place), no cutting.
+            var recent = new PlaneIndex<Boolean>();
+            data.glowCuts().forEach(p -> recent.put(p, Boolean.TRUE));
+            glow = new ArrayList<>();
+            for (MeshPoly face : mesh.cutFaces) {
+                float[] v = face.verts();
+                double d = face.nx() * v[0] + face.ny() * v[1] + face.nz() * v[2];
+                if (recent.has(new CutPlane(face.nx(), face.ny(), face.nz(), d))) {
+                    glow.add(lavaOf(face, lava));
+                }
+            }
+            // Cuts that only scratched the block (slits) have no cut face: they glow where the cut went
+            List<MeshPoly> slits = slitGlow(data, lava);
+            if (slits == null) {
+                return GLOW_SHOWN.getOrDefault(position, glow); // being worked out
+            }
+            glow.addAll(slits);
+        } else {
+            List<MeshPoly> all = asyncGlow(GLOW, data, lava, data.glowCuts());
+            if (all == null) return GLOW_SHOWN.getOrDefault(position, List.of());
+            glow = all;
         }
         synchronized (CACHE_LOCK) {
             if (epoch != generation) return List.of();
-            GLOW.put(data, done);
-            GLOW_BY_IDENTITY.put(data, done);
+            GLOW_BY_IDENTITY.put(data, glow);
         }
-        return done;
+        if (GLOW_SHOWN.size() > 8192) GLOW_SHOWN.clear();
+        GLOW_SHOWN.put(position, glow);
+        return glow;
+    }
+
+    /** What the cuts that took nothing out of the block glow with; null while it is being worked out. */
+    private static List<MeshPoly> slitGlow(MimicRenderData data, TextureAtlasSprite lava) {
+        if (data.patches().isEmpty()) return List.of();
+        var onPatch = new PlaneIndex<Boolean>();
+        data.patches().forEach(patch -> onPatch.put(patch.plane(), Boolean.TRUE));
+        List<CutPlane> cuts = data.glowCuts().stream().filter(onPatch::has).toList();
+        return cuts.isEmpty() ? List.of() : asyncGlow(SLIT_GLOW, data, lava, cuts);
+    }
+
+    /** Worked out on a mesh worker; null until it is there. */
+    private static List<MeshPoly> asyncGlow(Cache<MimicRenderData, List<MeshPoly>> cache, MimicRenderData data,
+                                            TextureAtlasSprite lava, List<CutPlane> cuts) {
+        long epoch = generation;
+        List<MeshPoly> cached = cache.getIfPresent(data);
+        if (cached != null) {
+            return cached;
+        }
+        if ((cache == GLOW ? GLOWING : GLOWING_SLITS).putIfAbsent(data, Boolean.TRUE) == null) {
+            async(() -> {
+                try {
+                    List<MeshPoly> done = buildGlow(data, lava, cuts);
+                    synchronized (CACHE_LOCK) {
+                        if (epoch == generation) cache.put(data, done);
+                    }
+                } finally {
+                    (cache == GLOW ? GLOWING : GLOWING_SLITS).remove(data);
+                }
+            });
+        }
+        return null;
+    }
+
+    private static final Cache<MimicRenderData, List<MeshPoly>> SLIT_GLOW = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
+    private static final Map<MimicRenderData, Boolean> GLOWING = new ConcurrentHashMap<>();
+    private static final Map<MimicRenderData, Boolean> GLOWING_SLITS = new ConcurrentHashMap<>();
+    /** What a block glowed with last (by its position), shown while the next is being worked out. */
+    private static final Map<Long, List<MeshPoly>> GLOW_SHOWN = new ConcurrentHashMap<>();
+
+    /** The cuts, cut again from scratch: for what has no cut face of its own in the mesh. */
+    private static List<MeshPoly> buildGlow(MimicRenderData data, TextureAtlasSprite lava, List<CutPlane> glowCuts) {
+        // Old saves may still contain synthetic voxel exclusion planes in glowCuts: only the planes that really are a
+        // cut of this block glow.
+        var real = new PlaneIndex<Boolean>();
+        data.planes().forEach(p -> real.put(p, Boolean.TRUE));
+        data.patches().forEach(patch -> real.put(patch.plane(), Boolean.TRUE));
+        for (List<CutPlane> hole : VoxelFragments.smoothHoles(data.excluded())) {
+            hole.forEach(p -> real.put(p, Boolean.TRUE));
+        }
+        List<CutPlane> actual = glowCuts.stream().filter(real::has).toList();
+        return CoarseGlow.build(actual, data.patches(), data.planes(), data.excluded(),
+                data.entity() == null ? ml.mypals.meshcut.block.MimicShapes.cutBoxes(data.target()) : data.entity().boxes(),
+                new float[]{middleU(lava), middleV(lava), middleU(lava), middleV(lava)}, lava);
+    }
+
+    private static float middleU(TextureAtlasSprite sprite) {
+        return (sprite.getU0() + sprite.getU1()) / 2;
+    }
+
+    private static float middleV(TextureAtlasSprite sprite) {
+        return (sprite.getV0() + sprite.getV1()) / 2;
+    }
+
+    /** A cut face as glow: the same polygon, a hair out from the surface, flat colour, full-bright, semi-transparent. */
+    private static MeshPoly lavaOf(MeshPoly face, TextureAtlasSprite lava) {
+        float[] v = face.verts().clone();
+        for (int i = 0; i < v.length / MeshPoly.STRIDE; i++) {
+            int o = i * MeshPoly.STRIDE;
+            v[o] += face.nx() * GLOW_LIFT;
+            v[o + 1] += face.ny() * GLOW_LIFT;
+            v[o + 2] += face.nz() * GLOW_LIFT;
+            v[o + 3] = middleU(lava);
+            v[o + 4] = middleV(lava);
+        }
+        return new MeshPoly(v, face.nx(), face.ny(), face.nz(), -1, 15, GLOW_ARGB, lava, -1, false);
     }
 
     /** The lava layer: same face, nudged outwards, full-bright and semi-transparent. */

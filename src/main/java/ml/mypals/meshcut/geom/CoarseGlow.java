@@ -64,24 +64,33 @@ public final class CoarseGlow {
             holes.addAll(excluded);
         }
 
+        // Looked up by plane instead of by walking every hole for every cut (a laser leaves hundreds of cuts).
+        PlaneIndex<Object[]> wallOf = new PlaneIndex<>();
+        for (List<CutPlane> hole : smoothHoles) {
+            for (int j = 0; j < hole.size(); j++) wallOf.put(hole.get(j), new Object[]{hole, j});
+        }
+        PlaneIndex<List<CutPlane>> holesWith = new PlaneIndex<>();
+        for (List<CutPlane> hole : holes) {
+            for (CutPlane p : hole) holesWith.put(p, hole);
+        }
+        java.util.Map<Long, List<CutPlane>> done = new java.util.HashMap<>();
+
         for (CutPlane cut : cuts) {
-            if (seen.stream().anyMatch(c -> identical(c, cut))) continue;
-            seen.add(cut);
+            long sig = Math.round(cut.nx() * 100) * 1000003L + Math.round(cut.ny() * 100) * 1009L + Math.round(cut.nz() * 100);
+            List<CutPlane> same = done.computeIfAbsent(sig, k -> new ArrayList<>(2));
+            if (same.stream().anyMatch(c -> identical(c, cut))) continue;
+            same.add(cut);
 
             // Check if this cut is a side wall of a smooth hole (e.g. laser capsule)
             List<CutPlane> holeBounds = null;
             CutPlane holeOutward = null;
-            for (List<CutPlane> hole : smoothHoles) {
-                for (int j = 0; j < hole.size(); j++) {
-                    CutPlane hp = hole.get(j);
-                    if (cut.sameAs(hp)) {
-                        holeOutward = hp.flipped();
-                        holeBounds = new ArrayList<>(hole);
-                        holeBounds.remove(j);
-                        break;
-                    }
-                }
-                if (holeBounds != null) break;
+            Object[] wall = wallOf.find(cut);
+            if (wall != null) {
+                @SuppressWarnings("unchecked") List<CutPlane> hole = (List<CutPlane>) wall[0];
+                int j = (Integer) wall[1];
+                holeOutward = hole.get(j).flipped();
+                holeBounds = new ArrayList<>(hole);
+                holeBounds.remove(j);
             }
 
             float[] polygon = null;
@@ -137,9 +146,10 @@ public final class CoarseGlow {
             }
 
             // 7. Subtract other holes that genuinely intrude into the kept material
+            List<List<CutPlane>> ownHoles = holeBounds != null ? holesWith.findAll(cut) : List.of();
             for (List<CutPlane> hole : holes) {
                 if (section.isEmpty()) break;
-                if (holeBounds != null && hole.stream().anyMatch(cut::sameAs)) continue;
+                if (ownHoles.stream().anyMatch(own -> own == hole)) continue;
                 section = MeshClipper.subtract(section, hole);
             }
 

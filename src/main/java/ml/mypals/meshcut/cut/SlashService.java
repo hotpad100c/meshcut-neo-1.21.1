@@ -894,7 +894,6 @@ public final class SlashService {
     /** Forgets what was queued: it belongs to a server that has stopped. */
     public static void clear() {
         RECHECKS.clear();
-        AnvilLaserBeam.clear();
         LAST_SPLIT.clear();
         createdThisTick = 0;
     }

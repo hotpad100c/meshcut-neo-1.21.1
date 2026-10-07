@@ -80,34 +80,48 @@ public final class VoxelFragments {
                 new CutPlane(0,0,-1,-b[2]),new CutPlane(0,0,1,b[5]));
     }
 
+    /**
+     * The box {minX, minY, minZ, maxX, maxY, maxZ} a region is, if it is six axis-aligned planes on the 1/8 lattice (what
+     * a cut-out group of cells is); null for anything else. Allocates only what it returns.
+     */
+    private static double[] latticeBox(List<CutPlane> region) {
+        if (region.size() != 6) return null;
+        double[] bounds = {0, 0, 0, 1, 1, 1};
+        int seen = 0;
+        for (CutPlane p : region) {
+            double[] normal = {p.nx(), p.ny(), p.nz()};
+            int axis = -1;
+            for (int a = 0; a < 3; a++) if (Math.abs(normal[a]) > 1e-8) {
+                if (axis >= 0 || Math.abs(Math.abs(normal[a]) - 1) > 1e-8) return null;
+                axis = a;
+            }
+            if (axis < 0) return null;
+            int slot = axis + (normal[axis] > 0 ? 3 : 0);
+            if ((seen & 1 << slot) != 0) return null;
+            seen |= 1 << slot;
+            double v = p.d() / normal[axis];
+            if (v < -1e-8 || v > 1 + 1e-8 || Math.abs(v * CellGrid.N - Math.rint(v * CellGrid.N)) > 1e-6) return null;
+            bounds[slot] = v;
+        }
+        return bounds;
+    }
+
     /** Returns a compact occupancy mask when exclusions describe lattice boxes, or null for legacy geometry. */
     public static boolean[] mask(List<List<CutPlane>> excluded) {
         if (excluded.isEmpty()) return null;
-        boolean[] occupied = new boolean[CellGrid.CELLS];
-        java.util.Arrays.fill(occupied,true);
+        List<double[]> boxes = new ArrayList<>(excluded.size());
         for (List<CutPlane> region : excluded) {
-            if (region.size()!=6) return null;
-            double[] bounds={0,0,0,1,1,1};
-            boolean[] seen=new boolean[6];
-            for (CutPlane p:region) {
-                double[] normal={p.nx(),p.ny(),p.nz()};
-                int axis=-1;
-                for(int a=0;a<3;a++) if(Math.abs(normal[a])>1e-8) {
-                    if(axis>=0 || Math.abs(Math.abs(normal[a])-1)>1e-8) return null;
-                    axis=a;
-                }
-                if(axis<0) return null;
-                int slot=axis+(normal[axis]>0?3:0);
-                if(seen[slot]) return null;
-                seen[slot]=true;
-                double v=p.d()/normal[axis];
-                if(v < -1e-8 || v > 1+1e-8 || Math.abs(v*CellGrid.N-Math.rint(v*CellGrid.N))>1e-6) return null;
-                bounds[slot]=v;
-            }
-            for(int i=0;i<occupied.length;i++) {
-                double[] c=CellGrid.centerOf(i);
-                if(c[0]>bounds[0] && c[0]<bounds[3] && c[1]>bounds[1] && c[1]<bounds[4]
-                        && c[2]>bounds[2] && c[2]<bounds[5]) occupied[i]=false;
+            double[] bounds = latticeBox(region);
+            if (bounds == null) return null; // nothing is allocated for a region that is not a box
+            boxes.add(bounds);
+        }
+        boolean[] occupied = new boolean[CellGrid.CELLS];
+        java.util.Arrays.fill(occupied, true);
+        for (double[] bounds : boxes) {
+            for (int i = 0; i < occupied.length; i++) {
+                double[] c = CellGrid.centerOf(i);
+                if (c[0] > bounds[0] && c[0] < bounds[3] && c[1] > bounds[1] && c[1] < bounds[4]
+                        && c[2] > bounds[2] && c[2] < bounds[5]) occupied[i] = false;
             }
         }
         return occupied;
@@ -125,12 +139,12 @@ public final class VoxelFragments {
     /** Visual fragment labels, excluding smooth legacy holes and bounded burn prisms. */
     public static boolean[] latticeMask(List<List<CutPlane>> excluded) {
         List<List<CutPlane>> lattice=new ArrayList<>();
-        for(List<CutPlane> region:excluded) if(mask(List.of(region))!=null) lattice.add(region);
+        for(List<CutPlane> region:excluded) if(latticeBox(region)!=null) lattice.add(region);
         return mask(lattice);
     }
 
     public static List<List<CutPlane>> smoothHoles(List<List<CutPlane>> excluded) {
-        return excluded.stream().filter(region->mask(List.of(region))==null).toList();
+        return excluded.stream().filter(region->latticeBox(region)==null).toList();
     }
 
     private VoxelFragments() {}

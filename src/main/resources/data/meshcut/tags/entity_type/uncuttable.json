@@ -11,6 +11,7 @@
     "minecraft:area_effect_cloud",
     "minecraft:leash_knot",
     "minecraft:lightning_bolt",
-    "minecraft:fishing_bobber"
+    "minecraft:fishing_bobber",
+    {"id": "anvilcraft:weapon_beam", "required": false}
   ]
 }

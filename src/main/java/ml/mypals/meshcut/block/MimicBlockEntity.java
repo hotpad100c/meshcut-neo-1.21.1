@@ -40,14 +40,8 @@ import java.util.List;
 public class MimicBlockEntity extends BlockEntity {
     public static final long NEVER = Long.MIN_VALUE;
 
-    private BlockState targetState = Blocks.STONE.defaultBlockState();
-    /**
-     * Whether this block entity has been given its data. A client creates one the moment the block update arrives and
-     * is only told what it holds by the next packet, with chunk meshing running in between: until then it must not
-     * show the default (stone).
-     */
+    private BlockState targetState = Blocks.AIR.defaultBlockState();
     private boolean configured;
-    /** On a client: the block a mimic replaced, by position, so it looks as before until its data arrives. */
     private static final java.util.Map<Long, BlockState> REPLACED = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static void rememberReplaced(BlockPos pos, BlockState old) {
@@ -70,47 +64,29 @@ public class MimicBlockEntity extends BlockEntity {
     private final List<CutPlane> planes = new ArrayList<>();
     /** Convex parts of the block that were cut out and went elsewhere; this piece is what is left around them. */
     private final List<List<CutPlane>> excluded = new ArrayList<>();
-    /**
-     * Cuts that have been made in this block without taking anything out of it. Where one goes right through, the
-     * block is still whole but shows a glowing slit; one that stops midway is a scratch. A later cut that finishes
-     * the job (a loop closing, a structure being severed) separates the block along them.
-     */
     private final List<Patch> patches = new ArrayList<>();
     private CapMode capMode = CapMode.LAVA;
-    /** Game time at which the block was last cut; the glow on its cut faces fades from then on. */
     private long glowStart = NEVER;
-    /** The planes of the faces that last cut opened: only those glow (a block broken by hand does not glow at all). */
     private final List<CutPlane> glowCuts = new ArrayList<>();
-    /** Saved data of the original block entity (sign text, banner patterns, ...), used to look like it. */
     @Nullable
     private CompoundTag targetBeTag;
-    /** For a part of a cut-up entity: what the entity looked like and which part of it this block is. */
     @Nullable
     private EntityAppearance appearance;
-    /** Bumped on every change so client-side mesh caches know when to rebuild. */
     private int version;
 
-    /** Snapshot for the client's block model; rebuilt lazily after every change. */
     private volatile MimicRenderData renderData;
     private CellGrid grid;
 
-    /** What Sable's mass tracker needs to know about this block: the block it weighs like, how much of it is left, where. */
     public record MassSnapshot(BlockState target, double volumeFraction, Vector3dc centerOfMass) {}
 
     private int massVersion = -1;
     private MassSnapshot currentMass;
 
-    // While a change is being announced to Sable's mass tracker, the "old" state must still weigh what it was
-    // accounted as. See massFor().
     private boolean transitionActive;
     private boolean transitionSlot;
     @Nullable
     private MassSnapshot transitionMass;
 
-    /**
-     * The block's collision geometry as of one version of its data, replaced as a whole: the shape is asked for from
-     * other threads too (chunk meshing), which must never see one version's key with another's shape.
-     */
     private record ShapeData(int version, MimicShapes.Key key, VoxelShape shape, double volumeFraction, int wholeFaces) {}
 
     @Nullable
@@ -137,12 +113,10 @@ public class MimicBlockEntity extends BlockEntity {
         return Collections.unmodifiableList(patches);
     }
 
-    /** Game time of the last cut, or {@link #NEVER}. */
     public long getGlowStart() {
         return glowStart;
     }
 
-    /** Cutting/moving a fragment must not treat all its inherited cuts as fresh burns. */
     public record GlowHistory(long start, List<CutPlane> glowing, List<CutPlane> knownCuts) {
         public GlowHistory { glowing = List.copyOf(glowing); knownCuts = List.copyOf(knownCuts); }
     }
@@ -307,6 +281,8 @@ public class MimicBlockEntity extends BlockEntity {
                     glowCuts.addAll(fresh);
                 }
                 glowStart = now;
+                // a laser adds planes every tick: only the newest ones are still hot
+                while (glowCuts.size() > MAX_GLOW_PLANES) glowCuts.remove(0);
             }
         }
         this.appearance = entity;
@@ -506,6 +482,8 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     public static final double GLOW_TICKS = 600;
+    /** Of the faces a cut opened, this many glow at most. */
+    private static final int MAX_GLOW_PLANES = 192;
 
     public int glowLight() {
         return glowCuts.isEmpty() ? 0 : (int) Math.ceil(15 * glowFade(0));

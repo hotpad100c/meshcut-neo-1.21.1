@@ -103,7 +103,7 @@ public class MimicRenderer implements BlockEntityRenderer<MimicBlockEntity> {
             boolean bloom = Bloom.usable();
             org.joml.Vector3f at = new org.joml.Vector3f();
             int[] corner = new int[3];
-            List<MeshPoly> glow = MimicMesh.glowPolys(be.renderData());
+            List<MeshPoly> glow = MimicMesh.glowPolys(be.renderData(), be.getBlockPos().asLong());
             // Small cached polygons share one layer across blocks; colour/fade are per-vertex, not shader state.
             VertexConsumer consumer = buffer.getBuffer(Sheets.translucentCullBlockSheet());
             for (MeshPoly poly : glow) {

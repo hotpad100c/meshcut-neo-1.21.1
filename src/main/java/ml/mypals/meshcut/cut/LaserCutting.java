@@ -34,19 +34,23 @@ public final class LaserCutting {
         for(var body:subs) vaporize(level,body,a,b,radius);
     }
     public static void vaporize(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, int radius) {
+        vaporize(level, sub, worldA, worldB, PolygonCapsule.radius(radius));
+    }
+
+    /** @param r the radius of the hole, in blocks */
+    public static void vaporize(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, double r) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.begin()) {
-            vaporizeBlocks(level, sub, worldA, worldB, radius);
+            vaporizeBlocks(level, sub, worldA, worldB, r);
         }
     }
 
-    private static void vaporizeBlocks(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, int radius) {
+    private static void vaporizeBlocks(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, double r) {
         Vector3d a = new Vector3d(worldA.x,worldA.y,worldA.z), b = new Vector3d(worldB.x,worldB.y,worldB.z);
         if (sub != null) {
             if (sub.isRemoved()) return;
             sub.logicalPose().transformPositionInverse(a);
             sub.logicalPose().transformPositionInverse(b);
         }
-        double r = PolygonCapsule.radius(radius);
         var capsule = PolygonCapsule.planes(a,b,r);
         if (capsule.isEmpty()) return;
         double reach=r*1.1;

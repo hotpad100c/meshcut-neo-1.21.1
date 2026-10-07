@@ -17,7 +17,8 @@
     "VoxelNeighborhoodStateMixin",
     "compat.AnvilLaserBlockEntityMixin",
     "compat.AnvilLaserSyncMixin",
-    "compat.AnvilLaserPassMixin"
+    "compat.AnvilLaserPassMixin",
+    "compat.AnvilLaserGunMixin"
   ],
   "client": [
     "compat.FlywheelVisualizationMixin",
