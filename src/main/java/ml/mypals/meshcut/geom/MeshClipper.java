@@ -42,6 +42,12 @@ public final class MeshClipper {
         }
         List<MeshPoly> out = new ArrayList<>();
         for (MeshPoly poly : polys) {
+            if (separated(poly.verts(), region)) {
+                // The polygon is clear of the region: it stays whole. (Cutting it plane by plane would still leave it in
+                // pieces, split along the extensions of planes that never touch it, and every hole makes more of them.)
+                out.add(poly);
+                continue;
+            }
             List<MeshPoly> remaining = List.of(poly);
             for (CutPlane plane : region) {
                 // A coplanar face belongs to the inside branch only. Keeping it in both branches duplicates
@@ -63,6 +69,24 @@ public final class MeshClipper {
             }
         }
         return out;
+    }
+
+    /**
+     * Whether some plane of the region has the whole polygon strictly on its outer side: they share no volume. (A polygon
+     * lying in a plane of the region is not clear of it: a hole that starts at a face of the block opens that face.)
+     */
+    static boolean separated(float[] verts, List<CutPlane> region) {
+        for (CutPlane plane : region) {
+            boolean clear = true;
+            for (int i = 0; i < verts.length; i += S) {
+                if (plane.signedDistance(verts[i], verts[i + 1], verts[i + 2]) >= -1e-7) {
+                    clear = false;
+                    break;
+                }
+            }
+            if (clear) return true;
+        }
+        return false;
     }
 
     private static float[] clipOnce(float[] in, CutPlane plane) {

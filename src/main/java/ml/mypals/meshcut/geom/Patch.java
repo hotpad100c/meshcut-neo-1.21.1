@@ -22,6 +22,14 @@ public final class Patch {
     private final CutPlane plane;
     private final float[] polygon;
     private final boolean through;
+    private volatile long[][] cellEdges;
+
+    /** Derived only from this immutable patch; shared by successive grid builds. */
+    long[][] cellEdges() {
+        long[][] known = cellEdges;
+        if (known == null) cellEdges = known = CellGrid.cellEdges(this);
+        return known;
+    }
 
     private Patch(CutPlane plane, float[] polygon, boolean through) {
         this.plane = plane;

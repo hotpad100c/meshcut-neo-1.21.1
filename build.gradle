@@ -22,6 +22,10 @@ sourceSets {
         compileClasspath += sourceSets.main.output
         runtimeClasspath += sourceSets.main.output
     }
+    syncTest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
 }
 
 sourceSets.main.resources {
@@ -107,7 +111,7 @@ neoForge {
         // applies to all the run configs above
         configureEach {
             // `gradlew runClient -Pmeshcut.maxEntries=64` reaches the game as -Dmeshcut.maxEntries=64
-            ['meshcut.maxEntries', 'meshcut.diag', 'meshcut.vbo', 'meshcut.regionOrders'].each { key ->
+            ['meshcut.maxEntries', 'meshcut.diag', 'meshcut.vbo', 'meshcut.regionOrders', 'meshcut.noPrediction'].each { key ->
                 if (project.hasProperty(key)) {
                     systemProperty key, project.property(key)
                 }
@@ -298,3 +302,21 @@ def checkRegionMerge = tasks.register('checkRegionMerge', JavaExec) {
     mainClass = 'ml.mypals.meshcut.cut.graph.RegionMergeTest'
 }
 tasks.named('check').configure { dependsOn checkRegionMerge }
+
+def checkCellGridOptimization = tasks.register('checkCellGridOptimization', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('projectionTestClasses')
+    classpath = sourceSets.projectionTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.geom.CellGridOptimizationTest'
+}
+tasks.named('check').configure { dependsOn checkCellGridOptimization }
+
+def checkGeometrySync = tasks.register('checkGeometrySync', JavaExec) {
+    group = 'verification'
+    dependsOn tasks.named('syncTestClasses')
+    classpath = sourceSets.syncTest.runtimeClasspath
+    mainClass = 'ml.mypals.meshcut.network.GeometrySyncTest'
+    workingDir = layout.buildDirectory.dir('sync-test').get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+tasks.named('check').configure { dependsOn checkGeometrySync }

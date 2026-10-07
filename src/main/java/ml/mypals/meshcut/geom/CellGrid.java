@@ -2,7 +2,6 @@ package ml.mypals.meshcut.geom;
 
 import ml.mypals.meshcut.cut.CutPlane;
 
-import java.util.ArrayDeque;
 import java.util.List;
 
 /**
@@ -16,7 +15,7 @@ import java.util.List;
 public final class CellGrid {
     public static final int N = 8;
     public static final int CELLS = N * N * N;
-    /** Groups smaller than this many cells (a thousandth of a block) are slivers and are dropped. */
+    /** Groups smaller than this many cells (4/512 of the lattice) are slivers and are dropped. */
     private static final int MIN_COMPONENT_CELLS = 4;
     /** How far past its edge a patch still blocks (the polygon is clipped exactly at the block's boundary). */
     private static final double EDGE_TOLERANCE = 0.03;
@@ -24,6 +23,7 @@ public final class CellGrid {
     private static final double FACE_GAP = 0.03;
     /** A face point belongs to a piece only if one of its cells is this close (a cell is 0.125 across). */
     private static final double FACE_REACH = 0.14;
+    private static final double[][] CENTERS = centers();
 
     /** Every cell is part of one piece: the block has no cuts. */
     public static final CellGrid FULL = new CellGrid();
@@ -160,44 +160,33 @@ public final class CellGrid {
         if (real.isEmpty() && excluded.isEmpty() && patches.isEmpty() && shape == null) {
             return FULL;
         }
+        long[] occupied = CellMasks.occupied(real, excluded);
+        long[][] barriers = new long[3][7];
+        for (Patch patch : patches) {
+            long[][] edges = patch.cellEdges();
+            for (int axis = 0; axis < 3; axis++) for (int word = 0; word < 7; word++) barriers[axis][word] |= edges[axis][word];
+        }
         boolean[] inside = new boolean[CELLS];
         for (int i = 0; i < CELLS; i++) {
-            double[] c = center(i);
-            boolean in = shape == null || touchesShape(shape, i);
-            for (CutPlane p : real) {
-                if (p.signedDistance(c[0], c[1], c[2]) < 0) {
-                    in = false;
-                    break;
-                }
-            }
-            for (int r = 0; in && r < excluded.size(); r++) { // strictly inside a cut-out part: gone
-                boolean gone = true;
-                for (CutPlane p : excluded.get(r)) {
-                    if (p.signedDistance(c[0], c[1], c[2]) <= 1e-9) {
-                        gone = false;
-                        break;
-                    }
-                }
-                in = !gone;
-            }
-            inside[i] = in;
+            inside[i] = (occupied[i / 64] & (1L << (i % 64))) != 0 && (shape == null || touchesShape(shape, i));
         }
 
         int[] components = new int[CELLS];
         java.util.Arrays.fill(components, -1);
         int next = 0;
         int[] sizes = new int[CELLS];
-        ArrayDeque<Integer> queue = new ArrayDeque<>();
+        int[] queue = new int[CELLS];
         for (int start = 0; start < CELLS; start++) {
             if (!inside[start] || components[start] != -1) {
                 continue;
             }
             int id = next;
             components[start] = id;
-            queue.add(start);
+            int head = 0, tail = 0;
+            queue[tail++] = start;
             int count = 0;
-            while (!queue.isEmpty()) {
-                int cur = queue.poll();
+            while (head < tail) {
+                int cur = queue[head++];
                 count++;
                 int x = cur / (N * N), y = cur / N % N, z = cur % N;
                 for (int axis = 0; axis < 3; axis++) {
@@ -207,9 +196,13 @@ public final class CellGrid {
                             continue;
                         }
                         int other = (nx * N + ny) * N + nz;
-                        if (inside[other] && components[other] == -1 && !blocked(patches, cur, other)) {
+                        int lower = Math.min(cur, other);
+                        int edge = axis == 0 ? lower : axis == 1
+                                ? (lower / 64 * 7 + lower / 8 % 8) * 8 + lower % 8
+                                : (lower / 8) * 7 + lower % 8;
+                        if (inside[other] && components[other] == -1 && (barriers[axis][edge / 64] & (1L << (edge % 64))) == 0) {
                             components[other] = id;
-                            queue.add(other);
+                            queue[tail++] = other;
                         }
                     }
                 }
@@ -267,11 +260,6 @@ public final class CellGrid {
         return false;
     }
 
-    /** Whether some patch lies between the centres of two neighbouring cells. */
-    private static boolean blocked(List<Patch> patches, int a, int b) {
-        return blocked(patches, center(a), center(b));
-    }
-
     /** Whether some patch lies between the two points. */
     private static boolean blocked(List<Patch> patches, double[] ca, double[] cb) {
         for (Patch patch : patches) {
@@ -291,7 +279,45 @@ public final class CellGrid {
     }
 
     private static double[] center(int index) {
-        return new double[]{(index / (N * N) + 0.5) / N, (index / N % N + 0.5) / N, (index % N + 0.5) / N};
+        return CENTERS[index];
+    }
+
+    private static double[][] centers() {
+        double[][] result = new double[CELLS][3];
+        for (int i = 0; i < CELLS; i++) result[i] = new double[]{(i / 64 + .5) / N, (i / N % N + .5) / N, (i % N + .5) / N};
+        return result;
+    }
+
+    /** Build one patch's immutable axis-edge mask; each grid line has at most one sign transition. */
+    static long[][] cellEdges(Patch patch) {
+        long[][] result = new long[3][7];
+        CutPlane p = patch.plane();
+        for (int axis = 0; axis < 3; axis++) for (int a = 0; a < N; a++) for (int b = 0; b < N; b++) {
+            int first = cell(axis, 0, a, b), last = cell(axis, N - 1, a, b);
+            double[] ca = center(first), cb = center(last);
+            double da = p.signedDistance(ca[0], ca[1], ca[2]), db = p.signedDistance(cb[0], cb[1], cb[2]);
+            if (!Double.isFinite(da) || !Double.isFinite(db)) {
+                for (int depth = 0; depth < N - 1; depth++) markEdge(result, patch, axis, depth, a, b);
+                continue;
+            }
+            if ((da > 0) == (db > 0)) continue;
+            int lo = 0, hi = N - 1;
+            while (hi - lo > 1) {
+                int mid = (lo + hi) / 2;
+                double[] c = center(cell(axis, mid, a, b));
+                if ((p.signedDistance(c[0], c[1], c[2]) > 0) == (da > 0)) lo = mid; else hi = mid;
+            }
+            markEdge(result, patch, axis, lo, a, b);
+        }
+        return result;
+    }
+
+    private static void markEdge(long[][] out, Patch patch, int axis, int depth, int a, int b) {
+        int lower = cell(axis, depth, a, b), upper = cell(axis, depth + 1, a, b);
+        if (!blocked(List.of(patch), center(lower), center(upper))) return;
+        int edge = axis == 0 ? lower : axis == 1
+                ? (lower / 64 * 7 + lower / 8 % 8) * 8 + lower % 8 : (lower / 8) * 7 + lower % 8;
+        out[axis][edge / 64] |= 1L << (edge % 64);
     }
 
     private static int cell(int axis, int along, int a, int b) {
@@ -335,7 +361,7 @@ public final class CellGrid {
 
     /** Centre of cell {@code index}, in block-local coordinates. */
     public static double[] centerOf(int index) {
-        return center(index);
+        return center(index).clone();
     }
 
     /** Average position of the group's cells, in block-local coordinates. */

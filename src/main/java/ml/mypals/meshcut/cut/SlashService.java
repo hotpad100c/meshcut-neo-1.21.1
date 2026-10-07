@@ -230,7 +230,7 @@ public final class SlashService {
     /** Entity contact was already handled while holding the saber; release only applies the recorded world stroke. */
     public static CutService.Result slashBlocks(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                 @Nullable net.minecraft.world.entity.Entity wielder) {
-        try (var timing = ml.mypals.meshcut.util.CutTiming.begin()) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.begin(); var batch = WorldGraphs.batch(level)) {
         return slashSwing(level, swipes, mode, wielder, false);
     
         }

@@ -677,6 +677,27 @@ public final class SectionIndex {
         return false;
     }
 
+    /** Apply the final state of a cut once, rather than rebuilding groups for each intermediate edit. */
+    public boolean applyBatch(Map<Integer, BlockNodes> changes) {
+        Map<Integer, BlockNodes> different = new java.util.LinkedHashMap<>();
+        changes.forEach((c, now) -> {
+            BlockNodes old = blocks[c];
+            if (old != now && (old == null || !old.sameAs(now))) different.put(c, now);
+        });
+        if (different.isEmpty()) return false;
+        // A full 4096-cell rebuild is excessive for a short laser crossing. Keep the local path
+        // for small batches; deduplication and neighbour notification are still done once outside.
+        if (different.size() <= 8) {
+            boolean split = false;
+            for (var edit : different.entrySet()) split |= apply(edit.getKey(), edit.getValue());
+            return split;
+        }
+        different.forEach((c, now) -> blocks[c] = now);
+        version++;
+        rebuild();
+        return true; // a conservative recheck; rebuilt group identities must not escape as old certificates
+    }
+
     private static Object findObject(Map<Object, Object> parent, Object o) {
         while (parent.get(o) != o) {
             parent.put(o, parent.get(parent.get(o)));

@@ -73,6 +73,17 @@ public class MimicBlockEntity extends BlockEntity {
     @Nullable
     private EntityAppearance appearance;
     private int version;
+    private static final java.util.concurrent.atomic.AtomicLong SYNC_EPOCHS = new java.util.concurrent.atomic.AtomicLong();
+    private final long syncEpoch = SYNC_EPOCHS.incrementAndGet();
+    private long syncRevision, sentRevision;
+    private CompoundTag sentSyncData;
+    private CompoundTag receivedSyncData;
+    private long receivedEpoch, receivedRevision = -1;
+    private boolean awaitingSnapshot;
+    private long snapshotRequestedAt = Long.MIN_VALUE;
+
+    public long syncEpoch() { return level != null && level.isClientSide ? receivedEpoch : syncEpoch; }
+    public long syncRevision() { return level != null && level.isClientSide ? receivedRevision : syncRevision; }
 
     private volatile MimicRenderData renderData;
     private CellGrid grid;
@@ -342,13 +353,14 @@ public class MimicBlockEntity extends BlockEntity {
     private static List<List<CutPlane>> reducedRegions(List<List<CutPlane>> regions) {
         List<List<CutPlane>> out = new ArrayList<>(regions.size());
         for (List<CutPlane> region : regions) {
-            if (region.size() <= 12) {
-                out.add(List.copyOf(region)); // a lattice box or a burn prism: already as small as it gets
+            if (region.size() <= 12 || region instanceof HoleReducer.ReducedPlanes) {
+                // a lattice box or a burn prism, or one that was reduced when it was made: as small as it gets
+                out.add(region instanceof HoleReducer.ReducedPlanes ? region : List.copyOf(region));
                 continue;
             }
             var reduced = HoleReducer.reduce(region);
             if (reduced != null) {
-                out.add(List.copyOf(reduced.planes()));
+                out.add(reduced.planes());
             }
         }
         return out;
@@ -443,6 +455,7 @@ public class MimicBlockEntity extends BlockEntity {
         version++;
         setChanged();
         if (level != null) {
+            if (!level.isClientSide) syncRevision++;
             level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
             if (level instanceof ServerLevel server) {
                 WorldGraphs.onNodesChanged(server, worldPosition);
@@ -553,6 +566,23 @@ public class MimicBlockEntity extends BlockEntity {
 
     @Override
     protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
+        if (tag.contains(ml.mypals.meshcut.network.GeometrySync.HEADER) || level != null && level.isClientSide) {
+            var decoded = ml.mypals.meshcut.network.GeometrySync.decode(tag,receivedSyncData,receivedEpoch,receivedRevision);
+            if (decoded.status() == ml.mypals.meshcut.network.GeometrySync.Status.STALE) return;
+            if (decoded.status() == ml.mypals.meshcut.network.GeometrySync.Status.NEED_SNAPSHOT) {
+                long now=level==null?0:level.getGameTime();
+                if (level != null && level.isClientSide && (!awaitingSnapshot || now-snapshotRequestedAt>=20)) {
+                    awaitingSnapshot=true; snapshotRequestedAt=now;
+                    ml.mypals.meshcut.network.CutSyncNet.request(worldPosition);
+                    ml.mypals.meshcut.client.CutSyncRecovery.track(worldPosition);
+                }
+                return;
+            }
+            tag=decoded.data();
+            receivedSyncData=tag.copy(); receivedEpoch=decoded.epoch(); receivedRevision=decoded.revision();
+            awaitingSnapshot=false;
+            if(level != null && level.isClientSide) ml.mypals.meshcut.client.CutSyncRecovery.forget(worldPosition);
+        }
         super.loadAdditional(tag, registries);
         if (tag.contains("target")) {
             targetState = NbtUtils.readBlockState(registries.lookupOrThrow(Registries.BLOCK), tag.getCompound("target"));
@@ -598,6 +628,7 @@ public class MimicBlockEntity extends BlockEntity {
         version++;
         updateLight();
         if (level instanceof ServerLevel server) {
+            syncRevision++;
             WorldGraphs.onNodesChanged(server, worldPosition);
         }
         if (level != null && level.isClientSide) {
@@ -634,11 +665,24 @@ public class MimicBlockEntity extends BlockEntity {
 
     @Override
     public @NotNull CompoundTag getUpdateTag(HolderLookup.@NotNull Provider registries) {
-        return saveWithoutMetadata(registries);
+        return ml.mypals.meshcut.network.GeometrySync.snapshot(saveWithoutMetadata(registries),syncEpoch,syncRevision);
     }
 
     @Override
     public Packet<ClientGamePacketListener> getUpdatePacket() {
-        return ClientboundBlockEntityDataPacket.create(this);
+        return ClientboundBlockEntityDataPacket.create(this,(entity,registries)->{
+            CompoundTag current=saveWithoutMetadata(registries);
+            CompoundTag wire=sentSyncData==null
+                    ? ml.mypals.meshcut.network.GeometrySync.snapshot(current,syncEpoch,syncRevision)
+                    : ml.mypals.meshcut.network.GeometrySync.delta(sentSyncData,current,syncEpoch,sentRevision,syncRevision);
+            sentSyncData=current; sentRevision=syncRevision;
+            return wire;
+        });
+    }
+
+    public void retrySyncSnapshot() {
+        if(level==null || !level.isClientSide || !awaitingSnapshot || level.getGameTime()-snapshotRequestedAt<20) return;
+        snapshotRequestedAt=level.getGameTime();
+        ml.mypals.meshcut.network.CutSyncNet.request(worldPosition);
     }
 }

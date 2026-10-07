@@ -136,6 +136,30 @@ public final class StructureGraph {
         return section.apply(SectionIndex.cell(x & 15, y & 15, z & 15), now) ? section : null;
     }
 
+    /** Updates each cached section at most once for a batch; absent sections will read the final world lazily. */
+    public List<SectionIndex> updateBatch(Iterable<NodeRef> edits) {
+        epoch++;
+        Map<SectionIndex, Map<Integer, BlockNodes>> sections = new java.util.LinkedHashMap<>();
+        for (NodeRef p : edits) {
+            SectionIndex section = cache.get(key(p.x() >> 4, p.y() >> 4, p.z() >> 4));
+            if (section == null) continue;
+            BlockNodes now = source.loaded(p.x(), p.y(), p.z()) ? source.at(p.x(), p.y(), p.z()) : null;
+            sections.computeIfAbsent(section, s -> new java.util.LinkedHashMap<>())
+                    .put(SectionIndex.cell(p.x() & 15, p.y() & 15, p.z() & 15), now);
+        }
+        List<SectionIndex> rebuilt = new ArrayList<>();
+        sections.forEach((section, changes) -> { if (section.applyBatch(changes)) rebuilt.add(section); });
+        return rebuilt;
+    }
+
+    public boolean unchanged(int x, int y, int z) {
+        SectionIndex section = cache.get(key(x >> 4, y >> 4, z >> 4));
+        if (section == null) return false;
+        BlockNodes old = section.blockAt(SectionIndex.cell(x & 15, y & 15, z & 15));
+        BlockNodes now = source.loaded(x, y, z) ? source.at(x, y, z) : null;
+        return old == now || old != null && old.sameAs(now);
+    }
+
     /** Forgets everything known about a chunk column. */
     public void unloadChunk(int chunkX, int chunkZ) {
         epoch++;

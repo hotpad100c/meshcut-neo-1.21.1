@@ -34,6 +34,16 @@ public final class MimicColliders {
 
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
+    /**
+     * The coarse shape of each exact shape that was snapped (a block is asked for its collider by itself and by each of
+     * its six neighbours whenever it changes, so the same exact shape comes back seven times, and a laser makes a new
+     * one every tick).
+     */
+    private static final Map<MimicShapes.Key, MimicShapes.Key> COARSE_OF = new java.util.LinkedHashMap<>(256, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<MimicShapes.Key, MimicShapes.Key> eldest) {
+            return size() > 8192;
+        }
+    };
 
     // diagnostics, read by PhysicsDiag
     static long createdEntries;
@@ -74,10 +84,15 @@ public final class MimicColliders {
         if (entry != null) {
             return entry;
         }
-        List<double[]> boxes = MimicShapes.boxes(key);
+        List<double[]> boxes = null;
         if (ENTRIES.size() >= ml.mypals.meshcut.MeshCutSettings.maxEntries()) {
             coarsened++;
-            key = coarse(key, boxes);
+            MimicShapes.Key coarse = COARSE_OF.get(key);
+            if (coarse == null) {
+                coarse = coarse(key, MimicShapes.boxes(key));
+                COARSE_OF.put(key, coarse);
+            }
+            key = coarse;
             entry = ENTRIES.get(key);
             if (entry != null) {
                 return entry;
@@ -87,6 +102,8 @@ public final class MimicColliders {
                 return fallback.get();
             }
             boxes = key.baseBoxes();
+        } else {
+            boxes = MimicShapes.boxes(key);
         }
         if (boxes.isEmpty()) {
             entry = RapierVoxelColliderData.EMPTY;
@@ -109,19 +126,41 @@ public final class MimicColliders {
 
 
     private static MimicShapes.Key coarse(MimicShapes.Key key, List<double[]> boxes) {
-        List<double[]> snapped = new ArrayList<>(boxes.size());
+        // Snapped to quarters, a shape is a subset of 4x4x4 cells whatever it was made of: mark them, take the boxes of
+        // those (a handful), and only then join those. (Joining the exact boxes pair by pair costs the cube of their
+        // number, and a cut block has hundreds.)
+        boolean[] cells = new boolean[64];
         for (double[] b : boxes) {
-            double[] s = new double[6];
+            int[] lo = new int[3], hi = new int[3];
             for (int a = 0; a < 3; a++) {
-                s[a] = Math.floor(b[a] * 4 + 1e-6) / 4;
-                s[a + 3] = Math.ceil(b[a + 3] * 4 - 1e-6) / 4;
+                lo[a] = Math.max(0, (int) Math.floor(b[a] * 4 + 1e-6));
+                hi[a] = Math.min(4, (int) Math.ceil(b[a + 3] * 4 - 1e-6));
             }
-            snapped.add(s);
+            for (int x = lo[0]; x < hi[0]; x++) for (int y = lo[1]; y < hi[1]; y++) for (int z = lo[2]; z < hi[2]; z++) {
+                cells[(x * 4 + y) * 4 + z] = true;
+            }
+        }
+        List<double[]> snapped = new ArrayList<>();
+        for (int x = 0; x < 4; x++) for (int y = 0; y < 4; y++) for (int z = 0; z < 4; z++) {
+            if (!cells[(x * 4 + y) * 4 + z]) continue;
+            int ze = z + 1, ye = y + 1, xe = x + 1;
+            while (ze < 4 && cells[(x * 4 + y) * 4 + ze]) ze++;
+            while (ye < 4 && filled(cells, x, x + 1, ye, ye + 1, z, ze)) ye++;
+            while (xe < 4 && filled(cells, xe, xe + 1, y, ye, z, ze)) xe++;
+            for (int a = x; a < xe; a++) for (int c = y; c < ye; c++) for (int d = z; d < ze; d++) cells[(a * 4 + c) * 4 + d] = false;
+            snapped.add(new double[]{x / 4.0, y / 4.0, z / 4.0, xe / 4.0, ye / 4.0, ze / 4.0});
         }
         List<double[]> joined = VoxelBoxes.join(snapped, 4);
         joined.sort(java.util.Comparator.comparingDouble((double[] b) -> b[0]).thenComparingDouble(b -> b[1])
                 .thenComparingDouble(b -> b[2]).thenComparingDouble(b -> b[3]).thenComparingDouble(b -> b[4]));
         return MimicShapes.Key.of(key.target(), List.of(), List.of(), joined);
+    }
+
+    private static boolean filled(boolean[] cells, int x, int xe, int y, int ye, int z, int ze) {
+        for (int a = x; a < xe; a++) for (int b = y; b < ye; b++) for (int c = z; c < ze; c++) {
+            if (!cells[(a * 4 + b) * 4 + c]) return false;
+        }
+        return true;
     }
 
     /** Re-reads colliders of mimics that were first seen without their block entity. */
@@ -141,6 +180,7 @@ public final class MimicColliders {
     /** Forgets the blocks waiting to be refreshed: they belong to a server that has stopped. */
     public static void clear() {
         PENDING.clear();
+        COARSE_OF.clear();
     }
 
     static synchronized int entryCount() {

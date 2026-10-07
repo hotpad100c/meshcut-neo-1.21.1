@@ -23,11 +23,26 @@ import java.util.List;
  * the cut block is part of the ordinary chunk mesh (with face culling, lighting and batching) rather than being
  * drawn by a block entity renderer every frame.
  */
-public final class MimicBakedModel implements IDynamicBakedModel {
+public class MimicBakedModel implements IDynamicBakedModel {
     private final BakedModel fallback;
 
     public MimicBakedModel(BakedModel fallback) {
         this.fallback = fallback;
+    }
+
+    /** Bind prediction data for renderers that obtain model data from the unchanged ordinary block. */
+    public static MimicBakedModel predicted(BakedModel fallback, ml.mypals.meshcut.client.CutPrediction.View view,
+                                            net.minecraft.core.BlockPos pos) {
+        ModelData bound=ModelData.builder().with(MimicRenderData.PROPERTY,view.data())
+                .with(MimicRenderData.POS,pos.immutable()).build();
+        return new MimicBakedModel(fallback) {
+            @Override public List<BakedQuad> getQuads(BlockState state,Direction side,RandomSource random,ModelData ignored,RenderType layer) {
+                return view.empty()?List.of():super.getQuads(state,side,random,bound,layer);
+            }
+            @Override public ChunkRenderTypeSet getRenderTypes(BlockState state,RandomSource random,ModelData ignored) {
+                return view.empty()?ChunkRenderTypeSet.none():super.getRenderTypes(state,random,bound);
+            }
+        };
     }
 
     @Override
@@ -60,6 +75,11 @@ public final class MimicBakedModel implements IDynamicBakedModel {
     @Nullable
     private static MimicMesh meshFor(ModelData data) {
         MimicRenderData render = data.get(MimicRenderData.PROPERTY);
+        var view=ml.mypals.meshcut.client.CutPrediction.view(data.get(MimicRenderData.POS));
+        if(view!=null && render!=null && view.data().target()==render.target()) {
+            if(view.empty())return null;
+            render=view.data();
+        }
         return render == null ? null : MimicMesh.of(render, data.get(MimicRenderData.POS));
     }
 

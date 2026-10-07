@@ -21,6 +21,8 @@
     "compat.AnvilLaserGunMixin"
   ],
   "client": [
+    "CutPredictionRendererMixin",
+    "compat.SodiumPredictionMixin",
     "compat.FlywheelVisualizationMixin",
     "compat.AnvilLaserPipelineMixin",
     "compat.AnvilLaserRendererMixin",

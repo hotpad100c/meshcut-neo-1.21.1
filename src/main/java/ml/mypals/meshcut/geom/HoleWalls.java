@@ -22,7 +22,15 @@ public final class HoleWalls {
         List<CutPlane> region = excluded.get(index);
         for (int q = 0; q < excluded.size() && !wall.isEmpty(); q++) {
             List<CutPlane> other = excluded.get(q);
-            if (other == region || CutPlane.sameRegion(other, region)) {
+            if (other == region) {
+                continue;
+            }
+            // Most holes of a block are nowhere near a given wall: a plane of theirs with the whole wall behind it says so
+            // at once (it is also what makes the comparisons below, which are quadratic in the planes, rare).
+            if (clearOf(wall, other)) {
+                continue;
+            }
+            if (CutPlane.sameRegion(other, region)) {
                 continue; // the same part cut out twice has one set of walls (the caller draws it once)
             }
             List<MeshPoly> kept = new ArrayList<>(), test = new ArrayList<>();
@@ -44,6 +52,13 @@ public final class HoleWalls {
             wall = kept;
         }
         return wall;
+    }
+
+    private static boolean clearOf(List<MeshPoly> wall, List<CutPlane> region) {
+        for (MeshPoly poly : wall) {
+            if (!MeshClipper.separated(poly.verts(), region)) return false;
+        }
+        return true;
     }
 
     /** The plane of the region the face lies in, facing the way the region's wall there faces; null if none. */

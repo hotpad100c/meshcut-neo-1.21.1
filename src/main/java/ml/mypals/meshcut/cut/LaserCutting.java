@@ -21,6 +21,23 @@ import java.util.List;
 
 /** Removes one continuous polygon capsule across every block it overlaps in a world or body plot. */
 public final class LaserCutting {
+    private record Query(long pos,List<CutPlane> capsule){}
+    private record Seen(long epoch,long revision){}
+    private static final java.util.Map<ServerLevel,java.util.Map<Query,Seen>> REPEATS=new java.util.WeakHashMap<>();
+    private static java.util.Map<Query,Seen> repeats(ServerLevel level){
+        return REPEATS.computeIfAbsent(level,l->new java.util.LinkedHashMap<>(128,.75f,true){
+            @Override protected boolean removeEldestEntry(java.util.Map.Entry<Query,Seen> entry){return size()>1024;}
+        });
+    }
+    private static boolean repeated(ServerLevel level,BlockPos pos,List<CutPlane> capsule){
+        if(!(level.getBlockEntity(pos) instanceof MimicBlockEntity be))return false;
+        Seen seen=repeats(level).get(new Query(pos.asLong(),capsule));
+        return seen!=null&&seen.epoch==be.syncEpoch()&&seen.revision==be.syncRevision();
+    }
+    private static void remember(ServerLevel level,BlockPos pos,List<CutPlane> capsule){
+        if(level.getBlockEntity(pos) instanceof MimicBlockEntity be)
+            repeats(level).put(new Query(pos.asLong(),capsule),new Seen(be.syncEpoch(),be.syncRevision()));
+    }
     public static void vaporizeImpact(ServerLevel level, SubLevel primary, Vec3 a, Vec3 b, int radius) {
         double r=PolygonCapsule.radius(radius)*1.1;
         var bounds=new BoundingBox3d(
@@ -39,7 +56,7 @@ public final class LaserCutting {
 
     /** @param r the radius of the hole, in blocks */
     public static void vaporize(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, double r) {
-        try (var timing = ml.mypals.meshcut.util.CutTiming.begin()) {
+        try (var timing = ml.mypals.meshcut.util.CutTiming.begin(); var batch = ml.mypals.meshcut.cut.graph.WorldGraphs.batch(level)) {
             vaporizeBlocks(level, sub, worldA, worldB, r);
         }
     }
@@ -65,11 +82,12 @@ public final class LaserCutting {
         }
         List<BlockPos> affected=new ArrayList<>();
         for(int x=minX;x<=maxX;x++) for(int y=minY;y<=maxY;y++) for(int z=minZ;z<=maxZ;z++) {
+            // Bound both latitude and longitude discretisation; reject before querying chunks or Sable.
+            double near=r*1.072+0.8661;
+            if(distanceSquared(a,b,x+0.5,y+0.5,z+0.5)>near*near) continue;
             var pos=new BlockPos(x,y,z);
             if(!level.hasChunkAt(pos) || Sable.HELPER.getContaining(level,pos)!=sub) continue;
-            // The capsule's polygon circumscribes the true one by at most 1/cos(15 degrees); the cube sticks out half its diagonal.
-            double near=r*1.04+0.8661;
-            if(distanceSquared(a,b,x+0.5,y+0.5,z+0.5)>near*near) continue;
+            if(repeated(level,pos,capsule))continue;
             if(CutService.pieceAt(level,pos,CapMode.LAVA)!=null) affected.add(pos);
         }
         if(affected.isEmpty()) return;
@@ -78,6 +96,7 @@ public final class LaserCutting {
         for(var pos:affected) {
             if(sub!=null && sub.isRemoved()) break;
             if(vaporizeBlock(level,pos,PolygonCapsule.local(capsule,pos.getX(),pos.getY(),pos.getZ()))) changed.add(pos);
+            remember(level,pos,capsule);
         }
         // Whatever the beam left disconnected (inside a block, or between blocks) comes apart now, like after a slash.
         Vector3d axis=new Vector3d(b).sub(a);
@@ -90,26 +109,13 @@ public final class LaserCutting {
         // Only what the block can see of the hole is kept: a few planes of its 62.
         var reduced=HoleReducer.reduce(hole);
         if(reduced==null) return false;
-        hole=reduced.planes();
         var piece=CutService.pieceAt(level,pos,CapMode.LAVA);
         if(piece==null) return false;
-        for(var old:piece.excluded()) {
-            // already burnt away, or burnt away by something bigger
-            if(CutPlane.sameRegion(old,hole) || HoleReducer.contains(old,reduced.vertices())) return false;
-        }
         var shape=level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.cutBoxes() : MimicShapes.cutBoxes(piece.target());
-        boolean intersects=false;
-        for(var box:shape) {
-            var material=new ArrayList<>(piece.planes());
-            material.addAll(hole);
-            material.addAll(ml.mypals.meshcut.geom.VoxelFragments.planes(box));
-            if(Polytope.volume(material)>1e-8) { intersects=true; break; }
-        }
-        if(!intersects) return false;
-        var holes=new ArrayList<>(piece.excluded());
-        holes.add(hole);
-        // Cells still determine support; the region cutting the visible triangles stays polygonal.
-        var grid=CellGrid.of(piece.planes(),holes,piece.patches(),shape);
+        var prepared=ml.mypals.meshcut.geom.CapsuleCut.prepare(piece.planes(),piece.excluded(),piece.patches(),shape,reduced);
+        if(prepared==null)return false;
+        var holes=prepared.holes();
+        var grid=prepared.grid();
         piece=CutService.detachBlockEntity(level,pos,piece);
         if(grid.filledCells()==0) {
             level.setBlock(pos,level.getFluidState(pos).createLegacyBlock(),3);

@@ -45,8 +45,14 @@ public final class MimicMesh {
             .weakKeys().maximumSize(MAX_CACHED).build();
     private static final Cache<MimicRenderData, SmoothFragments> FRAGMENTS = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(512).build();
-    private static final java.util.concurrent.ExecutorService WORKERS = java.util.concurrent.Executors.newFixedThreadPool(
-            Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 2, 6), task -> {
+    /** Newest task first: what a block was told last is what it needs, the rest is already out of date. */
+    private static final class NewestFirst extends java.util.concurrent.LinkedBlockingDeque<Runnable> {
+        @Override public boolean offer(Runnable task) { return offerFirst(task); }
+    }
+
+    private static final java.util.concurrent.ExecutorService WORKERS = new java.util.concurrent.ThreadPoolExecutor(
+            Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 2, 6), Math.clamp(Runtime.getRuntime().availableProcessors() / 2, 2, 6),
+            0L, java.util.concurrent.TimeUnit.MILLISECONDS, new NewestFirst(), task -> {
                 Thread thread = new Thread(task, "meshcut-mesh");
                 thread.setDaemon(true);
                 thread.setPriority(Thread.MIN_PRIORITY + 1);
@@ -235,21 +241,13 @@ public final class MimicMesh {
             mesh = CACHE.getIfPresent(data.geometry());
             if (mesh == null) {
                 MimicMesh before = LAST.get(pos.asLong());
-                if (before != null || onRenderThread()) {
-                    // A block that is being cut again keeps showing what it showed until the new mesh is ready.
-                    schedule(data, pos);
-                    mesh = CACHE.getIfPresent(data.geometry()); // finished meanwhile: nobody would tell this block
-                    if (mesh == null) {
-                        return before != null ? before : EMPTY;
-                    }
-                } else {
-                    // A block with nothing to show yet is built right here: it would be missing until something else
-                    // rebuilt its section, and a first mesh is cheap beside a re-cut one.
-                    mesh = build(data);
-                    synchronized (CACHE_LOCK) {
-                        if (epoch != generation) return EMPTY;
-                        CACHE.put(data.geometry(), mesh);
-                    }
+                // A block that is being cut again keeps showing what it showed until the new mesh is ready; one that has
+                // nothing yet is missing until its mesh is (the chunk around it is not held up by the cutting of a model:
+                // a chunk builder thread has a whole chunk to build, and a hundred cut blocks cost seconds).
+                schedule(data, pos);
+                mesh = CACHE.getIfPresent(data.geometry()); // finished meanwhile: nobody would tell this block
+                if (mesh == null) {
+                    return before != null ? before : EMPTY;
                 }
             }
             synchronized (CACHE_LOCK) {
@@ -262,16 +260,26 @@ public final class MimicMesh {
         return mesh;
     }
 
+    /** What each block wants to be drawn as now: a mesh nobody wants any more is not worth building. */
+    private static final Map<Long, MimicRenderData.Geometry> DESIRED = new ConcurrentHashMap<>();
+    /** Stands for the callers that have no position (they want the mesh whatever happens to any block). */
+    private static final long ANYONE = Long.MIN_VALUE;
+
     private static void schedule(MimicRenderData data, @Nullable net.minecraft.core.BlockPos pos) {
-        if (pos != null) {
-            WAITING.computeIfAbsent(data.geometry(), k -> ConcurrentHashMap.newKeySet()).add(pos.asLong());
-        }
+        MimicRenderData.Geometry geometry = data.geometry();
+        if (DESIRED.size() > 65536) DESIRED.clear();
+        if (pos != null) DESIRED.put(pos.asLong(), geometry);
+        WAITING.computeIfAbsent(geometry, k -> ConcurrentHashMap.newKeySet()).add(pos != null ? pos.asLong() : ANYONE);
         if (BUILDING.putIfAbsent(data.geometry(), Boolean.TRUE) != null) {
             return;
         }
         long epoch = generation;
         async(() -> {
             try {
+                java.util.Set<Long> wanting = WAITING.get(geometry);
+                if (wanting != null && !wanting.contains(ANYONE) && wanting.stream().noneMatch(p -> geometry.equals(DESIRED.get(p)))) {
+                    return; // every block that asked for it has asked for something newer since
+                }
                 MimicMesh built = build(data);
                 synchronized (CACHE_LOCK) {
                     if (epoch == generation) CACHE.put(data.geometry(), built);
@@ -293,7 +301,7 @@ public final class MimicMesh {
         for (long packed : positions) {
             var pos = net.minecraft.core.BlockPos.of(packed);
             var state = level.getBlockState(pos);
-            if (state.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock) {
+            if (state.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock || ml.mypals.meshcut.client.CutPrediction.view(pos)!=null) {
                 level.sendBlockUpdated(pos, state, state, 0);
             }
         }

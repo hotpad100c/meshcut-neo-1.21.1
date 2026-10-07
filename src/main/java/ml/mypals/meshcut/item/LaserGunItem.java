@@ -63,10 +63,31 @@ public final class LaserGunItem extends Item {
             return InteractionResultHolder.sidedSuccess(stack, level.isClientSide());
         }
         if (player.isSpectator() || player.getCooldowns().isOnCooldown(this)) return InteractionResultHolder.fail(stack);
-        player.getCooldowns().addCooldown(this, 4);
-        if (level.isClientSide()) ml.mypals.meshcut.client.LaserGunHands.shoot(player, stack);
-        if (player instanceof ServerPlayer server) shoot(server, stack);
+        if (level.isClientSide()) {
+            player.getCooldowns().addCooldown(this, 4);
+            ml.mypals.meshcut.client.LaserGunHands.shoot(player, stack);
+            long operation=ml.mypals.meshcut.client.CutPrediction.nextOperation();
+            PacketDistributor.sendToServer(new LaserNet.RequestShot(operation));
+            ml.mypals.meshcut.client.CutPrediction.shoot(player,stack,operation);
+        }
         return InteractionResultHolder.consume(stack);
+    }
+
+    /** The server derives the ray itself; the request contains only a prediction ID. */
+    public static void requestShot(ServerPlayer player,long operation) {
+        ItemStack stack=player.getMainHandItem();
+        if(!player.isAlive() || player.isSpectator() || !(stack.getItem() instanceof LaserGunItem item)
+                || player.getCooldowns().isOnCooldown(item)) {
+            PacketDistributor.sendToPlayer(player,new LaserNet.Acknowledged(operation,false,List.of()));return;
+        }
+        player.getCooldowns().addCooldown(item,4);
+        try(var changes=ml.mypals.meshcut.network.CutSyncNet.shot(player.serverLevel())) {
+            shoot(player,stack);
+            PacketDistributor.sendToPlayer(player,new LaserNet.Acknowledged(operation,true,changes.stamps()));
+        } catch(RuntimeException exception) {
+            MeshCut.LOGGER.error("Laser operation {} failed",operation,exception);
+            PacketDistributor.sendToPlayer(player,new LaserNet.Acknowledged(operation,false,List.of()));
+        }
     }
 
     private static void shoot(ServerPlayer player, ItemStack stack) {
@@ -131,7 +152,7 @@ public final class LaserGunItem extends Item {
         level.playSound(null, player.blockPosition(), SoundEvents.BEACON_POWER_SELECT, SoundSource.PLAYERS, 0.45f, 1.8f);
     }
 
-    private static double exitDistance(Vec3 point, Vec3 direction, net.minecraft.world.phys.AABB box) {
+    public static double exitDistance(Vec3 point, Vec3 direction, net.minecraft.world.phys.AABB box) {
         double exit = RANGE;
         double[] p={point.x,point.y,point.z}, d={direction.x,direction.y,direction.z};
         double[] low={box.minX,box.minY,box.minZ}, high={box.maxX,box.maxY,box.maxZ};

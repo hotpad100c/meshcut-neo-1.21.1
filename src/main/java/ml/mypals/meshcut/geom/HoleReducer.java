@@ -22,6 +22,18 @@ public final class HoleReducer {
      */
     public record Reduced(List<CutPlane> planes, List<double[]> vertices) {}
 
+    /** The planes of a region this class has already reduced (so that storing it does not do it again). */
+    public static final class ReducedPlanes extends java.util.AbstractList<CutPlane> implements java.util.RandomAccess {
+        private final CutPlane[] planes;
+
+        private ReducedPlanes(List<CutPlane> planes) {
+            this.planes = planes.toArray(new CutPlane[0]);
+        }
+
+        @Override public CutPlane get(int index) { return planes[index]; }
+        @Override public int size() { return planes.length; }
+    }
+
     /** Regions this small are boxes of the cell lattice (or burn prisms): nothing to gain, and others read them as such. */
     private static final int WORTH_REDUCING = 8;
 
@@ -76,7 +88,7 @@ public final class HoleReducer {
         if (region.size() <= WORTH_REDUCING) {
             return new Reduced(region, vertices);
         }
-        return new Reduced(List.copyOf(kept), vertices);
+        return new Reduced(new ReducedPlanes(kept), vertices);
     }
 
     /** Whether every corner of the part (inside the block) lies within the region: it removes nothing new. */
