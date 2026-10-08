@@ -873,8 +873,17 @@ public final class SlashService {
 
     private record Recheck(ServerLevel level, BlockPos pos) {}
 
-    /** Mimics whose surroundings changed, to be looked at again next tick (server thread only). */
-    private static final Set<Recheck> RECHECKS = new LinkedHashSet<>();
+    /**
+     * Mimics whose surroundings changed, to be looked at again next tick (server thread only). The value says whether
+     * the look has to be made whatever the block is touching (see {@link #queueLocalRecheck}).
+     */
+    private static final Map<Recheck, Boolean> RECHECKS = new LinkedHashMap<>();
+    /**
+     * What each block touched when it was last looked at and found to hang together, as {@link #contacts} sums it up.
+     * A neighbour that changed in a way the block cannot feel (a door opening, a redstone signal) leaves the sum as it
+     * was, and the look is not worth making again.
+     */
+    private static final Map<Recheck, Long> HELD_BY = new HashMap<>();
     private static final int RECHECKS_PER_TICK = 16;
     /** Ticks during which a block that came apart on re-examination is not re-examined again. */
     private static final long SPLIT_COOLDOWN = 40;
@@ -888,12 +897,23 @@ public final class SlashService {
      * broken, say), that may no longer be true, so the block is examined again as if it had just been cut.
      */
     public static void queueRecheck(ServerLevel level, BlockPos pos) {
-        RECHECKS.add(new Recheck(level, pos.immutable()));
+        RECHECKS.put(new Recheck(level, pos.immutable()), Boolean.TRUE);
+    }
+
+    /**
+     * Like {@link #queueRecheck}, for a block whose neighbour changed. What holds a block can only have changed if the
+     * way it touches its neighbours did, so the look is skipped when that is as it was at the last one. (A change further
+     * away, which cut a structure off from the ground, is queued with {@link #queueRecheck}: nothing next to the block
+     * shows it.)
+     */
+    public static void queueLocalRecheck(ServerLevel level, BlockPos pos) {
+        RECHECKS.merge(new Recheck(level, pos.immutable()), Boolean.FALSE, Boolean::logicalOr);
     }
 
     /** Forgets what was queued: it belongs to a server that has stopped. */
     public static void clear() {
         RECHECKS.clear();
+        HELD_BY.clear();
         LAST_SPLIT.clear();
         createdThisTick = 0;
     }
@@ -904,22 +924,24 @@ public final class SlashService {
         if (RECHECKS.isEmpty()) {
             return;
         }
-        List<Recheck> batch = new ArrayList<>();
-        for (var it = RECHECKS.iterator(); it.hasNext() && batch.size() < RECHECKS_PER_TICK; ) {
-            batch.add(it.next());
+        List<Map.Entry<Recheck, Boolean>> batch = new ArrayList<>();
+        for (var it = RECHECKS.entrySet().iterator(); it.hasNext() && batch.size() < RECHECKS_PER_TICK; ) {
+            var next = it.next();
+            batch.add(Map.entry(next.getKey(), next.getValue()));
             it.remove();
         }
-        for (Recheck r : batch) {
+        for (var queued : batch) {
+            Recheck r = queued.getKey();
             Long last = LAST_SPLIT.get(r);
             if (last != null && r.level().getGameTime() - last < SPLIT_COOLDOWN) {
                 continue; // it has just come apart; whatever made it look again is most likely its own doing
             }
             if (createdThisTick >= MAX_LOOSE_PER_TICK) {
-                RECHECKS.add(r); // enough for one tick: later
+                RECHECKS.merge(r, queued.getValue(), Boolean::logicalOr); // enough for one tick: later
                 continue;
             }
             try {
-                recheck(r.level(), r.pos());
+                recheck(r, queued.getValue());
             } catch (RuntimeException e) {
                 MeshCut.LOGGER.error("Re-examining the cut block at {} failed", r.pos(), e);
             }
@@ -971,7 +993,45 @@ public final class SlashService {
         createdThisTick += created[0];
     }
 
-    private static void recheck(ServerLevel level, BlockPos pos) {
+    /**
+     * How a cut block touches what is around it: which cells of each face are solid, and what the neighbour is there
+     * (a plain block, nothing, or a cut block's own cells on the shared face). Two blocks that sum up alike hold each
+     * other the same way, whatever else about the neighbours changed.
+     */
+    private static long contacts(ServerLevel level, BlockPos pos, MimicBlockEntity be) {
+        CellGrid own = be.grid();
+        long sum = own.componentCount();
+        for (int face = 0; face < 6; face++) {
+            for (int i = 0; i < CellGrid.N * CellGrid.N; i++) {
+                sum = sum * 31 + own.faceComponent(face, i); // which piece touches it matters too: pieces hold differently
+            }
+        }
+        for (Direction direction : Direction.values()) {
+            BlockPos next = pos.relative(direction);
+            if (!level.isLoaded(next)) {
+                sum = sum * 31 - 1;
+                continue;
+            }
+            var state = level.getBlockState(next);
+            if (state.getBlock() instanceof MimicBlock && level.getBlockEntity(next) instanceof MimicBlockEntity other) {
+                // the neighbour's cells on the face towards this block (opposite side of the same axis)
+                int face = direction.getAxis().ordinal() * 2 + (direction.getAxisDirection() == Direction.AxisDirection.POSITIVE ? 1 : 0);
+                CellGrid theirs = other.grid();
+                long mask = 0;
+                for (int i = 0; i < CellGrid.N * CellGrid.N; i++) {
+                    if (theirs.faceComponent(face, i) >= 0) mask |= 1L << i;
+                }
+                sum = sum * 31 + mask;
+            } else {
+                sum = sum * 31 + net.minecraft.world.level.block.Block.getId(state);
+            }
+        }
+        return sum;
+    }
+
+    private static void recheck(Recheck key, boolean full) {
+        ServerLevel level = key.level();
+        BlockPos pos = key.pos();
         if (!(level.getBlockState(pos).getBlock() instanceof MimicBlock)
                 || !(level.getBlockEntity(pos) instanceof MimicBlockEntity be)) {
             return;
@@ -981,6 +1041,10 @@ public final class SlashService {
                 && Sable.HELPER.getContaining(level, pos) instanceof ServerSubLevel s && !s.isRemoved() ? s : null;
         if (sub == null && container != null && container.inBounds(pos)) {
             return; // left behind in the plot of a sub-level that is gone: not part of the world, nothing to do
+        }
+        long held = contacts(level, pos, be);
+        if (!full && HELD_BY.getOrDefault(key, held + 1) == held) {
+            return; // it touches what it touched when it was last found to hang together
         }
         Domain dom = new Domain(level, be.getCapMode(), sub);
         if (!dom.loaded(pos)) {
@@ -1001,6 +1065,9 @@ public final class SlashService {
         Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
         int[] created = {0};
         resolve(level, sub, dom, List.of(info), nl, dl, new Vec3(world.x, world.y, world.z), created, false);
+        if (HELD_BY.size() > 65536) HELD_BY.clear();
+        if (created[0] == 0) HELD_BY.put(key, held);
+        else HELD_BY.remove(key);
         if (created[0] > 0) {
             LAST_SPLIT.put(new Recheck(level, pos), level.getGameTime());
             createdThisTick += created[0];

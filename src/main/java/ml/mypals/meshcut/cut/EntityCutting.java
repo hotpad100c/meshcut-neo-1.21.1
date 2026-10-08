@@ -24,10 +24,12 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.entity.PartEntity;
 import net.neoforged.neoforge.event.entity.EntityInvulnerabilityCheckEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -136,7 +138,7 @@ public final class EntityCutting {
             AABB reach = bounds(sweep.quad()).inflate(0.5);
             for (Entity e : level.getEntities(wielder, reach, e -> true)) {
                 // a part of a bigger entity (the ender dragon's wings, say) is hit: the whole entity is cut
-                Entity whole = e instanceof net.neoforged.neoforge.entity.PartEntity<?> part ? part.getParent() : e;
+                Entity whole = e instanceof PartEntity<?> part ? part.getParent() : e;
                 if (whole != wielder && !hit.contains(whole) && cuttable(whole) && crosses(sweep.quad(), e.getBoundingBox())) {
                     hit.add(whole);
                 }
@@ -331,14 +333,9 @@ public final class EntityCutting {
         return built;
     }
 
-    // ---------------------------------------------------------------- which entities, and how they go
 
-    /**
-     * Anything can be cut, except what cannot be hurt at all: an entity made invulnerable, a player in creative or
-     * spectator mode, and the types in the {@link #UNCUTTABLE} tag.
-     */
     private static boolean cuttable(Entity e) {
-        if (e.isRemoved() || e.isInvulnerable() || e.getType().is(UNCUTTABLE)) {
+        if (e.isRemoved() || e.getType().is(UNCUTTABLE)) {
             return false;
         }
         if (e instanceof LivingEntity living) {
@@ -356,16 +353,10 @@ public final class EntityCutting {
                 entity instanceof Player p ? p.getGameProfile().getName() : null);
     }
 
-    /**
-     * What of the entity's saved data its body keeps: enough to draw it, nothing private or bulky. The body's every
-     * block holds a copy, which is saved with the chunk and sent to every client nearby: a player's inventory and
-     * ender chest, or a villager's memories and trades, have no place there.
-     */
     private static CompoundTag drawnData(Entity entity) {
         CompoundTag data = entity.saveWithoutId(new CompoundTag());
         NOT_DRAWN.forEach(data::remove);
         if (entity instanceof Player) {
-            // only what a player is seen wearing and holding
             int selected = data.getInt("SelectedItemSlot");
             ListTag worn = new ListTag();
             for (Tag t : data.getList("Inventory", Tag.TAG_COMPOUND)) {
@@ -376,9 +367,8 @@ public final class EntityCutting {
             }
             data.put("Inventory", worn);
         } else {
-            data.remove("Inventory"); // a villager's, an allay's, a piglin's: not seen
+            data.remove("Inventory");
         }
-        // whatever is still too big (a book in its hand, a modded entity's data) goes, biggest first
         while (data.sizeInBytes() > MAX_LOOK_BYTES && !data.isEmpty()) {
             String biggest = null;
             int size = -1;
@@ -394,7 +384,6 @@ public final class EntityCutting {
         return data;
     }
 
-    /** Who to ask for the entity's limbs: the wielder, or the nearest player that sees it. */
     @Nullable
     private static ServerPlayer clientFor(ServerLevel level, Entity entity, @Nullable Entity wielder) {
         if (wielder instanceof ServerPlayer player && !player.hasDisconnected()) {
@@ -415,12 +404,11 @@ public final class EntityCutting {
                 : wielder instanceof LivingEntity mob ? level.damageSources().mobAttack(mob) : level.damageSources().generic();
         entity.ejectPassengers();
         entity.stopRiding();
-        if (entity instanceof net.minecraft.world.entity.boss.enderdragon.EnderDragon dragon) {
-            // hurt, it would only start its long death; this is the end of it
+        if (entity instanceof EnderDragon dragon) {
             var fight = dragon.getDragonFight();
             ExperienceOrb.award(level, dragon.position(), fight == null || fight.hasPreviouslyKilledDragon() ? 500 : 12000);
             if (fight != null) {
-                fight.setDragonKilled(dragon); // the exit portal opens, the egg appears
+                fight.setDragonKilled(dragon);
             }
             dragon.remove(Entity.RemovalReason.KILLED);
             return true;
@@ -428,14 +416,12 @@ public final class EntityCutting {
         if (entity instanceof LivingEntity living) {
             Vec3 feet = living.position();
             living.hurt(source, Float.MAX_VALUE);
-            if (!living.isDeadOrDying()) {
-                return false; // saved (a totem, say): it stays as it is
+            if (living instanceof Player && living.isDeadOrDying()) {
+                return false;
             }
             if (living instanceof Player player) {
-                // a player's own death goes on as usual (death screen, respawn); only the falling body is not shown
-                player.setInvisible(true);
+                 player.setInvisible(true);
             } else {
-                // its drops fell when it died; the experience would only come at the end of the death animation
                 int xp = living.getExperienceReward(level, wielder);
                 if (xp > 0) {
                     ExperienceOrb.award(level, feet, xp);
@@ -444,7 +430,6 @@ public final class EntityCutting {
             }
             return true;
         }
-        // a thing is broken as a hit breaks it (a framed item first, then the frame), so it drops what it drops
         for (int i = 0; i < 3 && !entity.isRemoved(); i++) {
             entity.hurt(source, Float.MAX_VALUE);
         }
@@ -458,13 +443,6 @@ public final class EntityCutting {
         return true;
     }
 
-    // ---------------------------------------------------------------- building
-
-    /**
-     * Why what a client sent cannot be built, or null if it can. Only its shape is checked (limbs that hang from
-     * limbs that exist, numbers that are numbers and stay within {@link #MAX_REACH}); what the model looks like is
-     * the model's business.
-     */
     @Nullable
     private static String problemWith(List<BodySpec> bodies) {
         if (bodies.size() > BodySpec.MAX_BODIES) {

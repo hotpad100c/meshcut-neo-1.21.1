@@ -77,7 +77,7 @@ public final class WorldGraphs {
         for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
             BlockPos next = pos.relative(dir);
             if (level.isLoaded(next) && level.getBlockState(next).getBlock() instanceof MimicBlock) {
-                SlashService.queueRecheck(level, next);
+                SlashService.queueLocalRecheck(level, next);
             }
         }
         StructureGraph graph = GRAPHS.get(level);

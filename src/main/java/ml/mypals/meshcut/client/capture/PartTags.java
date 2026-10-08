@@ -45,6 +45,8 @@ public final class PartTags {
         Object owner;
         @Nullable
         String name;
+        /** Set by {@link #hinge}: a bone of a model system that tells where its parts hinge (GeckoLib). */
+        boolean hinged;
 
         PoseNode(@Nullable PoseNode parent, int index, PoseStack.Pose live) {
             this.parent = parent;
@@ -146,6 +148,7 @@ public final class PartTags {
         if (top != null) {
             top.owner = owner;
             top.name = name;
+            top.hinged = true;
             top.pose = new Matrix4f(top.live.pose());
         }
     }

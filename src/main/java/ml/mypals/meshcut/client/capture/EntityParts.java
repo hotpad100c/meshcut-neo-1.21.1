@@ -233,6 +233,20 @@ public final class EntityParts {
         if (byNode.size() < 2) {
             return null;
         }
+        // A model system that tells where its bones hinge (GeckoLib) also pushes a level for every cube that is turned
+        // inside a bone. Those are not parts: left alone, each such cube would be a limb of its own and fly off. Only the
+        // bones are parts, and the faces drawn in a bone's cubes are the bone's.
+        if (byNode.keySet().stream().anyMatch(n -> boneOf(n) != null)) {
+            Map<PartTags.PoseNode, List<MeshPoly>> byBone = new IdentityHashMap<>();
+            byNode.forEach((node, polys) -> {
+                PartTags.PoseNode bone = boneOf(node);
+                if (bone != null) {
+                    byBone.computeIfAbsent(bone, k -> new ArrayList<>()).addAll(polys);
+                }
+            });
+            byNode = byBone;
+            MeshCut.LOGGER.debug("Taking an entity apart by its {} drawn bones", byNode.size());
+        }
         List<PartTags.PoseNode> order = new ArrayList<>(byNode.keySet());
         order.sort(java.util.Comparator.comparingInt(n -> n.index));
 
@@ -307,6 +321,16 @@ public final class EntityParts {
                 }
             }
         });
+    }
+
+    /** The bone (a level a model system told it hinges at) that this level is, or is drawn inside; null if none. */
+    @Nullable
+    private static PartTags.PoseNode boneOf(PartTags.PoseNode node) {
+        PartTags.PoseNode bone = node;
+        while (bone != null && !bone.hinged) {
+            bone = bone.parent;
+        }
+        return bone;
     }
 
     /** How much room the faces take (in cubic model pixels), in the frame they were drawn in; flat ones a pixel thick. */

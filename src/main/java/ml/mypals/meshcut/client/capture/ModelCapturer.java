@@ -162,6 +162,7 @@ public final class ModelCapturer {
             try {
                 entity = createEntity(minecraft.level, look);
                 if (entity != null) {
+                    settleAnimations(minecraft, entity, look);
                     RecordingBufferSource recorder = new RecordingBufferSource();
                     recording = true;
                     PartTags.begin();
@@ -343,6 +344,43 @@ public final class ModelCapturer {
         String s = type.toString(); // RenderType[name:state...]
         int open = s.indexOf('['), colon = s.indexOf(':', open + 1);
         return open >= 0 && colon > open ? s.substring(open + 1, colon) : s;
+    }
+
+    /** Ticks a new entity is let go on for before it is recorded, longer than any transition between animations. */
+    private static final int ANIMATION_SETTLE_TICKS = 40;
+
+    /**
+     * GeckoLib animates a model when it is drawn, from the time the entity has been alive: an entity just made has only
+     * started its first animation, which is blended in from the model's rest pose (the arms out, a T), and would be
+     * recorded as that. Drawn once, and again a while later, it has arrived at the animation it plays (its idling).
+     */
+    private static void settleAnimations(Minecraft minecraft, Entity entity, EntityAppearance.Look look) {
+        if (!usesGeckoLib(minecraft.getEntityRenderDispatcher().getRenderer(entity))) {
+            return;
+        }
+        recording = true;
+        try {
+            minecraft.getEntityRenderDispatcher().render(entity, 0, 0, 0, look.bodyYaw(), 0f, new PoseStack(),
+                    new RecordingBufferSource(), 0xF000F0);
+        } finally {
+            recording = false;
+        }
+        entity.tickCount += ANIMATION_SETTLE_TICKS;
+    }
+
+    /** Whether the renderer is one of GeckoLib's (without GeckoLib being needed to know). */
+    private static boolean usesGeckoLib(Object renderer) {
+        for (Class<?> c = renderer.getClass(); c != null; c = c.getSuperclass()) {
+            if (c.getName().startsWith("software.bernie.geckolib.renderer.")) {
+                return true;
+            }
+            for (Class<?> i : c.getInterfaces()) {
+                if (i.getName().startsWith("software.bernie.geckolib.renderer.")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Nullable

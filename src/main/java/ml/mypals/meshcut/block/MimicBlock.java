@@ -192,7 +192,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
                                    boolean movedByPiston) {
         super.neighborChanged(state, level, pos, neighborBlock, neighborPos, movedByPiston);
         if (level instanceof ServerLevel server) {
-            SlashService.queueRecheck(server, pos);
+            SlashService.queueLocalRecheck(server, pos);
         }
     }
 

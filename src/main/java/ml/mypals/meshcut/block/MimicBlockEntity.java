@@ -666,6 +666,11 @@ public class MimicBlockEntity extends BlockEntity {
 
     @Override
     public @NotNull CompoundTag getUpdateTag(HolderLookup.@NotNull Provider registries) {
+        // Someone is being given the whole state (a player who came into range, or one who asked for it): the deltas
+        // are made against what the players tracking this block have, and this one has what it has now, which the
+        // last delta need not start from. The next update is a whole one for all of them, then deltas again. (Changes
+        // that happen while nobody is in range are never sent, so they would otherwise leave the baseline behind.)
+        if (level != null && !level.isClientSide) sentSyncData = null;
         return ml.mypals.meshcut.network.GeometrySync.snapshot(saveWithoutMetadata(registries),syncEpoch,syncRevision);
     }
 
