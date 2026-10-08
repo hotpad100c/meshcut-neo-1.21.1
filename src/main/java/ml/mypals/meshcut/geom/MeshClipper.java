@@ -42,16 +42,12 @@ public final class MeshClipper {
         }
         List<MeshPoly> out = new ArrayList<>();
         for (MeshPoly poly : polys) {
-            if (separated(poly.verts(), region)) {
-                // The polygon is clear of the region: it stays whole. (Cutting it plane by plane would still leave it in
-                // pieces, split along the extensions of planes that never touch it, and every hole makes more of them.)
+            if (HoleReducer.apart(region, poly.verts()) || separated(poly.verts(), region)) {
                 out.add(poly);
                 continue;
             }
             List<MeshPoly> remaining = List.of(poly);
             for (CutPlane plane : region) {
-                // A coplanar face belongs to the inside branch only. Keeping it in both branches duplicates
-                // it once per box plane, and repeated exclusions can grow the mesh exponentially.
                 for (MeshPoly part : remaining) {
                     boolean outside = false;
                     for (int i = 0; i < part.verts().length; i += S) {

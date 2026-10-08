@@ -241,13 +241,11 @@ public final class MimicMesh {
             mesh = CACHE.getIfPresent(data.geometry());
             if (mesh == null) {
                 MimicMesh before = LAST.get(pos.asLong());
-                // A block that is being cut again keeps showing what it showed until the new mesh is ready; one that has
-                // nothing yet is missing until its mesh is (the chunk around it is not held up by the cutting of a model:
-                // a chunk builder thread has a whole chunk to build, and a hundred cut blocks cost seconds).
                 schedule(data, pos);
                 mesh = CACHE.getIfPresent(data.geometry()); // finished meanwhile: nobody would tell this block
                 if (mesh == null) {
-                    return before != null ? before : EMPTY;
+                    MimicMesh preview = previewOf(data);
+                    return preview != null ? preview : before != null ? before : EMPTY;
                 }
             }
             synchronized (CACHE_LOCK) {
@@ -314,6 +312,7 @@ public final class MimicMesh {
             GLOW.invalidateAll();
             SLIT_GLOW.invalidateAll();
             BY_IDENTITY.invalidateAll();
+            PREVIEWS.invalidateAll();
             LAST.clear();
             GLOW_BY_IDENTITY.invalidateAll();
             FRAGMENTS.invalidateAll();
@@ -469,6 +468,10 @@ public final class MimicMesh {
         // the cuts leave a surface in thousands of small pieces: one polygon again where they fit together
         clipped.replaceAll((type, polys) -> PolyMerge.merge(polys));
 
+        return assemble(clipped, model.particle(), caps);
+    }
+
+    private static MimicMesh assemble(Map<RenderType, List<MeshPoly>> clipped, TextureAtlasSprite particle, @Nullable List<MeshPoly> caps) {
         Map<RenderType, List<BakedQuad>[]> byLayer = new LinkedHashMap<>();
         clipped.forEach((type, polys) -> {
             if (polys.isEmpty()) {
@@ -481,11 +484,41 @@ public final class MimicMesh {
             }
             for (MeshPoly poly : polys) {
                 int side = poly.cullFace() < 0 ? SIDES - 1 : poly.cullFace();
-                addQuads(sides[side], poly, model.particle());
+                addQuads(sides[side], poly, particle);
             }
             byLayer.put(type, sides);
         });
-        return new MimicMesh(byLayer, model.particle(), caps);
+        return new MimicMesh(byLayer, particle, caps);
+    }
+
+    /** The previews made, by the data of the block they were made for (a block asks for its mesh at every chunk rebuild). */
+    private static final Cache<MimicRenderData, MimicMesh> PREVIEWS = CacheBuilder.newBuilder()
+            .weakKeys().maximumSize(MAX_CACHED).build();
+    private static final MimicMesh NO_PREVIEW = new MimicMesh(new LinkedHashMap<>(), null, null);
+
+    /**
+     * What a block shows while its smooth mesh is being cut: its cells as they are (see {@link MimicPreview}), so that a
+     * spot that was just hit is open at once instead of being missing or whole for the moment it takes. Null for blocks
+     * that are not plain cubes, which have to wait for the real mesh. Cheap enough for a chunk builder thread: a pass over
+     * the 512 cells and a few clips of the model's faces.
+     */
+    @Nullable
+    private static MimicMesh previewOf(MimicRenderData data) {
+        MimicMesh known = PREVIEWS.getIfPresent(data);
+        if (known != null) {
+            return known == NO_PREVIEW ? null : known;
+        }
+        MimicMesh made = null;
+        if (data.entity() == null && !ModelCapturer.hasBlockEntityRenderer(data.target())) {
+            ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
+            if (capBase(model.opaque(), data) == Polytope.cube()) {
+                Map<RenderType, List<MeshPoly>> polys = MimicPreview.build(data, model.byChunkType(), model.particleUv(),
+                        model.particle(), RenderType.cutout());
+                made = assemble(polys, model.particle(), null);
+            }
+        }
+        PREVIEWS.put(data, made != null ? made : NO_PREVIEW);
+        return made;
     }
 
     /**
@@ -690,7 +723,14 @@ public final class MimicMesh {
                         others.add(region.get(k));
                     }
                 }
-                List<MeshPoly> wall = CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite);
+                List<MeshPoly> wall;
+                if (opaque == Polytope.cube() && region instanceof HoleReducer.ReducedPlanes prepared) {
+                    // a block that is a plain cube: the wall was worked out with the region (and is one polygon, not triangles)
+                    MeshPoly made = prepared.wall(j, uv, sprite);
+                    wall = made == null ? List.of() : planes.isEmpty() ? List.of(made) : MeshClipper.clip(List.of(made), planes);
+                } else {
+                    wall = CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite);
+                }
                 wall = HoleWalls.exposed(wall, r, excluded); // nothing is behind a wall where another part was cut out too
                 for (MeshPoly face : wall) {
                     if (backed(face, region, planes, excluded)) {

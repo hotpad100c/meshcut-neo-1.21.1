@@ -16,22 +16,143 @@ public final class HoleReducer {
     private static final List<CutPlane> CUBE = List.of(new CutPlane(-1, 0, 0, 0), new CutPlane(1, 0, 0, 1),
             new CutPlane(0, -1, 0, 0), new CutPlane(0, 1, 0, 1), new CutPlane(0, 0, -1, 0), new CutPlane(0, 0, 1, 1));
 
-    /**
-     * @param planes   the planes that bound the part inside the block
-     * @param vertices the corners of the part inside the block, {x, y, z} each (for containment tests)
-     */
     public record Reduced(List<CutPlane> planes, List<double[]> vertices) {}
 
-    /** The planes of a region this class has already reduced (so that storing it does not do it again). */
     public static final class ReducedPlanes extends java.util.AbstractList<CutPlane> implements java.util.RandomAccess {
         private final CutPlane[] planes;
+        private volatile float[][] walls;
+        private volatile double[] bounds;
 
-        private ReducedPlanes(List<CutPlane> planes) {
+        private ReducedPlanes(List<CutPlane> planes, float[][] walls) {
             this.planes = planes.toArray(new CutPlane[0]);
+            this.walls = walls;
         }
 
         @Override public CutPlane get(int index) { return planes[index]; }
         @Override public int size() { return planes.length; }
+
+        private float[][] walls() {
+            float[][] w = walls;
+            if (w == null) {
+                w = new float[planes.length][];
+                for (int j = 0; j < planes.length; j++) {
+                    w[j] = wallOn(this, j);
+                }
+                walls = w;
+            }
+            return w;
+        }
+
+        /** {minX, minY, minZ, maxX, maxY, maxZ} of the part inside the block (the whole block if it has no wall in it). */
+        public double[] bounds() {
+            double[] b = bounds;
+            if (b == null) {
+                b = new double[]{Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+                boolean any = false;
+                for (float[] wall : walls()) {
+                    if (wall == null) continue;
+                    any = true;
+                    for (int i = 0; i < wall.length; i += MeshPoly.STRIDE) {
+                        for (int a = 0; a < 3; a++) {
+                            b[a] = Math.min(b[a], wall[i + a]);
+                            b[a + 3] = Math.max(b[a + 3], wall[i + a]);
+                        }
+                    }
+                }
+                if (!any) b = new double[]{0, 0, 0, 1, 1, 1};
+                bounds = b;
+            }
+            return b;
+        }
+
+        /**
+         * The wall on plane {@code j}, facing into the part, as a polygon to draw: texture coordinates spread over the
+         * section of the block by the plane (as {@code CapBuilder} does), or null if the plane has no wall in the block.
+         */
+        public MeshPoly wall(int j, float[] uv, Object sprite) {
+            float[] wall = walls()[j];
+            if (wall == null) return null;
+            CutPlane facing = planes[j].flipped(); // the wall is seen from inside the part
+            double nx = facing.nx(), ny = facing.ny(), nz = facing.nz();
+            double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
+            double tx = hy * nz, ty = -hx * nz, tz = hx * ny - hy * nx;
+            double tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
+            tx /= tl; ty /= tl; tz /= tl;
+            double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
+            // the section of the block by the plane decides how the texture is spread
+            double minA = Double.MAX_VALUE, minB = Double.MAX_VALUE, maxA = -Double.MAX_VALUE, maxB = -Double.MAX_VALUE;
+            for (MeshPoly section : MeshClipper.clip(List.of(squareIn(planes[j])), CUBE)) {
+                float[] s = section.verts();
+                for (int i = 0; i < s.length; i += MeshPoly.STRIDE) {
+                    double a = s[i] * tx + s[i + 1] * ty + s[i + 2] * tz, b = s[i] * bx + s[i + 1] * by + s[i + 2] * bz;
+                    minA = Math.min(minA, a); maxA = Math.max(maxA, a);
+                    minB = Math.min(minB, b); maxB = Math.max(maxB, b);
+                }
+            }
+            double scale = 1.0 / Math.max(1.0, Math.max(maxA - minA, maxB - minB));
+            int n = wall.length / MeshPoly.STRIDE;
+            float[] v = new float[wall.length];
+            for (int i = 0; i < n; i++) {
+                // reversed: the stored polygon runs counter-clockwise seen from outside the part
+                int from = (n - 1 - i) * MeshPoly.STRIDE, to = i * MeshPoly.STRIDE;
+                v[to] = wall[from]; v[to + 1] = wall[from + 1]; v[to + 2] = wall[from + 2];
+                double a = v[to] * tx + v[to + 1] * ty + v[to + 2] * tz, b = v[to] * bx + v[to + 1] * by + v[to + 2] * bz;
+                v[to + 3] = uv[0] + (uv[2] - uv[0]) * (float) ((a - minA) * scale);
+                v[to + 4] = uv[1] + (uv[3] - uv[1]) * (float) ((b - minB) * scale);
+            }
+            return new MeshPoly(v, (float) nx, (float) ny, (float) nz, -1, 0, 0xFFFFFFFF, sprite, -1, true);
+        }
+    }
+
+    /** A region as it is, with its walls and bounds to be worked out when they are first asked for. */
+    public static ReducedPlanes adopt(List<CutPlane> region) {
+        return region instanceof ReducedPlanes already ? already : new ReducedPlanes(region, null);
+    }
+
+    /** The wall of the region on plane {@code j} inside the unit cube, {x,y,z,u,v} per vertex; null if there is none. */
+    private static float[] wallOn(List<CutPlane> region, int j) {
+        CutPlane plane = region.get(j);
+        if (!crossesCube(plane)) return null;
+        List<CutPlane> limits = new ArrayList<>(region.size() + 5);
+        for (int k = 0; k < region.size(); k++) {
+            if (k != j) limits.add(region.get(k));
+        }
+        limits.addAll(CUBE);
+        float[] best = null;
+        double bestArea = MIN_FACE_AREA;
+        for (MeshPoly poly : MeshClipper.clip(List.of(squareIn(plane)), limits)) {
+            double area = MeshClipper.area(poly.verts());
+            if (area > bestArea) {
+                bestArea = area;
+                best = poly.verts();
+            }
+        }
+        return best;
+    }
+
+    /**
+     * The bounding box of a region inside the block, {minX, minY, minZ, maxX, maxY, maxZ}; the whole block when it is not
+     * known (nothing is then ruled out by it).
+     */
+    public static double[] bounds(List<CutPlane> region) {
+        if (region instanceof ReducedPlanes prepared) return prepared.bounds();
+        return WHOLE;
+    }
+
+    private static final double[] WHOLE = {0, 0, 0, 1, 1, 1};
+
+    /** Whether the polygon lies outside the bounding box of the region: they cannot meet. */
+    public static boolean apart(List<CutPlane> region, float[] verts) {
+        if (!(region instanceof ReducedPlanes prepared)) return false;
+        double[] b = prepared.bounds();
+        double lx = Double.MAX_VALUE, ly = lx, lz = lx, hx = -Double.MAX_VALUE, hy = hx, hz = hx;
+        for (int i = 0; i < verts.length; i += MeshPoly.STRIDE) {
+            lx = Math.min(lx, verts[i]); hx = Math.max(hx, verts[i]);
+            ly = Math.min(ly, verts[i + 1]); hy = Math.max(hy, verts[i + 1]);
+            lz = Math.min(lz, verts[i + 2]); hz = Math.max(hz, verts[i + 2]);
+        }
+        final double eps = 1e-4;
+        return hx < b[0] - eps || lx > b[3] + eps || hy < b[1] - eps || ly > b[4] + eps || hz < b[2] - eps || lz > b[5] + eps;
     }
 
     /** Regions this small are boxes of the cell lattice (or burn prisms): nothing to gain, and others read them as such. */
@@ -43,31 +164,15 @@ public final class HoleReducer {
      */
     public static Reduced reduce(List<CutPlane> region) {
         List<CutPlane> kept = new ArrayList<>();
+        List<float[]> walls = new ArrayList<>();
         List<double[]> vertices = new ArrayList<>();
         for (int j = 0; j < region.size(); j++) {
-            CutPlane plane = region.get(j);
-            if (!crossesCube(plane)) {
-                continue; // wholly on the inner side of the plane (or wholly outside): it bounds nothing here
-            }
-            List<CutPlane> limits = new ArrayList<>(region.size() + 5);
-            for (int k = 0; k < region.size(); k++) {
-                if (k != j) {
-                    limits.add(region.get(k));
-                }
-            }
-            limits.addAll(CUBE);
-            List<MeshPoly> face = MeshClipper.clip(List.of(squareIn(plane)), limits);
-            double area = 0;
-            for (MeshPoly poly : face) {
-                area += MeshClipper.area(poly.verts());
-            }
-            if (area > MIN_FACE_AREA) {
-                kept.add(plane);
-                for (MeshPoly poly : face) {
-                    float[] v = poly.verts();
-                    for (int i = 0; i < poly.vertexCount(); i++) {
-                        vertices.add(new double[]{v[i * MeshPoly.STRIDE], v[i * MeshPoly.STRIDE + 1], v[i * MeshPoly.STRIDE + 2]});
-                    }
+            float[] wall = wallOn(region, j);
+            if (wall != null) {
+                kept.add(region.get(j));
+                walls.add(wall);
+                for (int i = 0; i < wall.length / MeshPoly.STRIDE; i++) {
+                    vertices.add(new double[]{wall[i * MeshPoly.STRIDE], wall[i * MeshPoly.STRIDE + 1], wall[i * MeshPoly.STRIDE + 2]});
                 }
             }
         }
@@ -88,7 +193,7 @@ public final class HoleReducer {
         if (region.size() <= WORTH_REDUCING) {
             return new Reduced(region, vertices);
         }
-        return new Reduced(new ReducedPlanes(kept), vertices);
+        return new Reduced(new ReducedPlanes(kept, walls.toArray(new float[0][])), vertices);
     }
 
     /** Whether every corner of the part (inside the block) lies within the region: it removes nothing new. */

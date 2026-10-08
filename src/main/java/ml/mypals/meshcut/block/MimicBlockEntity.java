@@ -396,7 +396,7 @@ public class MimicBlockEntity extends BlockEntity {
         if (data == null) {
             synchronized (cutLock) {
                 List<List<CutPlane>> excludedCopy = new ArrayList<>();
-                excluded.forEach(region -> excludedCopy.add(List.copyOf(region)));
+                excluded.forEach(region -> excludedCopy.add(region instanceof HoleReducer.ReducedPlanes ? region : List.copyOf(region)));
                 BlockState replaced = replaced();
                 data = new MimicRenderData(replaced != null ? replaced : targetState, replaced != null ? null : targetBeTag, List.copyOf(planes), List.copyOf(excludedCopy),
                         List.copyOf(patches), capMode, appearance, List.copyOf(glowCuts));
@@ -595,7 +595,8 @@ public class MimicBlockEntity extends BlockEntity {
             for (Tag region : tag.getList("excluded", Tag.TAG_LIST)) {
                 List<CutPlane> regionPlanes = new ArrayList<>();
                 readPlanes((ListTag) region, regionPlanes);
-                excluded.add(regionPlanes.size() > LEGACY_REGION_PLANES ? reducedRegions(List.of(regionPlanes)).stream().findFirst().orElse(null) : regionPlanes);
+                excluded.add(regionPlanes.size() > LEGACY_REGION_PLANES ? reducedRegions(List.of(regionPlanes)).stream().findFirst().orElse(null)
+                        : regionPlanes.size() > 12 ? HoleReducer.adopt(regionPlanes) : regionPlanes);
                 if (excluded.get(excluded.size() - 1) == null) excluded.remove(excluded.size() - 1);
             }
             patches.clear();

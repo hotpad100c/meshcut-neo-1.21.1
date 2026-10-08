@@ -20,15 +20,24 @@ public final class HoleWalls {
      */
     public static List<MeshPoly> exposed(List<MeshPoly> wall, int index, List<List<CutPlane>> excluded) {
         List<CutPlane> region = excluded.get(index);
+        double[] near = boundsOf(wall);
         for (int q = 0; q < excluded.size() && !wall.isEmpty(); q++) {
             List<CutPlane> other = excluded.get(q);
             if (other == region) {
                 continue;
             }
+            if (apart(HoleReducer.bounds(other), near)) {
+                continue; // nowhere near this wall (a box test costs nothing beside the plane tests below)
+            }
             // Most holes of a block are nowhere near a given wall: a plane of theirs with the whole wall behind it says so
             // at once (it is also what makes the comparisons below, which are quadratic in the planes, rare).
             if (clearOf(wall, other)) {
                 continue;
+            }
+            // Pieces of the wall wholly inside the other part are gone at once, without cutting anything.
+            wall = withoutInside(wall, other);
+            if (wall.isEmpty()) {
+                break;
             }
             if (CutPlane.sameRegion(other, region)) {
                 continue; // the same part cut out twice has one set of walls (the caller draws it once)
@@ -52,6 +61,49 @@ public final class HoleWalls {
             wall = kept;
         }
         return wall;
+    }
+
+    private static double[] boundsOf(List<MeshPoly> polys) {
+        double[] b = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+        for (MeshPoly poly : polys) {
+            float[] v = poly.verts();
+            for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
+                for (int a = 0; a < 3; a++) {
+                    b[a] = Math.min(b[a], v[i + a]);
+                    b[a + 3] = Math.max(b[a + 3], v[i + a]);
+                }
+            }
+        }
+        return b;
+    }
+
+    private static boolean apart(double[] a, double[] b) {
+        final double eps = 1e-4;
+        for (int axis = 0; axis < 3; axis++) {
+            if (a[axis + 3] < b[axis] - eps || b[axis + 3] < a[axis] - eps) return true;
+        }
+        return false;
+    }
+
+    private static List<MeshPoly> withoutInside(List<MeshPoly> wall, List<CutPlane> region) {
+        List<MeshPoly> kept = null;
+        for (int i = 0; i < wall.size(); i++) {
+            if (insideStrictly(wall.get(i).verts(), region)) {
+                if (kept == null) kept = new ArrayList<>(wall.subList(0, i));
+            } else if (kept != null) {
+                kept.add(wall.get(i));
+            }
+        }
+        return kept == null ? wall : kept;
+    }
+
+    private static boolean insideStrictly(float[] v, List<CutPlane> region) {
+        for (CutPlane plane : region) {
+            for (int i = 0; i < v.length; i += MeshPoly.STRIDE) {
+                if (plane.signedDistance(v[i], v[i + 1], v[i + 2]) <= 1e-7) return false;
+            }
+        }
+        return true;
     }
 
     private static boolean clearOf(List<MeshPoly> wall, List<CutPlane> region) {
