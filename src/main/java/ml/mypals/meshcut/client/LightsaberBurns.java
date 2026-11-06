@@ -48,7 +48,6 @@ public final class LightsaberBurns {
     @Nullable private static ClientLevel burnLevel;
 
     private static final long CLOSING_TICKS = 100;
-    // Cosmetic contacts may skip a frame; actual server cuts are unaffected.
     private static long contactDeadline;
 
     private static final class Mark {
@@ -58,7 +57,6 @@ public final class LightsaberBurns {
         final BlockPos block;
         final Object version;
         @Nullable final UUID subLevel;
-        /** When the block changed under the mark (-1 while it has not), and how hot the mark was then. */
         long closedAt = -1;
         float closedHeat;
 
@@ -78,7 +76,6 @@ public final class LightsaberBurns {
             return closedAt < 0 ? heat : (float) (closedHeat * Math.max(0, 1 - (now - closedAt) / CLOSING_TICKS));
         }
 
-        /** 1 while open; falls to 0 as the mark closes. */
         float open(double now) {
             return closedAt < 0 ? 1 : (float) Math.max(0, 1 - (now - closedAt) / CLOSING_TICKS);
         }
@@ -106,12 +103,11 @@ public final class LightsaberBurns {
         if (level == null) return;
         long now = level.getGameTime();
         while (!MARKS.isEmpty() && now - MARKS.peekFirst().time > CHAR_LIFETIME) MARKS.pollFirst();
-        // Geometry invalidation needs a tick check, not thousands of block-entity lookups per render frame.
         Map<BlockPos, Object> versions = new java.util.HashMap<>();
         MARKS.removeIf(mark -> {
             if (versions.computeIfAbsent(mark.block, pos -> LightsaberSurfaces.version(level, pos)) == mark.version) return false;
-            if (level.getBlockState(mark.block).isAir()) return true; // the block went with a fragment
-            if (mark.closedAt < 0) { // cut: the mark cools and darkens for a few seconds instead of vanishing at once
+            if (level.getBlockState(mark.block).isAir()) return true;
+            if (mark.closedAt < 0) {
                 mark.closedHeat = mark.heat(now);
                 mark.closedAt = now;
             }
@@ -133,7 +129,6 @@ public final class LightsaberBurns {
             if (movement > 8) continue;
             Vec3[] sweep;
             if (movement < 0.01) {
-                // A stationary contact still chars the surface. Refresh it at 5 Hz without accumulating every tick.
                 if (before != null && now % 4 != 0) continue;
                 Vec3 direction = blade.direction().normalize();
                 Vec3 helper = Math.abs(direction.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
@@ -257,7 +252,7 @@ public final class LightsaberBurns {
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
         var container = SubLevelContainer.getContainer(level);
         VertexConsumer consumer = buffers.getBuffer(LightsaberRenderTypes.SCORCH);
-        VertexConsumer glow = Bloom.usable() ? Bloom.consumer(BloomRenderTypes.TRIANGLES) : null; // the embers also glow
+        VertexConsumer glow = Bloom.usable() ? Bloom.consumer(BloomRenderTypes.TRIANGLES) : null;
         for (Mark mark : MARKS) {
             Pose3dc pose = null;
             if (mark.subLevel != null) {
@@ -282,7 +277,6 @@ public final class LightsaberBurns {
                                  Mark mark, float[] vertices, double lift, float r, float g, float b, float alpha) {
         for (int i = 1; i + 1 < vertices.length / 3; i++) {
             for (int j : new int[]{0, i, i + 1}) {
-                // in double: a sub-level's plot lies some twenty million blocks out, where a float misses by whole blocks
                 Vec3 p = new Vec3((double) vertices[j * 3] + mark.block.getX(), (double) vertices[j * 3 + 1] + mark.block.getY(),
                         (double) vertices[j * 3 + 2] + mark.block.getZ()).add(mark.normal.scale(pose == null ? lift : lift * SUB_LEVEL_LIFT));
                 if (pose != null) p = pose.transformPosition(p);

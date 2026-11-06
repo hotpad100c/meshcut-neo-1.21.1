@@ -5,12 +5,6 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * The exact convex pieces a block is divided into by the cuts that go right through it: the block (within its real
- * cuts) divided by each such cut in turn, keeping every side that has a real amount of volume.
- * Each piece is a list of half-spaces that begins with the real cuts, so what a piece adds to them is what bounds it
- * against the others.
- */
 public final class Arrangement {
     private static final double MIN_VOLUME = 0.003;
     private static final int MAX_PIECES = 64;
@@ -32,7 +26,7 @@ public final class Arrangement {
                     next.add(keep);
                     next.add(other);
                 } else {
-                    next.add(piece); // this cut does not divide the piece
+                    next.add(piece);
                 }
             }
             if (next.size() > MAX_PIECES) {

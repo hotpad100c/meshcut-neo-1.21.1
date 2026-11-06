@@ -13,9 +13,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/** The {@link StructureGraph} of each server world, and the hooks that keep it up to date. */
 public final class WorldGraphs {
-    /** At most this many mimics are looked at again when a section's groups were split by an edit. */
     private static final int MAX_RECHECKS = 64;
 
     private static final Map<ServerLevel, StructureGraph> GRAPHS = new WeakHashMap<>();
@@ -46,16 +44,14 @@ public final class WorldGraphs {
         return graph;
     }
 
-    /** A block was replaced (called from the chunk, for every change of block state on the server). */
     public static void onBlockChanged(ServerLevel level, BlockPos pos, BlockState old, BlockState now) {
         ml.mypals.meshcut.network.CutSyncNet.changed(level,pos);
         if (old.getBlock() instanceof MimicBlock && now.getBlock() instanceof MimicBlock) {
-            return; // only the refresh flag flipped; what the block is made of is reported by its block entity
+            return;
         }
         update(level, pos);
     }
 
-    /** What a mimic is made of changed. */
     public static void onNodesChanged(ServerLevel level, BlockPos pos) {
         ml.mypals.meshcut.network.CutSyncNet.changed(level,pos);
         update(level, pos);
@@ -73,7 +69,6 @@ public final class WorldGraphs {
         if (batch != null) { batch.pending.add(pos.immutable()); return; }
         StructureGraph current = GRAPHS.get(level);
         if (current != null && current.unchanged(pos.getX(), pos.getY(), pos.getZ())) return;
-        // a cut block next to the change may have lost (or gained) what holds it, whatever section it is in
         for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
             BlockPos next = pos.relative(dir);
             if (level.isLoaded(next) && level.getBlockState(next).getBlock() instanceof MimicBlock) {
@@ -86,7 +81,6 @@ public final class WorldGraphs {
         }
         SectionIndex split = graph.update(pos.getX(), pos.getY(), pos.getZ());
         if (split != null) {
-            // some group of the section was split: cut blocks in it may have lost what held them
             int n = 0;
             for (int cell : split.mimicCells()) {
                 if (n++ >= MAX_RECHECKS) {

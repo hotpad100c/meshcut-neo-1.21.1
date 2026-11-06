@@ -81,7 +81,7 @@ public final class LightsaberRenderer {
                     time, entry.getKey(), palettes.get(entry.getKey()), !Bloom.usable());
         }
         buffers.endBatch(beamType);
-        if (Bloom.usable() && !blades.isEmpty()) { // the same beam again, into the glow buffer
+        if (Bloom.usable() && !blades.isEmpty()) {
             VertexConsumer glow = Bloom.consumer(BloomRenderTypes.QUADS);
             for (var entry : blades.entrySet()) {
                 Blade blade = entry.getValue();

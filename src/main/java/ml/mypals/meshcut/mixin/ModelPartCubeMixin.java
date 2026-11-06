@@ -10,7 +10,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Tells a recording of an entity which cube of a model part is drawing (see {@link PartTags}). */
 @Mixin(ModelPart.Cube.class)
 public abstract class ModelPartCubeMixin {
     @Inject(require = 0, method = "compile", at = @At("HEAD"))

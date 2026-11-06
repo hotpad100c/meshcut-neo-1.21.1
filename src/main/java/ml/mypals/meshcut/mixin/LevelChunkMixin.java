@@ -13,14 +13,12 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Tells the structure graph about every block that changes on the server, whoever changed it. */
 @Mixin(LevelChunk.class)
 public abstract class LevelChunkMixin {
     @Shadow
     @Final
     private Level level;
 
-    /** A client is told of a mimic before it is told what the mimic holds: remember what it replaces meanwhile. */
     @Inject(method = "setBlockState", at = @At("HEAD"))
     private void meshcut$replaced(BlockPos pos, BlockState state, boolean isMoving, CallbackInfoReturnable<BlockState> cir) {
         if (level.isClientSide && state.getBlock() instanceof ml.mypals.meshcut.block.MimicBlock) {

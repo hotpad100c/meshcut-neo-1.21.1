@@ -1,9 +1,9 @@
 #version 150
 
-uniform sampler2D Sampler0; // depth of the opaque scene
-uniform sampler2D Sampler1; // the glow this frame: what shines, sharp
-uniform sampler2D Sampler2; // the bloom this frame: the glow blurred
-uniform vec4 Params;        // aspect, width, gain, bloom strength
+uniform sampler2D Sampler0;
+uniform sampler2D Sampler1;
+uniform sampler2D Sampler2;
+uniform vec4 Params;
 uniform vec4 PoseA0;
 uniform vec4 PoseB0;
 uniform vec4 PoseA1;
@@ -23,13 +23,6 @@ out vec4 fragColor;
 const int POSES = 6;
 const int STEPS = 4;
 
-// PoseA: base.xy, tip.xy of the blade in clip space; PoseB: base depth, tip depth (0..1), age (0 now .. 1 oldest), valid.
-// Pose 0 is the blade as it is now.
-//
-// The blade is swept from pose to pose, as many positions in between as the shutter is open for. Where a position of
-// the blade passed over a pixel, the pixel takes the light of that same point of the blade as it shines now: the glow
-// and the bloom of this frame, read where that point is now. The trail is the blade's own light, dragged back along its
-// path: its colour, its width, its halo, whatever the blade looks like.
 void main() {
     vec4 A[POSES] = vec4[POSES](PoseA0, PoseA1, PoseA2, PoseA3, PoseA4, PoseA5);
     vec4 B[POSES] = vec4[POSES](PoseB0, PoseB1, PoseB2, PoseB3, PoseB4, PoseB5);
@@ -63,15 +56,13 @@ void main() {
             float distance = length(p - past);
             float edgeFade = 1.0 - smoothstep(width * 2.0, width * 4.0, distance);
             vec2 current = mix(nowBase, nowTip, s);
-            // A stationary blade is already present in the main image and bloom. Do not add it again
-            // for every shutter sample, especially where the clamped segment becomes a disc at the tip.
             float motion = smoothstep(width * 0.05, width * 0.75, length(current - past));
             if (edgeFade <= 0.0 || motion <= 0.0) {
-                continue; // only the blade's light, not other glowing things near where it is now
+                continue;
             }
             float depth = mix(mix(B[i].x, B[i].y, s), mix(B[i + 1].x, B[i + 1].y, s), u);
             if (depth > sceneDepth + 0.0003) {
-                continue; // behind something
+                continue;
             }
             vec2 now = current + (p - past);
             vec2 uv = (now / scale) * 0.5 + 0.5;
@@ -82,6 +73,5 @@ void main() {
             sum += light * w * motion * edgeFade;
         }
     }
-    // Missing/occluded samples contribute no light without brightening the remaining samples.
     fragColor = vec4(sum * Params.z / max(weightSum, 1e-6), 0.0);
 }

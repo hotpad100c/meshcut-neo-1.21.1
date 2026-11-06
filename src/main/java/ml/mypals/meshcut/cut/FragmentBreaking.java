@@ -20,16 +20,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Breaking a cut block takes out only the piece of it the player is pointing at. */
 public final class FragmentBreaking {
     private static final double STEP = 1.0 / 32;
 
-    /**
-     * Removes the fragment of the mimic the player is looking at, leaving the others where they are.
-     *
-     * @return {@code false} if the block is to be broken as a whole: it is not cut into several pieces, or the player is
-     *         sneaking. Both convex and concave fragments can be removed independently.
-     */
     public static boolean breakPointed(ServerLevel level, BlockPos pos, MimicBlockEntity be, Player player) {
         CellGrid grid = be.grid();
         if (grid.componentCount() < 2) {
@@ -46,12 +39,10 @@ public final class FragmentBreaking {
         if (result == null) return false;
         MimicBlock.place(level, pos, be.getTargetState(), new ArrayList<>(be.getPlanes()), result.excluded(), result.patches(),
                 be.getCapMode(), be.getTargetBeTag(), be.getAppearance());
-        // what is left may have lost what held it
         SlashService.queueRecheck(level, pos);
         return true;
     }
 
-    /** The fragment the player's line of sight first meets inside the block, or -1. */
     private static int pointedFragment(ServerLevel level, BlockPos pos, CellGrid grid, Player player) {
         Vector3d eye = new Vector3d(player.getEyePosition().x, player.getEyePosition().y, player.getEyePosition().z);
         Vec3 lookVec = player.getLookAngle();
@@ -61,7 +52,6 @@ public final class FragmentBreaking {
             eye = sub.logicalPose().transformPositionInverse(eye);
             look = sub.logicalPose().transformNormalInverse(look);
         }
-        // into the block's own frame
         return FragmentPick.pick(grid, new double[]{eye.x - pos.getX(), eye.y - pos.getY(), eye.z - pos.getZ()},
                 new double[]{look.x, look.y, look.z});
     }

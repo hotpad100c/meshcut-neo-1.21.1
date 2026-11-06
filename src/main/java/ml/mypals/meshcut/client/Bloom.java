@@ -39,25 +39,16 @@ public final class Bloom {
 
     private static final MultiBufferSource.BufferSource BUFFERS = MultiBufferSource.immediate(new ByteBufferBuilder(1 << 18));
 
-    /**
-     * What the frame's composition needs from the stage it was set up in. With a shader pack in use the scene is not
-     * finished until the pack has made its final pass, which is after every stage: the glow is composed then (see
-     * {@link #composeDeferred}), onto what the pack has made of the frame, the same as it is onto the plain one.
-     */
     record Frame(float partial, Matrix4f toClip, Vec3 camera, Matrix4f projection, Matrix4f modelView) {}
 
     private static Frame deferred;
-    /** The framebuffer that was bound before the glow's was, to bind again after. */
     private static int previousFramebuffer;
-    /** Texture of the depth of the opaque scene as the frame's own pipeline has it (a shader pack's, if one runs). */
     private static int sceneDepthTexture;
     private static ShaderInstance down, up, depthCopy;
     private static RenderTarget glow;
     private static RenderTarget[] mips;
     private static boolean active;
-    /** The depth of the opaque scene has been copied into the glow buffer this frame. */
     private static boolean haveDepth;
-    /** Frames left in which the glow is expected again, so that its depth is kept ready. */
     private static int recent;
     private static final int RECENT_FRAMES = 10;
     private static float[] queue = new float[7 * 256];
@@ -76,17 +67,14 @@ public final class Bloom {
                 shader -> depthCopy = shader);
     }
 
-    /** Whether the first-person hands are drawn after the bloom, so that it does not lie over them (not with shaders). */
     static boolean defersHands() {
         return usable() && !IrisCompat.shadersInUse();
     }
 
-    /** Asks for the depth of the opaque scene to be kept this frame and the next few (the motion blur reads it). */
     static void wantDepth() {
         recent = RECENT_FRAMES;
     }
 
-    /** The texture of the opaque scene's depth: the snapshot taken before the translucent layers, if there is one. */
     static int sceneDepth() {
         return haveDepth && glow != null ? glow.getDepthTextureId() : Minecraft.getInstance().getMainRenderTarget().getDepthTextureId();
     }
@@ -106,7 +94,6 @@ public final class Bloom {
         }
     }
 
-    /** A vertex of a triangle to glow, in camera-relative space; drawn when the glow of the frame is composed. */
     public static void queue(float x, float y, float z, float r, float g, float b, float a) {
         if (queued + 7 > queue.length) {
             queue = java.util.Arrays.copyOf(queue, queue.length * 2);
@@ -128,7 +115,6 @@ public final class Bloom {
         }
     }
 
-    /** Back to what was bound before the glow's buffer: the scene's own, a shader pack's or the main target. */
     static void bindMain() {
         if (previousFramebuffer > 0) {
             GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, previousFramebuffer);
@@ -137,11 +123,6 @@ public final class Bloom {
         }
     }
 
-    /**
-     * Copies the depth of what is being drawn into (whatever the frame's pipeline has bound: the main target, or a
-     * shader pack's buffers) into the glow buffer, by a pass that reads it as a texture: a shader pack's depth is not
-     * of the format of ours, which a plain copy of the buffers needs.
-     */
     private static void copySceneDepth() {
         int fb = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         int source = Minecraft.getInstance().getMainRenderTarget().getDepthTextureId();
@@ -209,14 +190,14 @@ public final class Bloom {
         recent = RECENT_FRAMES;
         RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
         ensureTargets();
-        if (!haveDepth) { // the glow is new this frame: the translucent layers are in the depth already
+        if (!haveDepth) {
             copySceneDepth();
             haveDepth = true;
         }
         previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         glow.bindWrite(true);
         RenderSystem.clearColor(0, 0, 0, 0);
-        RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT, Minecraft.ON_OSX); // not the depth: that is the opaque scene's
+        RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT, Minecraft.ON_OSX);
         bindMain();
         RenderSystem.viewport(0, 0, main.width, main.height);
         active = true;
@@ -249,7 +230,6 @@ public final class Bloom {
         return target;
     }
 
-    /** After everything else of the level is drawn: the glow is blurred and added to the scene. */
     @SubscribeEvent
     public static void compose(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_WEATHER) {
@@ -261,13 +241,12 @@ public final class Bloom {
                 event.getCamera().getPosition(), new Matrix4f(RenderSystem.getProjectionMatrix()),
                 new Matrix4f(RenderSystem.getModelViewMatrix()));
         if (IrisCompat.shadersInUse()) {
-            deferred = frame; // composed once the shader pack has made its final pass
+            deferred = frame;
             return;
         }
         finish(frame);
     }
 
-    /** After the whole of the level is drawn (by {@code GameRendererBloomMixin}): the glow of a frame under a shader pack. */
     public static void composeDeferred() {
         Frame frame = deferred;
         deferred = null;
@@ -277,7 +256,6 @@ public final class Bloom {
     }
 
     private static void finish(Frame frame) {
-        // the motion blur reads the opaque scene's depth: taken now, before the snapshot of it is let go of below
         int depth = sceneDepth();
         if (!usable() || (!active && queued == 0)) {
             queued = 0;
@@ -290,8 +268,6 @@ public final class Bloom {
         }
         begin();
         MultiBufferSource.BufferSource buffers = BUFFERS;
-        // what blocks queued (the lava on cut faces) is drawn with the matrices of the stage it was queued in: by the
-        // time a shader pack's frame is composed, those are no longer the ones set
         Matrix4f projection = new Matrix4f(RenderSystem.getProjectionMatrix());
         var sorting = RenderSystem.getVertexSorting();
         RenderSystem.setProjectionMatrix(frame.projection(), com.mojang.blaze3d.vertex.VertexSorting.DISTANCE_TO_ORIGIN);
@@ -316,7 +292,7 @@ public final class Bloom {
         active = false;
         haveDepth = false;
 
-        previousFramebuffer = 0; // from here on, the main target
+        previousFramebuffer = 0;
         RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
         RenderSystem.disableCull();
         RenderSystem.disableDepthTest();
@@ -329,7 +305,6 @@ public final class Bloom {
         for (int i = LEVELS - 1; i > 0; i--) {
             pass(up, mips[i], mips[i - 1], 1);
         }
-        // the blade's trail is made of this frame's glow and bloom (see MotionBlur): drawn while both are at hand
         MotionBlur.render(frame, depth, glow.getColorTextureId(), mips[0].getColorTextureId(), STRENGTH);
         RenderSystem.disableCull();
         RenderSystem.disableDepthTest();
@@ -343,7 +318,6 @@ public final class Bloom {
         main.bindWrite(true);
     }
 
-    /** Draws {@code source} over the whole of {@code target} with the shader. */
     private static void pass(ShaderInstance shader, RenderTarget source, RenderTarget target, float strength) {
         target.bindWrite(true);
         RenderSystem.enableBlend();

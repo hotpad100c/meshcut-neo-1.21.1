@@ -1,6 +1,5 @@
 package ml.mypals.meshcut.cut;
 
-/** Bounded procedural strokes. The same seed produces the same continuous motion on both logical sides. */
 public final class SaberGesture {
     public static final int COUNT = 8;
     public static final int DURATION_TICKS = 18;
@@ -9,7 +8,6 @@ public final class SaberGesture {
     public static Sample sample(int preset, int seed, float ticks) {
         if (ticks <= 0 || ticks >= DURATION_TICKS) return new Sample(0, 0, 0, 0);
         double t = ticks / DURATION_TICKS;
-        // Zero position and velocity at both ends, including the return to the player's aim.
         double envelope = Math.pow(Math.sin(Math.PI * t), 2);
         double stroke = Math.sin(2 * Math.PI * t) * envelope;
         float variation = 0.82f + (seed & 255) / 255f * 0.36f;

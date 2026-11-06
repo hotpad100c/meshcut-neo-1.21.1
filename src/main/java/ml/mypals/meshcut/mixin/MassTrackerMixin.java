@@ -25,14 +25,12 @@ public abstract class MassTrackerMixin {
         return meshcut$center(function, level, state, original, pos);
     }
 
-    /** Building the tracker from scratch: the inertia pass. */
     @WrapOperation(method = "build", at = @At(value = "INVOKE", target = APPLY, ordinal = 1), remap = false)
     private static Object meshcut$comInertia(BiFunction<Object, Object, Object> function, Object level, Object state,
                                              Operation<Object> original, @Local BlockPos.MutableBlockPos pos) {
         return meshcut$center(function, level, state, original, pos);
     }
 
-    /** Incremental update when a block is added or removed. */
     @WrapOperation(method = "addBlockMass", at = @At(value = "INVOKE", target = APPLY), remap = false)
     private Object meshcut$comIncremental(BiFunction<Object, Object, Object> function, Object level, Object state,
                                           Operation<Object> original, @Local(argsOnly = true) BlockPos pos) {

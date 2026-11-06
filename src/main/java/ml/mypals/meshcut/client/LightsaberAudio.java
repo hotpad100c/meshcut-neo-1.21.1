@@ -77,7 +77,6 @@ public final class LightsaberAudio {
             }
             fade = 0;
             Blade now = Blade.of(player, 1);
-            // Subtract the emitter's translation: ordinary walking must not sound like a fast swing.
             double angularSpeed = now.direction().normalize().distanceTo(previous.direction().normalize()) * Blade.LENGTH * 20;
             double handSpeed = now.base().subtract(previous.base()).subtract(player.getDeltaMovement()).length() * 20;
             float rawSpeed = (float) Math.clamp((angularSpeed + handSpeed * 0.5) / 18, 0, 1);

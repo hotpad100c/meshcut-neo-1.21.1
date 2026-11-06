@@ -49,7 +49,6 @@ public final class LaserVisuals {
                 || shot.start().distanceToSqr(shot.end()) > 66 * 66) return;
         if (world != mc.level) { pulses.clear(); world = mc.level; }
         if (pulses.size() >= 128) pulses.removeFirst();
-        // Start at the current rendered frame, avoiding a one-tick jump on packet arrival.
         pulses.addLast(new Pulse(shot, mc.level.getGameTime() + mc.getTimer().getGameTimeDeltaPartialTick(true)));
         LaserGunHands.acceptShot(shot.shooter());
     }
@@ -73,7 +72,6 @@ public final class LaserVisuals {
             var shot = pulse.shot;
             Vec3 start = LaserGunHands.muzzle(shot.shooter(), event.getPartialTick().getGameTimeDeltaPartialTick(true), shot.start());
             Vec3 delta = shot.end().subtract(start);
-            // A fast finite pulse, then a brief fading trail; never a projectile entity.
             double head = Math.min(1, 0.15 + age * 1.5);
             double tail = Math.max(0, Math.min(0.98, (age - 0.65) * 1.5));
             Vec3 a = start.add(delta.scale(tail)).subtract(camera);

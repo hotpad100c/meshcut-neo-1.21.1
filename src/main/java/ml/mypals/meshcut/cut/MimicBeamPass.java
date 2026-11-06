@@ -6,13 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
 
-/**
- * Whether a beam goes through a cut block. AnvilCraft decides that from the block's collision shape, which is only an
- * approximation of what is left of a cut block (and keeps it closed round a narrow bore); here the beam is followed
- * through the actual material, so a laser that has burnt through a block goes on to the next one.
- */
 public final class MimicBeamPass {
-    /** The beam is as thick as AnvilCraft's own test says: two sixteenths. */
     private static final double HALF_WIDTH = 1.0 / 16;
     private static final int STEPS = 16;
 

@@ -2,7 +2,6 @@ package ml.mypals.meshcut.cut;
 
 import org.joml.Vector2f;
 
-/** Critically damped hand translation with velocity-continuous interpolation across ticks. */
 public final class SaberTranslation {
     public static final float LIMIT_X = 0.52f;
     public static final float LIMIT_Y = 0.46f;

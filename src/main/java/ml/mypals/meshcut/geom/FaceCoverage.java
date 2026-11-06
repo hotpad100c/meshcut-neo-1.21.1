@@ -4,7 +4,6 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Geometric coverage of a cube face, without collision-box sampling or block-state caches. */
 public final class FaceCoverage {
     public static boolean whole(int axis, boolean high, List<CutPlane> planes, List<List<CutPlane>> holes) {
         int u = (axis + 1) % 3, v = (axis + 2) % 3;
@@ -16,7 +15,6 @@ public final class FaceCoverage {
         }
         for (var plane : planes) for (var p : square)
             if (plane.signedDistance(p[0], p[1], p[2]) < -1e-7) return false;
-        // Test just inside the material: a hole's entry plane commonly coincides exactly with this face.
         for (var p : square) p[axis] = high ? 1 - 1e-7 : 1e-7;
         for (var hole : holes) {
             List<double[]> polygon = square;

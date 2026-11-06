@@ -4,7 +4,6 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Pure material geometry shared by server cuts and client predictions. No world mutation or physics. */
 public final class CapsuleCut {
     public record Prepared(List<CutPlane> hole, List<List<CutPlane>> holes, CellGrid grid) {}
 

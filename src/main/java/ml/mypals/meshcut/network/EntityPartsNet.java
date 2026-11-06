@@ -16,12 +16,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Only clients have entity models, so the server asks one to take a cut-down entity apart into limbs
- * ({@link PartsRequest}) and builds the body from the answer ({@link PartsReply}).
- */
 public final class EntityPartsNet {
-    /** Server to client: take this entity apart. */
     public record PartsRequest(int id, EntityAppearance.Look look) implements CustomPacketPayload {
         public static final Type<PartsRequest> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "parts_request"));
         public static final StreamCodec<FriendlyByteBuf, PartsRequest> CODEC = StreamCodec.of(
@@ -41,7 +36,6 @@ public final class EntityPartsNet {
         }
     }
 
-    /** Client to server: the limbs of the entity asked about. */
     public record PartsReply(int id, List<BodySpec> bodies) implements CustomPacketPayload {
         public static final Type<PartsReply> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "parts_reply"));
         public static final StreamCodec<FriendlyByteBuf, PartsReply> CODEC = StreamCodec.of(

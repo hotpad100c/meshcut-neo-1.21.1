@@ -48,17 +48,11 @@ public abstract class PhysicsBlockPropertyHelperMixin {
         }
     }
 
-    /** No mimic weighs less than this. */
     private static final double MESHCUT_MIN_MASS = 1e-3;
-    /** What Sable gives a whole block whose own mass it cannot be told (the default of its mass property). */
     private static final double MESHCUT_DEFAULT_MASS = 1.0;
     private static Object meshcut$massType;
     private static boolean meshcut$looked;
 
-    /**
-     * The block's own mass, as its physics properties set it, whether or not it is solid. The property's type is
-     * registered through Veil, which is not on our compile path: it is looked up once.
-     */
     @SuppressWarnings("unchecked")
     private static double meshcut$ownMass(BlockState target) {
         try {

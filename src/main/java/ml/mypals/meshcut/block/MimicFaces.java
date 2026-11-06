@@ -31,7 +31,7 @@ final class MimicFaces {
         try {
             return Block.isFaceFull(target.getFaceOcclusionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, dir), dir);
         } catch (RuntimeException e) {
-            return false;// how
+            return false;
         }
     }
 

@@ -22,23 +22,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Collision geometry of cut blocks: the imitated block's collision boxes intersected with the cut half-spaces,
- * approximated with axis-aligned boxes (see {@link VoxelBoxes}). Shared by vanilla collision and the physics engine.
- */
 public final class MimicShapes {
     private static final int MAX_CACHED = 4096;
     private static final double QUANT = 1000.0;
     private static final double MIN_FRACTION = 0.004;
-    /** Box edges closer than this are the same edge of a shape. */
     private static final double EDGE = 1e-7;
 
-    /**
-     * Imitated block plus its cuts, quantised so near-identical cuts share one cache entry.
-     *
-     * @param base the boxes the block is made of instead of the imitated block's collision boxes (a part of an
-     *             entity's body), six values each, quantised; null for the imitated block's own shape
-     */
     public record Key(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, @Nullable List<Double> base) {
         public static Key of(BlockState target, List<CutPlane> planes) {
             return of(target, planes, List.of());
@@ -65,10 +54,8 @@ public final class MimicShapes {
             return new Key(target, quantised(planes), regions, boxes);
         }
 
-        /** What the block is made of before it is cut. */
         public List<double[]> baseBoxes() {
             if (base == null) {
-                // what it collides with: its collision boxes, or for a block one walks through its outline (see cutBoxes)
                 return cutBoxes(target);
             }
             List<double[]> out = new ArrayList<>(base.size() / 6);
@@ -111,15 +98,12 @@ public final class MimicShapes {
         return boxes;
     }
 
-    /** Fraction (0..1) of the imitated block's collision volume that survives the cuts. */
     public static double volumeFraction(Key key) {
-        // a part of an entity weighs by how much of the whole block it fills
         double full = key.base() != null ? 1 : VoxelBoxes.volume(cutBoxes(key.target()));
         // never zero: a body whose blocks all weigh nothing has no centre of mass, which crashes the physics engine
         return full <= 0 ? 1 : Math.max(MIN_FRACTION, Math.min(1, VoxelBoxes.volume(boxes(key)) / full));
     }
 
-    /** Volume-weighted centre of what is left of the block, in block-local coordinates; the middle if nothing is. */
     public static Vector3d centerOfMass(Key key) {
         double volume = 0, x = 0, y = 0, z = 0;
         for (double[] b : boxes(key)) {
@@ -132,7 +116,6 @@ public final class MimicShapes {
         return volume <= 0 ? new Vector3d(0.5, 0.5, 0.5) : new Vector3d(x / volume, y / volume, z / volume);
     }
 
-    /** The vanilla shape of the cut block (collision, outline, light), shared by every block with the same key. */
     public static synchronized VoxelShape shape(Key key) {
         VoxelShape shape = SHAPES.get(key);
         if (shape == null) {
@@ -145,11 +128,6 @@ public final class MimicShapes {
         return shape;
     }
 
-    /**
-     * The boxes as one vanilla shape, built in a single pass: the grid of all their edges, with the cells inside a
-     * box filled. Joining them one by one ({@link Shapes#joinUnoptimized}, then {@link VoxelShape#optimize}) walks
-     * the whole merged grid for every box, which for a slanted cut of a hundred boxes stalled whole ticks.
-     */
     public static VoxelShape shape(List<double[]> boxes) {
         List<double[]> solid = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {
@@ -179,7 +157,6 @@ public final class MimicShapes {
         return new GridShape(cells, xs, ys, zs);
     }
 
-    /** Where the boxes start and end along the axis, sorted; edges closer than {@link #EDGE} count as one. */
     private static double[] edges(List<double[]> boxes, int axis) {
         double[] all = new double[boxes.size() * 2];
         for (int i = 0; i < boxes.size(); i++) {
@@ -196,10 +173,9 @@ public final class MimicShapes {
         return Arrays.copyOf(all, n);
     }
 
-    /** Index of the edge {@code v} was merged into. */
     private static int cell(double[] edges, double v) {
         int lo = 0, hi = edges.length - 1;
-        while (lo < hi) { // the first edge no further than EDGE below v
+        while (lo < hi) {
             int mid = (lo + hi) >>> 1;
             if (edges[mid] < v - EDGE) {
                 lo = mid + 1;
@@ -210,7 +186,6 @@ public final class MimicShapes {
         return lo;
     }
 
-    /** Opens up vanilla's constructor of a shape from a grid of cells and its edges. */
     private static final class GridShape extends ArrayVoxelShape {
         GridShape(DiscreteVoxelShape cells, double[] xs, double[] ys, double[] zs) {
             super(cells, xs, ys, zs);
@@ -219,10 +194,6 @@ public final class MimicShapes {
 
     private static final Map<BlockState, List<double[]>> CUT_BOXES = new ConcurrentHashMap<>();
 
-    /**
-     * What there is of the imitated block to cut: its collision boxes, or, for a block one walks through (a
-     * flower, a torch), its outline. A block with neither counts as a whole block.
-     */
     public static List<double[]> cutBoxes(BlockState target) {
         return CUT_BOXES.computeIfAbsent(target, t -> {
             List<double[]> collision = targetBoxes(t);
@@ -241,8 +212,6 @@ public final class MimicShapes {
         });
     }
 
-    /** Collision boxes of the imitated block on its own, without any cut. */
-    /** Whether the imitated block has collision boxes of its own (otherwise its outline stands in for them). */
     public static boolean hasCollision(BlockState target) {
         return !targetBoxes(target).isEmpty();
     }

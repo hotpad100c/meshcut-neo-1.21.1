@@ -63,7 +63,7 @@ public final class MimicFloating {
             if (now != null) {
                 Entry fresh = new Entry(now, fraction);
                 if (entry != null) {
-                    fresh.applied = entry.applied; // still being let go: that is done with what it was taken in with
+                    fresh.applied = entry.applied;
                 }
                 entries.put(key, fresh);
                 controller.queueAddFloatingBlock(now, pos);
@@ -81,7 +81,7 @@ public final class MimicFloating {
             controller.queueAddFloatingBlock(now, pos);
         } else if (Math.abs(fraction - entry.fraction) > 1e-6) {
             entry.fraction = fraction;
-            if (!Double.isNaN(entry.applied)) { // taken in already: let go, and taken in again with the new fraction
+            if (!Double.isNaN(entry.applied)) {
                 controller.queueRemoveFloatingBlock(now, pos);
                 READD.add(new Readd(controller, container, pos.immutable(), now, server.getGameTime() + 2));
             }
@@ -98,7 +98,7 @@ public final class MimicFloating {
                 return false;
             }
             Entry entry = entry(r.container(), r.pos().asLong());
-            if (entry != null && !entry.gone && entry.state.equals(r.state())) { // still there, still the same
+            if (entry != null && !entry.gone && entry.state.equals(r.state())) {
                 r.controller().queueAddFloatingBlock(r.state(), r.pos());
             }
             return true;

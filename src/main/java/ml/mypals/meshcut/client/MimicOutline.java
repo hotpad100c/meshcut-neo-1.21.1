@@ -19,11 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/**
- * The selection outline of a cut block follows its real shape: the edges of each piece (with its slanted cuts and
- * the parts cut out of it), not the boxes its collision is approximated with. Works in sub-levels too: Sable fires
- * the same event there with the pose and camera already in the sub-level's space.
- */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MimicOutline {
     private record Cached(int version, List<double[]> edges) {}

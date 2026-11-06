@@ -26,7 +26,6 @@ import org.joml.Vector3d;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** Temporary render-only holes. Authoritative BEs, collisions, inventory and Sable bodies are never mutated. */
 @EventBusSubscriber(modid=MeshCut.MODID,value=Dist.CLIENT)
 public final class CutPrediction {
     public record View(MimicRenderData data,boolean empty,BlockState source){}
@@ -72,7 +71,6 @@ public final class CutPrediction {
             var normal=sub.logicalPose().transformNormalInverse(new Vector3d(direction.x,direction.y,direction.z));
             localDirection=new Vec3(normal.x,normal.y,normal.z).normalize();
         }
-        // Entity death/limb capture is server-only. Do not predict a block behind a closer entity.
         double nearest=start.distanceToSqr(worldHit);
         for(var entity:level.getEntities(player,new AABB(start,worldHit).inflate(1),e->!e.isSpectator())) {
             var point=entity.getBoundingBox().clip(start,worldHit);

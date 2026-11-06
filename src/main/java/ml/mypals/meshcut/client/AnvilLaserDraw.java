@@ -22,12 +22,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.WeakHashMap;
 
-/**
- * Draws AnvilCraft's lasers that stand on sub-levels. AnvilCraft draws its lasers either into buffers cached in world
- * space (which know nothing of a body's pose) or through block entity renderers (which Sable and the chunk renderer
- * only reach in some set-ups), so a laser on a body was not seen without shaders. This draws it from the laser's own
- * state with the body's current pose, the same way in every set-up. Only loaded when AnvilCraft is.
- */
 public final class AnvilLaserDraw {
     private static final Set<BlockEntity> TRACKED = Collections.newSetFromMap(new WeakHashMap<>());
 
@@ -60,7 +54,6 @@ public final class AnvilLaserDraw {
             if (!(Sable.HELPER.getContaining(level, laser.getBlockPos()) instanceof ClientSubLevel sub)) continue;
             Matrix4d body = sub.renderPose().bakeIntoMatrix(new Matrix4d());
             BlockPos pos = laser.getBlockPos();
-            // In doubles: plot coordinates are in the tens of millions, and floats cannot hold a block there.
             Vector3d origin = body.transformPosition(new Vector3d(pos.getX(), pos.getY(), pos.getZ()));
             stack.pushPose();
             stack.translate(origin.x - camera.x, origin.y - camera.y, origin.z - camera.z);
@@ -85,10 +78,6 @@ public final class AnvilLaserDraw {
         }
     }
 
-    /**
-     * AnvilCraft's beam knows only the blocks of the grid it stands in: it goes through the world (or other bodies) as if
-     * they were not there. Where the beam meets one, it ends.
-     */
     private static LaserState stoppedByOtherGrids(net.minecraft.client.multiplayer.ClientLevel level, ClientSubLevel own,
                                                   Matrix4d body, BaseLaserBlockEntity laser, LaserState state) {
         var facing = laser.getFacing();

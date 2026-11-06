@@ -21,13 +21,6 @@ import java.util.Map;
 import java.util.TreeSet;
 import java.util.WeakHashMap;
 
-/**
- * Keeps a burst of cuts from drowning the physics (and the renderer) in pieces. Every piece a cut makes is entered here
- * with its volume, worked out when it was made, in a set that is kept in order of volume. When more than
- * {@code maxPieces} were made within the last {@code windowSeconds}, the smallest of them are burnt up (at the end of
- * the tick, not in the middle of the cut): a poof and a splash of lava. A piece with at least {@code maxVolume} is
- * never burnt.
- */
 public final class FragmentBudget {
     private static final class Entry {
         final ServerSubLevel sub;
@@ -44,17 +37,14 @@ public final class FragmentBudget {
     }
 
     private static final class LevelState {
-        /** In order of volume, smallest first; ties go to the older one. */
         final TreeSet<Entry> byVolume = new TreeSet<>(
                 Comparator.<Entry>comparingDouble(e -> e.volume).thenComparingLong(e -> e.seq));
-        /** In order of age, to let go of those past the window. */
         final ArrayDeque<Entry> byAge = new ArrayDeque<>();
         long seq;
     }
 
     private static final Map<ServerLevel, LevelState> STATES = new WeakHashMap<>();
 
-    /** The material in the blocks, in whole blocks; to be asked before they are moved into a sub-level. */
     public static double volumeOf(ServerLevel level, List<BlockPos> blocks) {
         double volume = 0;
         for (BlockPos pos : blocks) {
@@ -68,7 +58,6 @@ public final class FragmentBudget {
         return volume;
     }
 
-    /** Enters a piece that has just been made. */
     public static void made(ServerLevel level, ServerSubLevel sub, double volume) {
         if (MeshCutConfig.SURGE_PIECES.get() <= 0) {
             return;
@@ -91,7 +80,6 @@ public final class FragmentBudget {
             ServerLevel level = e.getKey();
             LevelState state = e.getValue();
             long now = level.getGameTime();
-            // the ones that are gone, or too old to count
             while (!state.byAge.isEmpty()) {
                 Entry oldest = state.byAge.peekFirst();
                 if (!oldest.sub.isRemoved() && now - oldest.madeAt <= window) {
@@ -115,12 +103,12 @@ public final class FragmentBudget {
                 while (state.byVolume.size() > max) {
                     Entry smallest = state.byVolume.first();
                     if (smallest.volume >= maxVolume) {
-                        break; // everything left is too big to be let go of
+                        break;
                     }
                     state.byVolume.pollFirst();
                     state.byAge.remove(smallest);
                     if (smallest.sub.isRemoved() || CutMarks.isKept(smallest.sub)) {
-                        continue; // gone, or somebody holds on to it
+                        continue;
                     }
                     burn(level, container, smallest.sub);
                     burnt++;

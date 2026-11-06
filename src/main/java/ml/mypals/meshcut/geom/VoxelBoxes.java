@@ -5,21 +5,11 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Approximates "collision boxes ∩ half-spaces" with axis-aligned boxes, which is all Sable's voxel colliders
- * (and vanilla collision shapes) can represent. A slanted cut becomes a staircase of {@value #COLUMNS} steps per block.
- * Boxes are {@code {minX, minY, minZ, maxX, maxY, maxZ}} in block-local coordinates.
- */
 public final class VoxelBoxes {
-    /** Cells per side of the fallback grid (a thin piece that no column reaches). */
     public static final int RES = 8;
-    /** Columns per side for the column approximation. */
     public static final int COLUMNS = 16;
-    /** More boxes than this and a coarser division is used (the physics engine keeps every box). */
     private static final int MAX_BOXES = 128;
-    /** Stretches shorter than this (in blocks) are left out. */
     private static final double MIN_SPAN = 1e-3;
-    /** Two stretches this close count as the same, so columns can be joined. */
     private static final double SAME = 1e-6;
     private static final double TIE = 1e-9;
 
@@ -27,10 +17,6 @@ public final class VoxelBoxes {
         return cut(shape, planes, List.of());
     }
 
-    /**
-     * @param excluded convex regions (each a list of half-spaces) that were cut out of the block: whatever lies
-     *                 strictly inside one of them is gone
-     */
     public static List<double[]> cut(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         boolean[] mask=VoxelFragments.mask(excluded);
         if(mask!=null) {
@@ -58,18 +44,12 @@ public final class VoxelBoxes {
         }
         List<double[]> cells = cutCells(shape, planes, excluded);
         if (cells.isEmpty() && !shape.isEmpty()) {
-            // Nothing of the piece is thick enough to find, but a block with no collider has no mass either, and
-            // the physics engine cannot have a body without mass: give it a token cell in the middle.
             double h = 0.5 / RES;
             cells = new ArrayList<>(List.of(new double[]{0.5 - h, 0.5 - h, 0.5 - h, 0.5 + h, 0.5 + h, 0.5 + h}));
         }
         return cells;
     }
 
-    /**
-     * Joins boxes until there are at most {@code limit}: each time the two whose joint box adds the least empty space.
-     * Everything stays covered; the shape only gets coarser.
-     */
     public static List<double[]> join(List<double[]> boxes, int limit) {
         List<double[]> out = new ArrayList<>(boxes.size());
         for (double[] b : boxes) {
@@ -104,18 +84,10 @@ public final class VoxelBoxes {
         return (b[3] - b[0]) * (b[4] - b[1]) * (b[5] - b[2]);
     }
 
-    /**
-     * How much of the shape is left after the cuts (cubic blocks), as finely as {@link #cut} finds it but without
-     * the token cell it adds to a piece too thin to find: zero means nothing is left.
-     */
     public static double remainingVolume(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         return volume(remaining(shape, planes, excluded));
     }
 
-    /**
-     * What is left of the shape after the cuts, as boxes, as finely as {@link #cut} finds it but without the token
-     * cell it adds to a piece too thin to find: empty means nothing is left.
-     */
     public static List<double[]> remaining(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         if (planes.isEmpty() && excluded.isEmpty()) {
             return shape;
@@ -127,18 +99,10 @@ public final class VoxelBoxes {
         return boxes;
     }
 
-    // ---------------------------------------------------------------- columns
-
-    /**
-     * Boxes made of columns: along the axis the cuts are most nearly perpendicular to, the block is divided into
-     * {@code columns} x {@code columns} columns, and in each the solid part is found exactly (a column is a line, so
-     * every cut is just a limit on how far along it the block reaches). A slanted face becomes steps as wide as a
-     * column, and only as high as the slope makes them, instead of cells of fixed height.
-     */
     private static List<double[]> cutColumns(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded,
                                              int columns) {
         int axis = columnAxis(planes, excluded);
-        int u = axis == 0 ? 1 : 0, v = axis == 2 ? 1 : 2; // the two axes the columns are laid out over
+        int u = axis == 0 ? 1 : 0, v = axis == 2 ? 1 : 2;
         double[][][] spans = new double[columns * columns][][];
         for (int i = 0; i < columns; i++) {
             for (int j = 0; j < columns; j++) {
@@ -148,7 +112,6 @@ public final class VoxelBoxes {
                 spans[i * columns + j] = column(shape, planes, excluded, axis, at);
             }
         }
-        // join neighbouring columns that are solid over the same stretch into one box
         boolean[][] used = new boolean[columns * columns][];
         for (int c = 0; c < used.length; c++) {
             used[c] = new boolean[spans[c].length];
@@ -189,7 +152,6 @@ public final class VoxelBoxes {
         return boxes;
     }
 
-    /** The axis the cuts' normals point along the most, taken all together. */
     private static int columnAxis(List<CutPlane> planes, List<List<CutPlane>> excluded) {
         double[] weight = new double[3];
         for (CutPlane p : planes) {
@@ -204,7 +166,7 @@ public final class VoxelBoxes {
                 weight[2] += Math.abs(p.nz());
             }
         }
-        int best = 1; // ties go to up: most blocks lie on the ground
+        int best = 1;
         for (int a = 0; a < 3; a++) {
             if (weight[a] > weight[best] + 1e-9) {
                 best = a;
@@ -213,18 +175,15 @@ public final class VoxelBoxes {
         return best;
     }
 
-    /** The stretches {from, to} of the line through {@code at} along {@code axis} that are solid. */
     private static double[][] column(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded, int axis,
                                      double[] at) {
         int u = axis == 0 ? 1 : 0, v = axis == 2 ? 1 : 2;
-        // where the collision boxes of the imitated block are
         List<double[]> spans = new ArrayList<>();
         for (double[] b : shape) {
             if (at[u] >= b[u] && at[u] <= b[u + 3] && at[v] >= b[v] && at[v] <= b[v + 3]) {
                 spans.add(new double[]{Math.max(0, b[axis]), Math.min(1, b[axis + 3])});
             }
         }
-        // ... within every half-space
         double[] limit = {0, 1};
         for (CutPlane p : planes) {
             if (!limitBy(p, axis, at, limit, false)) {
@@ -238,7 +197,6 @@ public final class VoxelBoxes {
                 kept.add(new double[]{from, to});
             }
         }
-        // ... outside every part that was cut out
         for (List<CutPlane> region : excluded) {
             double[] inside = {0, 1};
             boolean any = true;
@@ -270,17 +228,11 @@ public final class VoxelBoxes {
         return kept.toArray(new double[0][]);
     }
 
-    /**
-     * Narrows {@code limit} (a stretch along the axis) to what the half-space allows at the point. With
-     * {@code strict} the stretch is the open inside of the half-space, as for a part that was cut out.
-     *
-     * @return {@code false} if nothing of the line is left
-     */
     private static boolean limitBy(CutPlane p, int axis, double[] at, double[] limit, boolean strict) {
         int u = axis == 0 ? 1 : 0, v = axis == 2 ? 1 : 2;
         double n = axis == 0 ? p.nx() : axis == 1 ? p.ny() : p.nz();
         double nu = u == 0 ? p.nx() : p.ny(), nv = v == 1 ? p.ny() : p.nz();
-        double rest = p.d() - nu * at[u] - nv * at[v]; // keep: n * w <= rest
+        double rest = p.d() - nu * at[u] - nv * at[v];
         if (Math.abs(n) < 1e-9) {
             return strict ? rest > TIE : rest >= -TIE;
         }
@@ -293,7 +245,6 @@ public final class VoxelBoxes {
         return limit[1] - limit[0] > (strict ? 0 : -TIE);
     }
 
-    /** Index of the unused stretch of the column that is the same as {@code span}, or -1. */
     private static int matching(double[][][] spans, boolean[][] used, int column, double[] span) {
         for (int k = 0; k < spans[column].length; k++) {
             if (!used[column][k] && Math.abs(spans[column][k][0] - span[0]) < SAME && Math.abs(spans[column][k][1] - span[1]) < SAME) {
@@ -311,8 +262,6 @@ public final class VoxelBoxes {
         }
         return true;
     }
-
-    // ---------------------------------------------------------------- cells
 
     private static List<double[]> cutCells(List<double[]> shape, List<CutPlane> planes, List<List<CutPlane>> excluded) {
         final int n = RES;
@@ -344,7 +293,6 @@ public final class VoxelBoxes {
         return merge(filled, n);
     }
 
-    /** Strictly inside: a cell on the boundary of a cut-out region still belongs to what is left around it. */
     private static boolean insideAnyRegion(List<List<CutPlane>> regions, double x, double y, double z) {
         for (List<CutPlane> region : regions) {
             boolean inside = true;
@@ -410,7 +358,6 @@ public final class VoxelBoxes {
         return (x * RES + y) * RES + z;
     }
 
-    /** Greedy meshing: grow each unvisited cell along x, then z, then y while the whole row/slab is filled. */
     private static List<double[]> merge(boolean[] filled, int n) {
         boolean[] used = new boolean[filled.length];
         List<double[]> boxes = new ArrayList<>();
@@ -469,7 +416,6 @@ public final class VoxelBoxes {
         return true;
     }
 
-    /** Total volume of the boxes (boxes produced here never overlap). */
     public static double volume(List<double[]> boxes) {
         double v = 0;
         for (double[] b : boxes) {

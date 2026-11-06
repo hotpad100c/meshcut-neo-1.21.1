@@ -6,12 +6,11 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import org.joml.Vector3d;
 
-/** Tells nearby players about a laser standing on a sub-level. Only loaded when AnvilCraft is present. */
 public final class AnvilLaserSync {
     public static void send(BlockEntity be) {
         if (!(be instanceof BaseLaserBlockEntity laser) || !(be.getLevel() instanceof ServerLevel level)) return;
         var sub = Sable.HELPER.getContaining(level, be.getBlockPos());
-        if (sub == null) return; // the chunk's trackers are told by AnvilCraft itself
+        if (sub == null) return;
         var pos = be.getBlockPos();
         var at = sub.logicalPose().transformPosition(new Vector3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5));
         for (var player : level.players()) {
@@ -21,7 +20,6 @@ public final class AnvilLaserSync {
 
     private static long lastDebug;
 
-    /** Says now and then what a laser on a sub-level knows when it is drawn (to find out why one is not). */
     public static void debugRender(BlockEntity be, boolean enhanced) {
         long now = System.currentTimeMillis();
         if (now - lastDebug < 3000 || !(be instanceof BaseLaserBlockEntity laser)) return;

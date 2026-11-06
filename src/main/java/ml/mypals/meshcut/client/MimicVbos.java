@@ -23,18 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.IntUnaryOperator;
 
-/**
- * What a cut-up body draws, kept in vertex buffers on the graphics card, so that a frame costs a draw call a layer
- * instead of every vertex of every face being worked out and copied again. The geometry is in the block's own
- * coordinates, the pose moves it (a body that tumbles is moved by the matrix at no cost); what is baked in is the light
- * (a new buffer when it changes) and the normals, which light the faces by the way they point, so they are redone once
- * a body has come to rest in another position than the one they were made for.
- */
 final class MimicVbos {
     private static final float NORMAL_TOLERANCE = 0.12f;
     private static final int SETTLE_FRAMES = 8;
     private static final int SWEEP_EVERY = 240;
-    /** A tumbling piece crosses light levels all the time; its buffer is redone for that at most this often. */
     private static final int RELIGHT_FRAMES = 30;
 
     private static final class Entry {
@@ -69,7 +61,6 @@ final class MimicVbos {
                 : !"false".equalsIgnoreCase(System.getProperty("meshcut.vbo"));
     }
 
-    /** Frees every buffer (a resource reload makes what they were made from stale). */
     static void clear() {
         ENTRIES.values().forEach(Entry::close);
         ENTRIES.clear();

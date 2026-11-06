@@ -38,33 +38,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Captures what a block looks like into {@link MeshPoly}s.
- * <ul>
- *   <li>{@link #captureModel} — only the baked model, grouped by chunk render layer. Pure reads of baked data, safe
- *       from chunk-compile worker threads.</li>
- *   <li>{@link #capture} — the model plus whatever the block entity renderer draws (chests, beds, signs, ...),
- *       grouped by the entity-style render type that draws them. Render thread only.</li>
- * </ul>
- * Results are cached per block state until the resources reload.
- */
 public final class ModelCapturer {
-    /**
-     * @param byChunkType model quads per chunk render layer
-     * @param opaque      the non-translucent polygons, used to work out cut sections
-     * @param particle    the model's particle sprite; cut faces are textured with it
-     */
     public record ModelMesh(Map<RenderType, List<MeshPoly>> byChunkType, List<MeshPoly> opaque, TextureAtlasSprite particle) {
         public float[] particleUv() {
             return new float[]{particle.getU0(), particle.getV0(), particle.getU1(), particle.getV1()};
         }
     }
 
-    /**
-     * @param byType everything to draw, per entity-style render type
-     * @param opaque the non-translucent polygons, used to work out cut sections
-     * @param capUv  {u0, v0, u1, v1} of the block's particle sprite, used to texture cut faces
-     */
     public record CapturedMesh(Map<RenderType, List<MeshPoly>> byType, List<MeshPoly> opaque, float[] capUv) {}
 
     private record Key(BlockState state, @Nullable CompoundTag beTag) {}
@@ -75,10 +55,6 @@ public final class ModelCapturer {
     private static boolean warnedAboutRenderer;
     private static boolean recording;
 
-    /**
-     * Whether a block entity renderer is being recorded right now (render thread only). Renderers that leave parts
-     * to Flywheel are told it is not there meanwhile, so the recording has everything.
-     */
     public static boolean isRecording() {
         return recording;
     }
@@ -87,10 +63,6 @@ public final class ModelCapturer {
         return MODEL_CACHE.computeIfAbsent(state, ModelCapturer::doCaptureModel);
     }
 
-    /**
-     * Whether the block is drawn (at least partly) by a block entity renderer. Such blocks can't go into the chunk
-     * mesh: their geometry uses entity textures that aren't in the block atlas.
-     */
     public static boolean hasBlockEntityRenderer(BlockState state) {
         return HAS_RENDERER.computeIfAbsent(state, s -> {
             if (!(s.getBlock() instanceof EntityBlock entityBlock)) {
@@ -105,7 +77,6 @@ public final class ModelCapturer {
         });
     }
 
-    /** @param beTag saved data of the original block entity, so e.g. a sign keeps its text; may be null */
     public static CapturedMesh capture(BlockState state, @Nullable CompoundTag beTag) {
         return CACHE.computeIfAbsent(new Key(state, beTag), k -> doCapture(k.state(), k.beTag()));
     }
@@ -118,15 +89,8 @@ public final class ModelCapturer {
         ALPHA_CACHE.clear();
     }
 
-    /**
-     * A recorded entity: all of it, and the limbs it was taken apart into (see {@link EntityParts}).
-     *
-     * @param limbs  the faces of each limb, by its name, where the entity stood (not yet in the limb's frame)
-     * @param bodies how to build the limbs; empty if the entity could not be drawn
-     */
     public record EntityCapture(CapturedMesh whole, Map<String, CapturedMesh> limbs, List<ml.mypals.meshcut.cut.BodySpec> bodies) {}
 
-    /** Recordings of the entities whose bodies were drawn last; every body is a new entity, so the oldest go. */
     private static final int MAX_ENTITIES = 64;
     private static final Map<EntityAppearance.Look, EntityCapture> ENTITY_CACHE = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -137,16 +101,10 @@ public final class ModelCapturer {
     private static final ResourceLocation FLESH = ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "block/flesh");
     private static boolean warnedAboutEntity;
 
-    /**
-     * What an entity looked like: it is made again on the client from its saved data, turned as it was, and drawn
-     * once by its renderer into a recording, standing at the origin. Cut faces are textured with seared flesh.
-     * Render thread only; cached per look.
-     */
     public static CapturedMesh captureEntity(EntityAppearance.Look look) {
         return captureEntityParts(look).whole();
     }
 
-    /** {@link #captureEntity}, also taken apart into limbs. */
     public static EntityCapture captureEntityParts(EntityAppearance.Look look) {
         return ENTITY_CACHE.computeIfAbsent(look, ModelCapturer::doCaptureEntity);
     }
@@ -175,7 +133,6 @@ public final class ModelCapturer {
                     }
                     recorder.finishTagged().forEach((type, faces) -> {
                         String name = layerName(type);
-                        // the name tag, the shadow and debug boxes are not part of the body
                         if (!name.startsWith("text") && !name.contains("shadow") && !name.equals("lines")) {
                             Alpha alpha = alphaOf(type);
                             List<RecordingBufferSource.Tagged> seen = new ArrayList<>(faces.size());
@@ -214,7 +171,6 @@ public final class ModelCapturer {
         return capture;
     }
 
-    /** The faces that are not see-through: what cut faces are worked out from. */
     static List<MeshPoly> opaqueOf(Map<RenderType, List<MeshPoly>> byType) {
         List<MeshPoly> opaque = new ArrayList<>();
         byType.forEach((type, polys) -> {
@@ -228,7 +184,6 @@ public final class ModelCapturer {
         return opaque;
     }
 
-    /** The alpha channel of a texture, row by row. */
     private record Alpha(int width, int height, byte[] alpha) {
         int at(int x, int y) {
             return alpha[Math.floorMod(y, height) * width + Math.floorMod(x, width)] & 0xFF;
@@ -237,23 +192,15 @@ public final class ModelCapturer {
 
     private static final Map<ResourceLocation, java.util.Optional<Alpha>> ALPHA_CACHE = new HashMap<>();
     private static final java.util.regex.Pattern TEXTURE = java.util.regex.Pattern.compile("texture\\[Optional\\[([^\\]]+?)\\]");
-    /** Below this alpha a cutout shader throws the pixel away (0.1 of 255). */
     private static final int CUTOUT_ALPHA = 26;
 
-    /**
-     * The faces of which something can be seen. Models are drawn with parts whose texture is wholly transparent
-     * (the villager's hat brim, which only the farmer's texture fills in; the outer layer of a skin); the game
-     * throws those pixels away, but here they would be cut faces and walls with nothing around them.
-     */
     @Nullable
     private static Alpha alphaOf(RenderType type) {
         java.util.regex.Matcher m = TEXTURE.matcher(type.toString());
         ResourceLocation location = m.find() ? ResourceLocation.tryParse(m.group(1)) : null;
-        // no texture to go by: everything is kept
         return location == null ? null : ALPHA_CACHE.computeIfAbsent(location, l -> java.util.Optional.ofNullable(readAlpha(l))).orElse(null);
     }
 
-    /** Whether any texel under the face is kept by a cutout shader. */
     private static boolean seen(MeshPoly p, Alpha alpha) {
         float[] v = p.verts();
         int n = p.vertexCount();
@@ -278,7 +225,7 @@ public final class ModelCapturer {
                 }
             }
         }
-        if (!tested) { // thinner than a texel: go by the texel under its middle
+        if (!tested) {
             double cu = 0, cv = 0;
             for (int i = 0; i < n; i++) {
                 cu += us[i];
@@ -289,7 +236,6 @@ public final class ModelCapturer {
         return false;
     }
 
-    /** Whether the point is inside the convex polygon (either winding). */
     private static boolean inside(double[] us, double[] vs, double u, double v) {
         int sign = 0;
         for (int i = 0; i < us.length; i++) {
@@ -307,10 +253,6 @@ public final class ModelCapturer {
         return true;
     }
 
-    /**
-     * Reads the texture back from the graphics card, which covers downloaded skins as well as resource textures.
-     * Render thread only; null if it can't be read.
-     */
     @Nullable
     private static Alpha readAlpha(ResourceLocation location) {
         try {
@@ -339,14 +281,12 @@ public final class ModelCapturer {
         }
     }
 
-    /** The name a render type was registered with ("entity_cutout_no_cull", "text", ...), without its state. */
     private static String layerName(RenderType type) {
-        String s = type.toString(); // RenderType[name:state...]
+        String s = type.toString();
         int open = s.indexOf('['), colon = s.indexOf(':', open + 1);
         return open >= 0 && colon > open ? s.substring(open + 1, colon) : s;
     }
 
-    /** Ticks a new entity is let go on for before it is recorded, longer than any transition between animations. */
     private static final int ANIMATION_SETTLE_TICKS = 40;
 
     /**
@@ -368,7 +308,6 @@ public final class ModelCapturer {
         entity.tickCount += ANIMATION_SETTLE_TICKS;
     }
 
-    /** Whether the renderer is one of GeckoLib's (without GeckoLib being needed to know). */
     private static boolean usesGeckoLib(Object renderer) {
         for (Class<?> c = renderer.getClass(); c != null; c = c.getSuperclass()) {
             if (c.getName().startsWith("software.bernie.geckolib.renderer.")) {
@@ -452,7 +391,6 @@ public final class ModelCapturer {
         return new CapturedMesh(byType, opaque, model.particleUv());
     }
 
-    /** Renders the block entity renderer once into a recording buffer; its animation freezes at this frame. */
     private static void captureBlockEntityRenderer(BlockState state, @Nullable CompoundTag beTag,
                                                    Map<RenderType, List<MeshPoly>> into) {
         if (!(state.getBlock() instanceof EntityBlock entityBlock)) {
@@ -465,7 +403,6 @@ public final class ModelCapturer {
             }
             var level = Minecraft.getInstance().level;
             if (level != null) {
-                // many renderers read the level (game time for the beacon's beam, neighbours for chests, ...)
                 be.setLevel(level);
                 if (beTag != null) {
                     be.loadWithComponents(beTag, level.registryAccess());
@@ -476,7 +413,7 @@ public final class ModelCapturer {
                 return;
             }
             RecordingBufferSource recorder = new RecordingBufferSource();
-            recording = true; // see isRecording
+            recording = true;
             try {
                 renderer.render(be, 0f, new PoseStack(), recorder, 0xF000F0, OverlayTexture.NO_OVERLAY);
             } finally {
@@ -491,7 +428,6 @@ public final class ModelCapturer {
         }
     }
 
-    /** Chunk render layers are collapsed to the three that matter for baked quads. */
     private static RenderType chunkLayer(RenderType type) {
         if (type == RenderType.translucent()) {
             return RenderType.translucent();
@@ -502,7 +438,6 @@ public final class ModelCapturer {
         return RenderType.cutout();
     }
 
-    /** The entity-style render type that draws block-atlas quads inside a block entity renderer. */
     private static RenderType blockSheet(RenderType chunkType) {
         if (chunkType == RenderType.translucent()) {
             return Sheets.translucentCullBlockSheet();
@@ -513,7 +448,6 @@ public final class ModelCapturer {
         return Sheets.cutoutBlockSheet();
     }
 
-    /** BLOCK vertex format, 8 ints per vertex: pos(3 floats), color, uv(2 floats), light, normal. */
     private static MeshPoly toPoly(BakedQuad quad, int cullFace) {
         int[] data = quad.getVertices();
         float[] verts = new float[4 * MeshPoly.STRIDE];
@@ -525,7 +459,6 @@ public final class ModelCapturer {
             verts[v * 5 + 3] = Float.intBitsToFloat(data[o + 4]);
             verts[v * 5 + 4] = Float.intBitsToFloat(data[o + 5]);
         }
-        // Face normal from the quad diagonals; falls back to the declared direction for degenerate quads.
         float d1x = verts[10] - verts[0], d1y = verts[11] - verts[1], d1z = verts[12] - verts[2];
         float d2x = verts[15] - verts[5], d2y = verts[16] - verts[6], d2z = verts[17] - verts[7];
         float nx = d1y * d2z - d1z * d2y;

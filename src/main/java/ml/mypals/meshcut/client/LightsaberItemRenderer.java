@@ -25,7 +25,6 @@ import net.neoforged.neoforge.client.extensions.common.RegisterClientExtensionsE
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 
-/** Uses the shared world hilt pose in third person, and the baked model in inventory/inactive views. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
 public final class LightsaberItemRenderer extends BlockEntityWithoutLevelRenderer {
     private static final ModelResourceLocation HILT = ModelResourceLocation.standalone(

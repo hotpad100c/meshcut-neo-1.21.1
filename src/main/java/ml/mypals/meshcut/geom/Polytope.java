@@ -5,22 +5,15 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Geometry of "unit cube ∩ half-spaces", used server-side to decide how a cut affects a block. */
 public final class Polytope {
-    /** Below this volume (in blocks) a remaining piece is considered a sliver and discarded. */
     public static final double MIN_VOLUME = 0.01;
-    /** A remaining face smaller than this (in block faces) doesn't count as touching a neighbour. */
     private static final double MIN_FACE_AREA = 0.02;
 
-    /** Which part of a block lies on the kept side of a plane. */
     public enum Side { ALL_KEPT, ALL_REMOVED, SPLIT }
 
     private static final List<MeshPoly> CUBE = buildCube();
     private static final float[] DUMMY_UV = {0, 0, 1, 1};
 
-    /**
-     * The faces of the unit cube clipped by the planes, caps included, each as {x, y, z} per vertex in turn.
-     */
     public static List<float[]> faces(List<CutPlane> planes) {
         List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));
         boundary.addAll(CapBuilder.build(CUBE, planes, DUMMY_UV));
@@ -39,19 +32,16 @@ public final class Polytope {
         return out;
     }
 
-    /** The faces of the unit cube clipped by the planes, caps included. */
     public static List<MeshPoly> faceMeshes(List<CutPlane> planes) {
         List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));
         boundary.addAll(CapBuilder.build(CUBE, planes, DUMMY_UV));
         return boundary;
     }
 
-    /** The six faces of the unit cube, as a closed solid. */
     public static List<MeshPoly> cube() {
         return CUBE;
     }
 
-    /** Volume of the unit cube clipped by the given planes. */
     public static double volume(List<CutPlane> planes) {
         List<MeshPoly> boundary = new ArrayList<>(MeshClipper.clip(CUBE, planes));
         boundary.addAll(CapBuilder.build(CUBE, planes, DUMMY_UV));
@@ -66,31 +56,20 @@ public final class Polytope {
         return sum / 6.0;
     }
 
-    /** Classifies how {@code cut} divides the block already restricted by {@code existing}. */
     public static Side classify(List<CutPlane> existing, CutPlane cut) {
         return classify(existing, cut, MIN_VOLUME);
     }
 
-    /** As {@link #classify(List, CutPlane)}, but a piece smaller than {@code minVolume} counts as nothing. */
     public static Side classify(List<CutPlane> existing, CutPlane cut, double minVolume) {
         return classify(existing, cut, minVolume, 0);
     }
 
-    /** How much of what there is on each side of a cut is enough, at least, for it to be a cut (see below). */
     private static final double RELATIVE_VOLUME = 0.15, RELATIVE_EXTENT = 0.3;
 
-    /**
-     * How {@code cut} divides what the block is made of: its {@code shape} (boxes), restricted by {@code existing}.
-     * A side counts if it has at least {@code minVolume} of it and reaches {@code minExtent} from the plane, or, for
-     * something small (a thin limb, a slice already cut thin), at least a fair share of what there is: a part two
-     * pixels wide can be cut like any other.
-     */
     public static Side classify(List<CutPlane> existing, List<List<CutPlane>> excluded, CutPlane cut, List<double[]> shape,
                                 double minVolume, double minExtent) {
         double kept = 0, removed = 0, keptReach = 0, removedReach = 0;
         if (!excluded.isEmpty()) {
-            // Parts were cut out of it: what is on either side is no longer convex, so it is measured in the boxes
-            // that approximate it (as its collision shape does), not exactly.
             List<double[]> keptBoxes = VoxelBoxes.remaining(shape, with(existing, cut), excluded);
             List<double[]> removedBoxes = VoxelBoxes.remaining(shape, with(existing, cut.flipped()), excluded);
             kept = VoxelBoxes.volume(keptBoxes);
@@ -125,12 +104,11 @@ public final class Polytope {
         return sides(kept, removed, keptReach, removedReach, minVolume, minExtent);
     }
 
-    /** Which sides of a cut count, given how much is on each and how far each reaches from the plane. */
     private static Side sides(double kept, double removed, double keptReach, double removedReach, double minVolume,
                               double minExtent) {
         double total = kept + removed;
         if (total <= 0) {
-            return Side.ALL_KEPT; // nothing there to cut
+            return Side.ALL_KEPT;
         }
         double volumeNeeded = Math.min(minVolume, RELATIVE_VOLUME * total);
         double extentNeeded = Math.min(minExtent, RELATIVE_EXTENT * (keptReach + removedReach));
@@ -143,7 +121,6 @@ public final class Polytope {
         return Side.SPLIT;
     }
 
-    /** How far the boxes reach on the kept side of the plane, at their furthest corner. */
     private static double reach(List<double[]> boxes, CutPlane plane) {
         double reach = 0;
         for (double[] b : boxes) {
@@ -160,13 +137,8 @@ public final class Polytope {
         return out;
     }
 
-    /**
-     * As {@link #classify(List, CutPlane, double)}, and a side that reaches less than {@code minExtent} away from
-     * the plane (at its furthest point) counts as nothing too. Volume alone lets a thin layer over a whole face pass
-     * as a real cut, though it is only the blade grazing the surface; extent does not.
-     */
     public static Side classify(List<CutPlane> existing, CutPlane cut, double minVolume, double minExtent) {
-        if (existing.isEmpty()) { // untouched cube: its corners decide, exactly
+        if (existing.isEmpty()) {
             double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
             for (int i = 0; i < 8; i++) {
                 double dist = cut.signedDistance(i & 1, i >> 1 & 1, i >> 2 & 1);
@@ -210,10 +182,6 @@ public final class Polytope {
         return Side.SPLIT;
     }
 
-    /**
-     * Whether any of the block's face on {@code axis} (0=x, 1=y, 2=z; positive or negative side) is still
-     * there after the cuts, i.e. the block still touches a neighbour on that side.
-     */
     public static boolean touchesFace(List<CutPlane> planes, int axis, boolean positive) {
         MeshPoly face = CUBE.get(axis * 2 + (positive ? 0 : 1));
         double area = 0;
@@ -223,7 +191,6 @@ public final class Polytope {
         return area > MIN_FACE_AREA;
     }
 
-    /** Rough centre of the unit cube clipped by the planes (sampled), or the cube's middle if nothing is left. */
     public static double[] centroid(List<CutPlane> planes) {
         final int n = 6;
         double x = 0, y = 0, z = 0;
@@ -251,19 +218,13 @@ public final class Polytope {
         return count == 0 ? new double[]{0.5, 0.5, 0.5} : new double[]{x / count, y / count, z / count};
     }
 
-    /**
-     * Whether the faces of two blocks that touch really overlap. {@code a}'s face on {@code axis}/{@code positive}
-     * is clipped by {@code a}'s cuts, then by {@code b}'s cuts moved into {@code a}'s frame; if something is left,
-     * the two solids are in contact. A cut running through a shared face can leave the halves on either side of it
-     * touching nothing.
-     */
     public static boolean facesOverlap(List<CutPlane> a, int axis, boolean positive, List<CutPlane> b) {
         if (a.isEmpty() && b.isEmpty()) {
             return true;
         }
         double step = positive ? 1 : -1;
         List<CutPlane> movedB = new ArrayList<>(b.size());
-        for (CutPlane p : b) { // b is one block further along the axis: its local point = ours - step along axis
+        for (CutPlane p : b) {
             double shift = (axis == 0 ? p.nx() : axis == 1 ? p.ny() : p.nz()) * step;
             movedB.add(new CutPlane(p.nx(), p.ny(), p.nz(), p.d() + shift));
         }
@@ -284,7 +245,6 @@ public final class Polytope {
         return ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
     }
 
-    /** Six faces, counter-clockwise seen from outside. */
     private static List<MeshPoly> buildCube() {
         List<MeshPoly> faces = new ArrayList<>(6);
         int[][] corners = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
@@ -293,7 +253,7 @@ public final class Polytope {
                 int u = (axis + 1) % 3, w = (axis + 2) % 3;
                 float[] verts = new float[4 * MeshPoly.STRIDE];
                 for (int k = 0; k < 4; k++) {
-                    int[] c = corners[sign > 0 ? k : 3 - k]; // reversed winding for the negative face
+                    int[] c = corners[sign > 0 ? k : 3 - k];
                     float[] p = new float[3];
                     p[axis] = sign > 0 ? 1 : 0;
                     p[u] = c[0];

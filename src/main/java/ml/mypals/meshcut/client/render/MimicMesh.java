@@ -25,8 +25,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class MimicMesh {
-    private static final int SIDES = 7; // the six directions, then "null" (never culled)
-    /** The glow has no texture of its own: a plain white one, so that only its colour (and the bloom) shows. */
+    private static final int SIDES = 7;
     private static final ResourceLocation FLAT = ResourceLocation.withDefaultNamespace("block/white_concrete");
     private static final float GLOW_LIFT = 0.002f;
     private static final int GLOW_ARGB = 0x99FFFFFF;
@@ -45,7 +44,6 @@ public final class MimicMesh {
             .weakKeys().maximumSize(MAX_CACHED).build();
     private static final Cache<MimicRenderData, SmoothFragments> FRAGMENTS = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(512).build();
-    /** Newest task first: what a block was told last is what it needs, the rest is already out of date. */
     private static final class NewestFirst extends java.util.concurrent.LinkedBlockingDeque<Runnable> {
         @Override public boolean offer(Runnable task) { return offerFirst(task); }
     }
@@ -66,10 +64,6 @@ public final class MimicMesh {
     private final ChunkRenderTypeSet layers;
     @Nullable
     private final TextureAtlasSprite particle;
-    /**
-     * The faces cuts have opened in this block, exactly as they are in the mesh (null: not known, a block drawn by a block
-     * entity renderer). The glow of a fresh cut is these faces, picked by their plane: nothing is cut a second time.
-     */
     @Nullable
     private final List<MeshPoly> cutFaces;
 
@@ -180,7 +174,6 @@ public final class MimicMesh {
         sb.append('\n');
     }
 
-    /** Runs the task on a mesh worker. */
     public static void async(Runnable task) {
         WORKERS.execute(() -> {
             try {
@@ -205,7 +198,7 @@ public final class MimicMesh {
         mesh = CACHE.getIfPresent(data.geometry());
         if (mesh == null && onRenderThread()) {
             schedule(data, null);
-            return EMPTY; // not cached: the next frame asks again
+            return EMPTY;
         }
         if (mesh == null) {
             mesh = build(data);
@@ -221,16 +214,9 @@ public final class MimicMesh {
         return mesh;
     }
 
-    /** What each block was last drawn as, so a block being re-cut keeps its look until the new mesh is ready. */
     private static final Map<Long, MimicMesh> LAST = new ConcurrentHashMap<>();
-    /** The blocks waiting for a mesh that is being built. */
     private static final Map<MimicRenderData.Geometry, java.util.Set<Long>> WAITING = new ConcurrentHashMap<>();
 
-    /**
-     * The mesh of a block in the chunk. Chunk builder threads must not be held up by cutting a model (it takes long, and
-     * every builder thread would be busy with it): if the mesh is not at hand it is built on a mesh worker, and the block
-     * shows what it showed before until the section is rebuilt with the new one.
-     */
     public static MimicMesh of(MimicRenderData data, @Nullable net.minecraft.core.BlockPos pos) {
         if (pos == null) {
             return of(data);
@@ -242,7 +228,7 @@ public final class MimicMesh {
             if (mesh == null) {
                 MimicMesh before = LAST.get(pos.asLong());
                 schedule(data, pos);
-                mesh = CACHE.getIfPresent(data.geometry()); // finished meanwhile: nobody would tell this block
+                mesh = CACHE.getIfPresent(data.geometry());
                 if (mesh == null) {
                     MimicMesh preview = previewOf(data);
                     return preview != null ? preview : before != null ? before : EMPTY;
@@ -258,9 +244,7 @@ public final class MimicMesh {
         return mesh;
     }
 
-    /** What each block wants to be drawn as now: a mesh nobody wants any more is not worth building. */
     private static final Map<Long, MimicRenderData.Geometry> DESIRED = new ConcurrentHashMap<>();
-    /** Stands for the callers that have no position (they want the mesh whatever happens to any block). */
     private static final long ANYONE = Long.MIN_VALUE;
 
     private static void schedule(MimicRenderData data, @Nullable net.minecraft.core.BlockPos pos) {
@@ -276,7 +260,7 @@ public final class MimicMesh {
             try {
                 java.util.Set<Long> wanting = WAITING.get(geometry);
                 if (wanting != null && !wanting.contains(ANYONE) && wanting.stream().noneMatch(p -> geometry.equals(DESIRED.get(p)))) {
-                    return; // every block that asked for it has asked for something newer since
+                    return;
                 }
                 MimicMesh built = build(data);
                 synchronized (CACHE_LOCK) {
@@ -292,7 +276,6 @@ public final class MimicMesh {
         });
     }
 
-    /** Has the sections of these blocks rebuilt, now that their meshes are there. */
     private static void redraw(java.util.Set<Long> positions) {
         var level = Minecraft.getInstance().level;
         if (level == null) return;
@@ -320,7 +303,6 @@ public final class MimicMesh {
         }
     }
 
-    /** The fragments of a block cut into cells, or null if its cut-out parts are not a lattice (legacy geometry). */
     @Nullable
     public static SmoothFragments fragments(MimicRenderData data) {
         boolean[] mask = VoxelFragments.latticeMask(data.excluded());
@@ -334,7 +316,6 @@ public final class MimicMesh {
         }
     }
 
-    /** The edges of a cut block for its selection outline, following the real shape of its fragments. */
     public static List<double[]> outline(MimicRenderData data, List<double[]> shape) {
         SmoothFragments fragments = fragments(data);
         if (fragments != null) {
@@ -343,10 +324,6 @@ public final class MimicMesh {
         return Outline.edges(regionPlanes(data), data.excluded(), shape);
     }
 
-    /**
-     * @param layer the chunk render layer being compiled, or null to get the quads of every layer
-     * @param side  the face being compiled; null for quads that are never culled
-     */
     public List<BakedQuad> quads(@Nullable RenderType layer, @Nullable Direction side) {
         int index = side == null ? SIDES - 1 : side.ordinal();
         if (layer == null) {
@@ -365,16 +342,10 @@ public final class MimicMesh {
         return particle;
     }
 
-    /**
-     * The part of a cut-up entity one block holds, as a model to cut: the recorded entity moved to where it stands
-     * relative to this block, its faces kept to the block, and its whole closed body (not kept to the block) to cut
-     * faces from. Render thread only.
-     */
     public static ModelCapturer.CapturedMesh entityPart(ml.mypals.meshcut.block.EntityAppearance entity) {
         ModelCapturer.EntityCapture capture = ModelCapturer.captureEntityParts(entity.look());
         ModelCapturer.CapturedMesh source = entity.part() == null ? capture.whole() : capture.limbs().get(entity.part());
         if (source == null) {
-            // this client took the entity apart differently from the one that built the body (other mods, say)
             return new ModelCapturer.CapturedMesh(Map.of(), List.of(), capture.whole().capUv());
         }
         double[] r = entity.rotation();
@@ -394,7 +365,6 @@ public final class MimicMesh {
         return new ModelCapturer.CapturedMesh(byType, place(source.opaque(), inverse, o), source.capUv());
     }
 
-    /** The faces turned by {@code rotation} and then moved by {@code by}. */
     private static List<MeshPoly> place(List<MeshPoly> polys, org.joml.Quaternionf rotation, double[] by) {
         List<MeshPoly> out = new ArrayList<>(polys.size());
         org.joml.Vector3f p = new org.joml.Vector3f();
@@ -448,10 +418,10 @@ public final class MimicMesh {
 
     private static MimicMesh buildMesh(MimicRenderData data) {
         if (data.entity() != null) {
-            return EMPTY; // drawn by the block entity renderer: entity textures are not in the block atlas
+            return EMPTY;
         }
         if (ModelCapturer.hasBlockEntityRenderer(data.target())) {
-            return EMPTY; // drawn by the block entity renderer instead
+            return EMPTY;
         }
         ModelCapturer.ModelMesh model = ModelCapturer.captureModel(data.target());
 
@@ -465,7 +435,6 @@ public final class MimicMesh {
             CAPS_OUT.remove();
         }
         caps = PolyMerge.merge(caps);
-        // the cuts leave a surface in thousands of small pieces: one polygon again where they fit together
         clipped.replaceAll((type, polys) -> PolyMerge.merge(polys));
 
         return assemble(clipped, model.particle(), caps);
@@ -491,17 +460,10 @@ public final class MimicMesh {
         return new MimicMesh(byLayer, particle, caps);
     }
 
-    /** The previews made, by the data of the block they were made for (a block asks for its mesh at every chunk rebuild). */
     private static final Cache<MimicRenderData, MimicMesh> PREVIEWS = CacheBuilder.newBuilder()
             .weakKeys().maximumSize(MAX_CACHED).build();
     private static final MimicMesh NO_PREVIEW = new MimicMesh(new LinkedHashMap<>(), null, null);
 
-    /**
-     * What a block shows while its smooth mesh is being cut: its cells as they are (see {@link MimicPreview}), so that a
-     * spot that was just hit is open at once instead of being missing or whole for the moment it takes. Null for blocks
-     * that are not plain cubes, which have to wait for the real mesh. Cheap enough for a chunk builder thread: a pass over
-     * the 512 cells and a few clips of the model's faces.
-     */
     @Nullable
     private static MimicMesh previewOf(MimicRenderData data) {
         MimicMesh known = PREVIEWS.getIfPresent(data);
@@ -521,15 +483,6 @@ public final class MimicMesh {
         return made;
     }
 
-    /**
-     * The pieces a block is drawn as: just its real cuts, or, if it has pending cuts, one piece per region those
-     * divide it into. Each region is pulled back from every pending cut by half a slit, so a gap shows where the
-     * block was cut.
-     */
-    /**
-     * The pieces the cuts that go right through divide the block into: exactly the ones the server separates (see
-     * {@link Arrangement}), each pulled back from the cuts by half the width of the slit between them.
-     */
     public static List<List<CutPlane>> regionPlanes(MimicRenderData data) {
         List<List<CutPlane>> pieces = Arrangement.pieces(data.planes(), data.patches());
         int real = data.planes().size();
@@ -544,20 +497,11 @@ public final class MimicMesh {
         return out;
     }
 
-    /**
-     * A model cut as the block is: divided into the pieces its cuts make (with the slit between them), without the
-     * parts that were cut out, and with the cut faces and the walls of those parts added in {@code capLayer}. Used for
-     * the chunk mesh and, for blocks drawn by a block entity renderer, by {@code MimicRenderer}, so both look the same.
-     *
-     * @param opaque the model's closed surface, to cut faces from (a whole-cube block uses an exact cube instead)
-     */
-    /** Contact geometry excludes decorative scorch overlays: they are not material surfaces. */
     public static List<MeshPoly> contactModel(ModelCapturer.CapturedMesh source, MimicRenderData data) {
         return cutModel(source.byType(), source.opaque(), source.capUv(), null, data, RenderType.solid(), false)
                 .values().stream().flatMap(List::stream).toList();
     }
 
-    /** Where {@link #cutModel} puts the cut faces it makes, if the caller wants them apart from the rest of the mesh. */
     private static final ThreadLocal<List<MeshPoly>> CAPS_OUT = new ThreadLocal<>();
 
     public static Map<RenderType, List<MeshPoly>> cutModel(Map<RenderType, List<MeshPoly>> byType, List<MeshPoly> opaque,
@@ -608,7 +552,6 @@ public final class MimicMesh {
         return out;
     }
 
-    /** The cut faces of a piece: those its own cuts leave, minus whatever was cut out of them. */
     private static List<MeshPoly> cutCaps(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
                                           float[] uv, Object sprite) {
         List<MeshPoly> caps = new ArrayList<>();
@@ -621,14 +564,9 @@ public final class MimicMesh {
         return withinBlock(caps);
     }
 
-    /**
-     * What the cut faces are made from. A block whose collision shape is a whole cube is cut open as a plain cube:
-     * the section of its model can be unreliable (models made of several shells, or with inner faces, give loops that
-     * do not close), and a cube's section is exact. Other blocks use their own model.
-     */
     private static List<MeshPoly> capBase(List<MeshPoly> opaque, MimicRenderData data) {
         if (data.entity() != null) {
-            return opaque; // the body itself: its box says nothing about where its flesh is
+            return opaque;
         }
         for (double[] b : ml.mypals.meshcut.block.MimicShapes.cutBoxes(data.target())) {
             if (b[0] <= 1e-6 && b[1] <= 1e-6 && b[2] <= 1e-6 && b[3] >= 1 - 1e-6 && b[4] >= 1 - 1e-6 && b[5] >= 1 - 1e-6) {
@@ -638,11 +576,6 @@ public final class MimicMesh {
         return opaque;
     }
 
-    /**
-     * Whether there is something behind a wall: just behind its middle (away from the part that was cut out) the
-     * block must be solid, within its piece and not in another cut-out part. Two parts cut out side by side share a
-     * plane, and a wall there would stand alone between two holes.
-     */
     private static boolean backed(MeshPoly face, List<CutPlane> hole, List<CutPlane> piece, List<List<CutPlane>> excluded) {
         float[] v = face.verts();
         int n = face.vertexCount();
@@ -652,7 +585,6 @@ public final class MimicMesh {
             y += v[i * MeshPoly.STRIDE + 1];
             z += v[i * MeshPoly.STRIDE + 2];
         }
-        // the face looks into the hole; behind it is the other way
         x = x / n - face.nx() * 0.01;
         y = y / n - face.ny() * 0.01;
         z = z / n - face.nz() * 0.01;
@@ -676,12 +608,10 @@ public final class MimicMesh {
         return true;
     }
 
-    /** Whether the face lies in one of the planes (facing either way). */
     private static boolean onAny(MeshPoly face, List<CutPlane> planes) {
         float[] v = face.verts();
         for (CutPlane p : planes) {
             double dot = p.nx() * face.nx() + p.ny() * face.ny() + p.nz() * face.nz();
-            // a piece is pulled back from a cut by half the slit, so its face is that far from the plane
             if (Math.abs(dot) > 0.999 && Math.abs(p.signedDistance(v[0], v[1], v[2])) < SLIT_WIDTH) {
                 return true;
             }
@@ -689,21 +619,14 @@ public final class MimicMesh {
         return false;
     }
 
-    /** The six half-spaces of the unit cube. */
     private static final List<CutPlane> CUBE = List.of(
             new CutPlane(-1, 0, 0, 0), new CutPlane(1, 0, 0, 1), new CutPlane(0, -1, 0, 0),
             new CutPlane(0, 1, 0, 1), new CutPlane(0, 0, -1, 0), new CutPlane(0, 0, 1, 1));
 
-    /** Faces made here (not taken from the model) never leave the block, whatever the geometry they came from. */
     private static List<MeshPoly> withinBlock(List<MeshPoly> faces) {
         return faces.isEmpty() ? faces : MeshClipper.clip(faces, CUBE);
     }
 
-    /**
-     * The faces around the parts that were cut out of the block, turned to face into the hole, within one piece:
-     * a piece is pulled back from the cuts by the slit, and a wall must stop where its piece stops, or it is left
-     * standing alone in the slit.
-     */
     private static List<MeshPoly> holeFaces(List<MeshPoly> opaque, List<CutPlane> planes, List<List<CutPlane>> excluded,
                                             float[] uv, Object sprite) {
         List<MeshPoly> faces = new ArrayList<>();
@@ -714,7 +637,7 @@ public final class MimicMesh {
                 repeated = CutPlane.sameRegion(excluded.get(q), region);
             }
             if (repeated) {
-                continue; // the same part cut out twice has one set of walls
+                continue;
             }
             for (int j = 0; j < region.size(); j++) {
                 List<CutPlane> others = new ArrayList<>(planes);
@@ -725,13 +648,12 @@ public final class MimicMesh {
                 }
                 List<MeshPoly> wall;
                 if (opaque == Polytope.cube() && region instanceof HoleReducer.ReducedPlanes prepared) {
-                    // a block that is a plain cube: the wall was worked out with the region (and is one polygon, not triangles)
                     MeshPoly made = prepared.wall(j, uv, sprite);
                     wall = made == null ? List.of() : planes.isEmpty() ? List.of(made) : MeshClipper.clip(List.of(made), planes);
                 } else {
                     wall = CapBuilder.face(opaque, region.get(j).flipped(), others, uv, sprite);
                 }
-                wall = HoleWalls.exposed(wall, r, excluded); // nothing is behind a wall where another part was cut out too
+                wall = HoleWalls.exposed(wall, r, excluded);
                 for (MeshPoly face : wall) {
                     if (backed(face, region, planes, excluded)) {
                         faces.add(face);
@@ -742,10 +664,6 @@ public final class MimicMesh {
         return withinBlock(faces);
     }
 
-    /**
-     * The glowing lava layer over the cut faces, as polygons in block-local coordinates. It is not part of the chunk
-     * mesh: {@code MimicRenderer} draws it for a while after the cut and lets it fade. Render thread only.
-     */
     public static List<MeshPoly> glowPolys(MimicRenderData data, long position) {
         long epoch = generation;
         List<MeshPoly> cached = GLOW_BY_IDENTITY.getIfPresent(data);
@@ -761,7 +679,6 @@ public final class MimicMesh {
             return List.of();
         }
         TextureAtlasSprite lava = Minecraft.getInstance().getTextureAtlas(TextureAtlas.LOCATION_BLOCKS).apply(FLAT);
-        // the mesh of the block knows its cut faces (it is cut on a worker if it is not there yet)
         MimicMesh mesh = CACHE.getIfPresent(data.geometry());
         if (mesh == null) {
             of(data);
@@ -769,7 +686,6 @@ public final class MimicMesh {
         }
         List<MeshPoly> glow;
         if (mesh.cutFaces != null) {
-            // The faces of the recent cuts are taken from the mesh as they are (same shape, same place), no cutting.
             var recent = new PlaneIndex<Boolean>();
             data.glowCuts().forEach(p -> recent.put(p, Boolean.TRUE));
             glow = new ArrayList<>();
@@ -780,10 +696,9 @@ public final class MimicMesh {
                     glow.add(lavaOf(face, lava));
                 }
             }
-            // Cuts that only scratched the block (slits) have no cut face: they glow where the cut went
             List<MeshPoly> slits = slitGlow(data, lava);
             if (slits == null) {
-                return GLOW_SHOWN.getOrDefault(position, glow); // being worked out
+                return GLOW_SHOWN.getOrDefault(position, glow);
             }
             glow.addAll(slits);
         } else {
@@ -800,7 +715,6 @@ public final class MimicMesh {
         return glow;
     }
 
-    /** What the cuts that took nothing out of the block glow with; null while it is being worked out. */
     private static List<MeshPoly> slitGlow(MimicRenderData data, TextureAtlasSprite lava) {
         if (data.patches().isEmpty()) return List.of();
         var onPatch = new PlaneIndex<Boolean>();
@@ -809,7 +723,6 @@ public final class MimicMesh {
         return cuts.isEmpty() ? List.of() : asyncGlow(SLIT_GLOW, data, lava, cuts);
     }
 
-    /** Worked out on a mesh worker; null until it is there. */
     private static List<MeshPoly> asyncGlow(Cache<MimicRenderData, List<MeshPoly>> cache, MimicRenderData data,
                                             TextureAtlasSprite lava, List<CutPlane> cuts) {
         long epoch = generation;
@@ -835,13 +748,9 @@ public final class MimicMesh {
     private static final Cache<MimicRenderData, List<MeshPoly>> SLIT_GLOW = CacheBuilder.newBuilder().maximumSize(MAX_CACHED).build();
     private static final Map<MimicRenderData, Boolean> GLOWING = new ConcurrentHashMap<>();
     private static final Map<MimicRenderData, Boolean> GLOWING_SLITS = new ConcurrentHashMap<>();
-    /** What a block glowed with last (by its position), shown while the next is being worked out. */
     private static final Map<Long, List<MeshPoly>> GLOW_SHOWN = new ConcurrentHashMap<>();
 
-    /** The cuts, cut again from scratch: for what has no cut face of its own in the mesh. */
     private static List<MeshPoly> buildGlow(MimicRenderData data, TextureAtlasSprite lava, List<CutPlane> glowCuts) {
-        // Old saves may still contain synthetic voxel exclusion planes in glowCuts: only the planes that really are a
-        // cut of this block glow.
         var real = new PlaneIndex<Boolean>();
         data.planes().forEach(p -> real.put(p, Boolean.TRUE));
         data.patches().forEach(patch -> real.put(patch.plane(), Boolean.TRUE));
@@ -862,7 +771,6 @@ public final class MimicMesh {
         return (sprite.getV0() + sprite.getV1()) / 2;
     }
 
-    /** A cut face as glow: the same polygon, a hair out from the surface, flat colour, full-bright, semi-transparent. */
     private static MeshPoly lavaOf(MeshPoly face, TextureAtlasSprite lava) {
         float[] v = face.verts().clone();
         for (int i = 0; i < v.length / MeshPoly.STRIDE; i++) {
@@ -876,7 +784,6 @@ public final class MimicMesh {
         return new MeshPoly(v, face.nx(), face.ny(), face.nz(), -1, 15, GLOW_ARGB, lava, -1, false);
     }
 
-    /** The lava layer: same face, nudged outwards, full-bright and semi-transparent. */
     public static MeshPoly glowOf(MeshPoly cap) {
         float[] v = cap.verts().clone();
         for (int o = 0; o < v.length; o += MeshPoly.STRIDE) {
@@ -887,7 +794,6 @@ public final class MimicMesh {
         return new MeshPoly(v, cap.nx(), cap.ny(), cap.nz(), -1, 15, GLOW_ARGB, cap.sprite(), -1, false);
     }
 
-    /** Fan-triangulates the convex polygon; every triangle becomes a degenerate quad. */
     private static void addQuads(List<BakedQuad> out, MeshPoly poly, TextureAtlasSprite fallback) {
         TextureAtlasSprite sprite = poly.sprite() instanceof TextureAtlasSprite s ? s : fallback;
         Direction direction = Direction.getNearest(poly.nx(), poly.ny(), poly.nz());
@@ -901,12 +807,11 @@ public final class MimicMesh {
         }
     }
 
-    /** BLOCK vertex format, 8 ints per vertex: pos(3 floats), color, uv(2 floats), light, normal. */
     private static BakedQuad quad(MeshPoly poly, int[] corners, TextureAtlasSprite sprite, Direction direction) {
         int[] data = new int[32];
         float[] v = poly.verts();
         int argb = poly.argb();
-        int abgr = (argb & 0xFF00FF00) | (argb >> 16 & 0xFF) | (argb & 0xFF) << 16; // block colours are stored as ABGR
+        int abgr = (argb & 0xFF00FF00) | (argb >> 16 & 0xFF) | (argb & 0xFF) << 16;
         int e = poly.lightEmission();
         int light = e > 0 ? (e << 4) | (e << 4) << 16 : 0;
         int normal = (pack(poly.nx())) | (pack(poly.ny()) << 8) | (pack(poly.nz()) << 16);

@@ -5,9 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.joml.Vector3d;
 
-/** Clips captured textured surfaces to a voxel union and emits only its exposed internal boundaries. */
 public final class FragmentMesh {
-    /** Permanent char on captured surfaces, bounded by the actual swept triangles. */
     public static List<MeshPoly> scorches(List<MeshPoly> source,List<Patch> patches) {
         List<MeshPoly> out=new ArrayList<>();
         for(MeshPoly face:source) for(Patch patch:patches) {
@@ -67,7 +65,7 @@ public final class FragmentMesh {
         int n=CellGrid.N;
         for(int axis=0;axis<3;axis++) for(int side=-1;side<=1;side+=2) for(int depth=0;depth<n;depth++) {
             int next=depth+side;
-            if(next<0 || next>=n) continue; // original exterior is supplied by the captured model
+            if(next<0 || next>=n) continue;
             boolean[] face=new boolean[mask.length];
             for(int i=0;i<mask.length;i++) {
                 if(!mask[i]) continue;
@@ -81,7 +79,6 @@ public final class FragmentMesh {
             double[] normal=new double[3]; normal[axis]=side;
             double position=(depth+(side>0?1:0))/(double)n;
             CutPlane plane=new CutPlane(normal[0],normal[1],normal[2],side*position);
-            // Build each planar section only once, then bound its rectangles.
             List<MeshPoly> section=CapBuilder.face(source,plane,real,uv,sprite);
             for(double[] rect:rectangles) out.addAll(MeshClipper.clip(section,VoxelFragments.planes(rect)));
         }

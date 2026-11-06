@@ -13,7 +13,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Uses the same captured/clipped geometry as the mod's visible block models. */
 final class LightsaberSurfaces {
     private static final Map<MimicRenderData, List<MeshPoly>> CUT_MODELS = new LinkedHashMap<>(32, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<MimicRenderData, List<MeshPoly>> eldest) {
@@ -36,7 +35,6 @@ final class LightsaberSurfaces {
             var data = mimic.renderData();
             List<MeshPoly> cached = CUT_MODELS.get(data);
             if (cached != null) return cached;
-            // Model capture must stay on the client thread. Geometry work must not stall contact ticks.
             if (BUILDING.size() >= 16 || !BUILDING.add(data)) return List.of();
             long epoch = generation;
             try {

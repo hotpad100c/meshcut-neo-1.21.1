@@ -18,11 +18,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-/**
- * Model of the mimic block: instead of fixed quads it produces the imitated block's quads, clipped by the cuts, so
- * the cut block is part of the ordinary chunk mesh (with face culling, lighting and batching) rather than being
- * drawn by a block entity renderer every frame.
- */
 public class MimicBakedModel implements IDynamicBakedModel {
     private final BakedModel fallback;
 
@@ -30,7 +25,6 @@ public class MimicBakedModel implements IDynamicBakedModel {
         this.fallback = fallback;
     }
 
-    /** Bind prediction data for renderers that obtain model data from the unchanged ordinary block. */
     public static MimicBakedModel predicted(BakedModel fallback, ml.mypals.meshcut.client.CutPrediction.View view,
                                             net.minecraft.core.BlockPos pos) {
         ModelData bound=ModelData.builder().with(MimicRenderData.PROPERTY,view.data())
@@ -71,7 +65,6 @@ public class MimicBakedModel implements IDynamicBakedModel {
         return sprite != null ? sprite : fallback.getParticleIcon();
     }
 
-    /** From the block entity's model data; null if the caller couldn't supply it. */
     @Nullable
     private static MimicMesh meshFor(ModelData data) {
         MimicRenderData render = data.get(MimicRenderData.PROPERTY);

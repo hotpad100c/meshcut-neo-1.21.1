@@ -5,13 +5,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Joins the pieces a surface was cut into back together where they make one convex polygon again. Clipping a face
- * against a hole leaves a strip of polygons per plane of the hole; the strips of many holes add up to thousands of
- * quads for a single block, each of which costs something at every chunk rebuild. Only polygons that lie in the same
- * plane, look the same and share a whole edge are joined, and only if the result is convex and no more quads than the
- * pieces were.
- */
 public final class PolyMerge {
     private static final int S = MeshPoly.STRIDE;
     private static final double QUANT = 1e4;
@@ -50,7 +43,7 @@ public final class PolyMerge {
         boolean merged = true;
         for (int pass = 0; merged && pass < 12; pass++) {
             merged = false;
-            Map<Long, int[]> edges = new HashMap<>(); // directed edge -> {polygon, first vertex of the edge}
+            Map<Long, int[]> edges = new HashMap<>();
             for (int i = 0; i < verts.size(); i++) {
                 float[] v = verts.get(i);
                 if (v == null) continue;
@@ -59,13 +52,13 @@ public final class PolyMerge {
                     edges.put(edgeKey(v, e, (e + 1) % n), new int[]{i, e});
                 }
             }
-            boolean[] changedThisPass = new boolean[verts.size()]; // the edge maps no longer describe these
+            boolean[] changedThisPass = new boolean[verts.size()];
             for (int i = 0; i < verts.size(); i++) {
                 float[] p = verts.get(i);
                 if (p == null || changedThisPass[i]) continue;
                 int n = p.length / S;
                 for (int e = 0; e < n; e++) {
-                    int[] other = edges.get(edgeKey(p, (e + 1) % n, e)); // the same edge, the other way round
+                    int[] other = edges.get(edgeKey(p, (e + 1) % n, e));
                     if (other == null || other[0] == i || changedThisPass[other[0]]) continue;
                     float[] q = verts.get(other[0]);
                     if (q == null) continue;
@@ -76,13 +69,12 @@ public final class PolyMerge {
                         changedThisPass[i] = true;
                         changedThisPass[other[0]] = true;
                         merged = true;
-                        break; // the maps are stale for this polygon: later passes pick up the rest
+                        break;
                     }
                 }
             }
         }
         List<MeshPoly> out = new ArrayList<>();
-        // polygons that were not touched keep their own record; joined ones take the group's attributes
         Map<float[], MeshPoly> original = new java.util.IdentityHashMap<>();
         for (MeshPoly p : group) {
             original.put(p.verts(), p);
@@ -100,23 +92,21 @@ public final class PolyMerge {
         return n == 4 ? 1 : n - 2;
     }
 
-    /** The polygon made of p and q across p's edge {@code e} (p[e] -> p[e+1]) which is q's edge {@code f} reversed; null if it is not convex. */
     private static float[] join(float[] p, int e, float[] q, int f, MeshPoly template) {
         int pn = p.length / S, qn = q.length / S;
         if (dist(vertex(p, (e + 1) % pn), vertex(q, f)) > 1e-3 || dist(vertex(p, e), vertex(q, (f + 1) % qn)) > 1e-3) {
-            return null; // the keys only looked alike
+            return null;
         }
         if (!sameMapping(p, q)) {
-            return null; // two quads of the model that happen to lie in one plane are textured on their own
+            return null;
         }
         List<float[]> ring = new ArrayList<>(pn + qn);
-        for (int k = 1; k <= pn; k++) { // p from the end of the shared edge round to its start
+        for (int k = 1; k <= pn; k++) {
             ring.add(vertex(p, (e + k) % pn));
         }
-        for (int k = 2; k < qn; k++) { // then q without the two shared corners
+        for (int k = 2; k < qn; k++) {
             ring.add(vertex(q, (f + k) % qn));
         }
-        // drop corners that are in line with their neighbours
         boolean changed = true;
         while (changed && ring.size() > 3) {
             changed = false;
@@ -137,7 +127,7 @@ public final class PolyMerge {
             double[] x = cross(a, b, c, template);
             double side = x[0] * template.nx() + x[1] * template.ny() + x[2] * template.nz();
             if (side < -1e-7) {
-                return null; // a reflex corner: not one convex polygon
+                return null;
             }
         }
         float[] out = new float[ring.size() * S];
@@ -147,10 +137,8 @@ public final class PolyMerge {
         return out;
     }
 
-    /** Whether the texture coordinates of q are what p's mapping gives at q's corners (a joined polygon has one mapping). */
     private static boolean sameMapping(float[] p, float[] q) {
         int n = p.length / S;
-        // the corner triple of p that spans the most
         int ia = 0, ib = 1, ic = 2;
         double best = -1;
         for (int i = 0; i + 2 < n; i++) {

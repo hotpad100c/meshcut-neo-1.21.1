@@ -6,7 +6,6 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 
 import java.util.Map;
 
-/** A model part's children by name: where limbs get their names from. */
 @Mixin(ModelPart.class)
 public interface ModelPartAccessor {
     @Accessor("children")

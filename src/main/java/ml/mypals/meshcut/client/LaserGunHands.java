@@ -36,7 +36,6 @@ import org.lwjgl.opengl.GL30;
 import java.util.HashMap;
 import java.util.Map;
 
-/** The hand, gun and laser muzzle use the same camera-relative frame. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LaserGunHands {
     private record Kick(double time, float initial, int slot) {}
@@ -136,14 +135,10 @@ public final class LaserGunHands {
         var mc = Minecraft.getInstance();
         var player = mc.player;
         if (player == null || !(player.getMainHandItem().getItem() instanceof LaserGunItem)) return;
-        // AFTER_WEATHER normally inherits depthMask(false); opaque RenderTypes do not
-        // turn it back on. Bloom can restore it, making the missing hand depth intermittent.
-        // Fabulous also enters this stage with a separate weather framebuffer bound.
         mc.renderBuffers().bufferSource().endBatch();
         boolean previousDepthWrite = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
         int previousTarget = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
         try {
-            // Only change the draw binding, leaving the caller's read framebuffer intact.
             GlStateManager._glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, mc.getMainRenderTarget().frameBufferId);
             RenderSystem.depthMask(true);
             renderHeldGun(event);
@@ -176,14 +171,12 @@ public final class LaserGunHands {
             Vector3f grip = GunRecoil.grip();
             pose.translate(grip.x, grip.y, grip.z);
             pose.mulPose(Axis.XP.rotationDegrees(-55));
-            // Enlarge skin and sleeve around the palm, keeping the grip anchor fixed.
             pose.scale(1.05f, 1.05f, 1.05f);
             pose.translate((right ? 1 : -1) * (slim ? 5.5f : 6f) / 16, -10.5f / 16, 0);
             arm.render(pose, buffers.getBuffer(RenderType.entitySolid(player.getSkin().texture())), light, OverlayTexture.NO_OVERLAY);
             if (player.isModelPartShown(right ? PlayerModelPart.RIGHT_SLEEVE : PlayerModelPart.LEFT_SLEEVE))
                 sleeve.render(pose, buffers.getBuffer(RenderType.entityCutoutNoCull(player.getSkin().texture())), light, OverlayTexture.NO_OVERLAY);
             pose.popPose();
-            // Commit the skin and sleeve depth before the weapon's item buffers are drawn.
             buffers.endBatch(RenderType.entitySolid(player.getSkin().texture()));
             buffers.endBatch(RenderType.entityCutoutNoCull(player.getSkin().texture()));
         }

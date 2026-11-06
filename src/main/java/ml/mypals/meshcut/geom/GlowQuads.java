@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import org.joml.Vector3f;
 
-/** Co-planar glow triangles become one bounding quad. Only the temporary glow is approximated. */
 public final class GlowQuads {
     public static List<MeshPoly> simplify(List<MeshPoly> faces) {
         List<Group> groups = new ArrayList<>();
@@ -54,7 +53,6 @@ public final class GlowQuads {
                 float a=(i==1 || i==2) ? maxU : minU, b=i>=2 ? maxV : minV;
                 int o=i*MeshPoly.STRIDE;
                 p[o]=u.x*a+v.x*b+n.x*d; p[o+1]=u.y*a+v.y*b+n.y*d; p[o+2]=u.z*a+v.z*b+n.z*d;
-                // Sample the lava's existing atlas region; no atlas coordinates outside the original face.
                 int t=(i%source.vertexCount())*MeshPoly.STRIDE;
                 p[o+3]=original[t+3]; p[o+4]=original[t+4];
             }

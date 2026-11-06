@@ -38,7 +38,6 @@ public final class LightsaberControls {
         Minecraft mc = Minecraft.getInstance();
         if (event.getButton() != org.lwjgl.glfw.GLFW.GLFW_MOUSE_BUTTON_RIGHT || mc.screen != null
                 || mc.player == null || !(mc.player.getMainHandItem().getItem() instanceof LightsaberItem item)) return;
-        // Hold mode uses vanilla use-key state and its release packet.
         if (!ml.mypals.meshcut.MeshCutClientConfig.toggleSaber()) return;
         event.setCanceled(true);
         if (event.getAction() == org.lwjgl.glfw.GLFW.GLFW_PRESS) {
@@ -108,7 +107,6 @@ public final class LightsaberControls {
         while (LightsaberKeys.RANDOM_SWING.consumeClick()) {}
     }
 
-    /** After the tick's aim is worked out: the blade as drawn, which is what the server is to cut along. */
     @SubscribeEvent
     public static void sendBlade(ClientTickEvent.Post event) {
         LocalPlayer player = Minecraft.getInstance().player;

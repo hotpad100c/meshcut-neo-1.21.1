@@ -5,19 +5,9 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Walls of parts cut out of a block, where several such parts overlap (a laser burns one block after another, and each
- * burn reaches back into the one before).
- */
 public final class HoleWalls {
     private static final double COPLANAR = 1e-5;
 
-    /**
-     * What is left of a wall of {@code excluded.get(index)} once the other cut-out parts are taken from it: nothing is
-     * behind a wall where another part was cut out too. Where two parts have a wall in the very same plane facing the
-     * same way (the walls of two bores along one axis), each would take the other's away as lying inside it, and
-     * neither would be drawn; the earlier part keeps the wall there, the later one gives up what the earlier covers.
-     */
     public static List<MeshPoly> exposed(List<MeshPoly> wall, int index, List<List<CutPlane>> excluded) {
         List<CutPlane> region = excluded.get(index);
         double[] near = boundsOf(wall);
@@ -27,20 +17,17 @@ public final class HoleWalls {
                 continue;
             }
             if (apart(HoleReducer.bounds(other), near)) {
-                continue; // nowhere near this wall (a box test costs nothing beside the plane tests below)
+                continue;
             }
-            // Most holes of a block are nowhere near a given wall: a plane of theirs with the whole wall behind it says so
-            // at once (it is also what makes the comparisons below, which are quadratic in the planes, rare).
             if (clearOf(wall, other)) {
                 continue;
             }
-            // Pieces of the wall wholly inside the other part are gone at once, without cutting anything.
             wall = withoutInside(wall, other);
             if (wall.isEmpty()) {
                 break;
             }
             if (CutPlane.sameRegion(other, region)) {
-                continue; // the same part cut out twice has one set of walls (the caller draws it once)
+                continue;
             }
             List<MeshPoly> kept = new ArrayList<>(), test = new ArrayList<>();
             for (MeshPoly poly : wall) {
@@ -113,12 +100,10 @@ public final class HoleWalls {
         return true;
     }
 
-    /** The plane of the region the face lies in, facing the way the region's wall there faces; null if none. */
     private static CutPlane sharedPlane(MeshPoly face, List<CutPlane> region) {
         float[] v = face.verts();
         for (CutPlane p : region) {
             double dot = p.nx() * face.nx() + p.ny() * face.ny() + p.nz() * face.nz();
-            // the wall of a part faces into it, which is against its plane's outward normal
             if (dot < -0.9999) {
                 boolean on = true;
                 for (int i = 0; i < face.vertexCount() && on; i++) {

@@ -21,11 +21,8 @@ import java.util.UUID;
 
 @EventBusSubscriber(modid = MeshCut.MODID)
 public final class LightsaberHandler {
-    /** Larger jumps are teleports or dimension changes, not swings. */
     private static final double MAX_TIP_SPEED = 30;
-    /** Slower than this the blade is standing still and sweeps nothing. */
     private static final double MIN_TIP_SPEED = 0.01;
-    /** The item's maximum use duration bounds storage in each settlement interval. */
     private static final int MAX_SWIPES = 72000;
 
     private static final class Swing {
@@ -58,22 +55,14 @@ public final class LightsaberHandler {
         }
     }
 
-    /** The client's blade is believed if its base is this close to the player's eyes (a hand reaches about one). */
     private static final double MAX_BASE_DISTANCE = 3.5;
-    /** Blades the client has sent and the server has not used yet, per player; no more are kept than a few ticks give. */
     private static final int MAX_INBOX = 8;
-    /** A client silent this long is not sending its blade (it does not know to): the server works the blade out itself. */
     private static final int SILENT_TICKS = 5;
 
     private static final Map<UUID, Blade> LAST = new HashMap<>();
     private static final Map<UUID, List<Blade>> INBOX = new HashMap<>();
     private static final Map<UUID, Integer> HEARD = new HashMap<>();
 
-    /**
-     * The blade as the client drew it this tick. The cut is made along what the client sent, so that what the player
-     * sees burn is what is cut and the two cannot drift apart; it is believed only within reason: the base near the
-     * player, the blade no longer than it can be, and (in the tick handler) no jumps.
-     */
     public static void receive(ServerPlayer player, ml.mypals.meshcut.network.LightsaberNet.Swing swing) {
         if (!LightsaberItem.isActive(player)) {
             return;
@@ -108,12 +97,11 @@ public final class LightsaberHandler {
             LAST.remove(id);
             INBOX.remove(id);
             HEARD.remove(id);
-            finish(player); // switched off or changed item: settle the remaining stroke
+            finish(player);
             return;
         }
         List<Blade> blades = INBOX.remove(id);
         if (blades == null || blades.isEmpty()) {
-            // nothing came this tick: the blade has not moved, unless the client does not send it at all
             boolean silent = player.tickCount - HEARD.getOrDefault(id, Integer.MIN_VALUE / 2) > SILENT_TICKS;
             blades = silent ? List.of(Blade.of(player, 1f)) : List.of();
         }
@@ -123,16 +111,14 @@ public final class LightsaberHandler {
         Swing swing = SWINGS.get(id);
         if (swing != null && ++swing.elapsed >= ml.mypals.meshcut.MeshCutConfig.SETTLEMENT_TICKS.get()) {
             finish(player);
-            // LAST remains the start of the next segment; never bridge across a missing blade sample.
         }
     }
 
-    /** One position of the blade: the sweep from the one before it, for entities now and for blocks when it is over. */
     private static void step(ServerPlayer player, UUID id, Blade now) {
         Blade before = LAST.put(id, now);
         Swing swing = SWINGS.get(id);
         if (swing != null && (swing.dimension != player.level().dimension() || swing.session != LightsaberMotion.session(player))) {
-            SWINGS.remove(id); // changed dimension mid-cut
+            SWINGS.remove(id);
             swing = null;
             before = null;
         }
@@ -156,7 +142,6 @@ public final class LightsaberHandler {
         }
     }
 
-    /** Applies the swing that has just ended, if there is one. */
     private static void finish(ServerPlayer player) {
         Swing swing = SWINGS.remove(player.getUUID());
         if (swing == null || swing.dimension != player.level().dimension()) {

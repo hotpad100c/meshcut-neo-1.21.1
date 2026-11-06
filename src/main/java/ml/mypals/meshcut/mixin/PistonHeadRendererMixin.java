@@ -17,7 +17,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
-/** A mimic a piston is moving is drawn from the data it carries (see {@link MovingMimicRenderer}). */
 @Mixin(PistonHeadRenderer.class)
 public abstract class PistonHeadRendererMixin {
     @WrapOperation(method = "render(Lnet/minecraft/world/level/block/piston/PistonMovingBlockEntity;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;II)V",

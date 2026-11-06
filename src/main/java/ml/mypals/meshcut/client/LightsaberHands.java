@@ -28,7 +28,6 @@ import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
-/** First-person skin arms, hilt and beam share the world pass and its existing depth buffer. */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class LightsaberHands {
     private static PlayerModel<AbstractClientPlayer> wideModel;

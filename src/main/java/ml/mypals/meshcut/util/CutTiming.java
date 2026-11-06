@@ -4,7 +4,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import ml.mypals.meshcut.MeshCut;
 
-/** Opt-in phase timings: one report per slow settlement, instead of one log per block. */
 public final class CutTiming implements AutoCloseable {
     private static final ThreadLocal<Report> ACTIVE = new ThreadLocal<>();
     private static final CutTiming OFF = new CutTiming(null, null, false);

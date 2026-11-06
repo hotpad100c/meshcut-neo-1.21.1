@@ -6,31 +6,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * The visual shape of a block's fragments: the cells of the {@link CellGrid} that belong to them, with the boundary
- * between kept and lost cells following the swept surfaces instead of the cell faces.
- * <p>
- * The swept surfaces are first merged into a few global planes (a bent stroke is a handful of planes, not hundreds of
- * triangles). Every cell is then divided by the planes that cross it, so the pieces of neighbouring cells meet in
- * exactly the same polygons. That is what makes the result closed: a piece is kept or lost as a whole, and the visible
- * boundary is simply every face of a kept piece that no other kept piece covers. No point is ever tested against a
- * face, so there are no gaps and no slivers left over by the way the boundary was found.
- */
 public final class SmoothFragments {
     private static final int N = CellGrid.N;
-    /** A plane closer than this to a piece's corners does not divide it. */
     private static final double MIN_SPLIT = 2e-3;
-    /** Swept surfaces that agree within this angle and distance are drawn as one plane. */
     private static final double MERGE_COS = Math.cos(Math.toRadians(9));
     private static final double MERGE_DISTANCE = 0.025;
     private static final int MAX_PLANES = 6;
     private static final int MAX_PIECES = 48;
     private static final double MIN_AREA = 1e-7;
 
-    /** A polygon of a piece boundary; {@code kind} 0..5 is a face of the cell box (axis*2 + high), 6+k a split plane. */
     private record Face(double[] v, int kind) {}
 
-    /** A convex part of one cell, on one side of every plane that crosses the cell. */
     private static final class Piece {
         final List<Face> faces;
         final int[] ids;
@@ -43,12 +29,10 @@ public final class SmoothFragments {
         }
     }
 
-    /** A visible polygon of the boundary, wound counter-clockwise seen from outside, with its plane's identity. */
     public record Boundary(double[] verts, double nx, double ny, double nz, String key) {}
 
     private record SplitPlane(int id, CutPlane plane, boolean material) {}
     private record CellKey(int cell, List<SplitPlane> cuts) {}
-    /** Immutable partitions, shared across block versions and detached fragments. Never cache ownership. */
     private static final Map<CellKey, List<Piece>> PARTITIONS = new java.util.LinkedHashMap<>(128, 0.75f, true);
     private static int cachedPieces;
     private static final int MAX_CACHED_PIECES = 32768;
@@ -81,12 +65,9 @@ public final class SmoothFragments {
     private final List<Patch> patches;
     private final List<CutPlane> real;
     private final List<CutPlane> planes = new ArrayList<>();
-    /** Each patch's bounding box (min, max), so that most are ruled out without looking at their plane. */
     private final double[][] patchBounds;
     private final Piece[][] cells = new Piece[CellGrid.CELLS][];
-    /** Cells that are kept whole and are not divided by any plane: they are merged into boxes when clipping. */
     private final boolean[] whole = new boolean[CellGrid.CELLS];
-    /** Grid planes the fragments change across: what lies beyond the block is divided along their extensions. */
     private final List<CutPlane> transitions = new ArrayList<>();
 
     public SmoothFragments(boolean[] mask, List<Patch> patches, List<CutPlane> real) {
@@ -133,13 +114,10 @@ public final class SmoothFragments {
         }
     }
 
-    // ---------------------------------------------------------------- the planes
-
-    /** The swept surfaces as a few planes; none that lies on a real cut, which is a plane of its own. */
     private static List<CutPlane> surfaces(List<Patch> patches, List<CutPlane> real) {
         List<Patch> bySize = new ArrayList<>(patches);
         bySize.sort((a, b) -> Double.compare(Patch.area(b.polygon()), Patch.area(a.polygon())));
-        List<double[]> clusters = new ArrayList<>(); // nx*w, ny*w, nz*w, cx*w, cy*w, cz*w, w
+        List<double[]> clusters = new ArrayList<>();
         for (Patch patch : bySize) {
             float[] poly = patch.polygon();
             double w = Math.max(1e-6, Patch.area(poly));
@@ -201,8 +179,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    // ---------------------------------------------------------------- the pieces
-
     private Piece[] divide(int cell) {
         int x = cell / (N * N), y = cell / N % N, z = cell % N;
         double[] b = {x / (double) N, y / (double) N, z / (double) N, (x + 1) / (double) N, (y + 1) / (double) N, (z + 1) / (double) N};
@@ -215,7 +191,7 @@ public final class SmoothFragments {
                 max = Math.max(max, d);
             }
             if (k < real.size() && max <= MIN_SPLIT) {
-                return new Piece[0]; // cut away
+                return new Piece[0];
             }
             if (min < -MIN_SPLIT && max > MIN_SPLIT) {
                 crossing.add(k);
@@ -243,7 +219,6 @@ public final class SmoothFragments {
             }
         }
         for (int at = start; at < crossing.size(); at++) {
-            // Preserve the full rebuild's complexity limit, including on a cached prefix.
             if (pieces.size() > MAX_PIECES) break;
             int k = crossing.get(at);
             List<Piece> next = new ArrayList<>();
@@ -251,7 +226,7 @@ public final class SmoothFragments {
                 Piece[] halves = split(piece, k);
                 if (halves == null) {
                     boolean positive = side(piece, planes.get(k));
-                    if (k >= real.size() || positive) { // a piece wholly in the cut-away part is gone
+                    if (k >= real.size() || positive) {
                         next.add(with(piece, k, positive));
                     }
                 } else {
@@ -279,7 +254,7 @@ public final class SmoothFragments {
             return new Piece[0];
         }
         boolean cutByReal = crossing.stream().anyMatch(k -> k < real.size());
-        if (kept == pieces.size() && !cutByReal) { // the planes in here separate nothing: the cell is kept whole
+        if (kept == pieces.size() && !cutByReal) {
             Piece one = new Piece(box(b), new int[0], new boolean[0]);
             whole[cell] = true;
             return new Piece[]{one};
@@ -306,7 +281,6 @@ public final class SmoothFragments {
         return new Piece(piece.faces, ids, pos);
     }
 
-    /** {positive side, negative side} of the piece, or null if the plane does not really cross it. */
     private Piece[] split(Piece piece, int k) {
         CutPlane plane = planes.get(k);
         double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
@@ -374,7 +348,7 @@ public final class SmoothFragments {
         tx /= tl;
         ty /= tl;
         tz /= tl;
-        double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx; // t x b = n
+        double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
         final double[] angles = new double[points.size()];
         Integer[] order = new Integer[points.size()];
         for (int i = 0; i < order.length; i++) {
@@ -400,7 +374,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /** The six faces of a cell box, wound counter-clockwise seen from outside. */
     private static List<Face> box(double[] b) {
         double x0 = b[0], y0 = b[1], z0 = b[2], x1 = b[3], y1 = b[4], z1 = b[5];
         List<Face> faces = new ArrayList<>(8);
@@ -429,8 +402,6 @@ public final class SmoothFragments {
         }
         return c;
     }
-
-    // ---------------------------------------------------------------- polygons
 
     private static double[] clip(double[] in, CutPlane plane) {
         int n = in.length / 3;
@@ -467,7 +438,6 @@ public final class SmoothFragments {
         return 0.5 * Math.sqrt(ax * ax + ay * ay + az * az);
     }
 
-    /** What is left of the polygons outside the convex region. */
     private static List<double[]> subtract(List<double[]> polys, List<CutPlane> region) {
         List<double[]> out = new ArrayList<>();
         for (double[] poly : polys) {
@@ -486,7 +456,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /** The planes bounding the piece, as half-spaces to stay inside, leaving out {@code except} (or -1). */
     private List<CutPlane> region(Piece piece, int except) {
         List<CutPlane> out = new ArrayList<>(piece.ids.length);
         for (int i = 0; i < piece.ids.length; i++) {
@@ -498,14 +467,10 @@ public final class SmoothFragments {
         return out;
     }
 
-    // ---------------------------------------------------------------- the surface
-
-    /** The model's surface kept to the fragments. */
     public List<MeshPoly> clip(List<MeshPoly> source) {
         return clip(source, true);
     }
 
-    /** @param beyond whether what lies beyond the block goes with the fragment nearest it (not for an entity's limb) */
     public List<MeshPoly> clip(List<MeshPoly> source, boolean beyond) {
         List<MeshPoly> out = new ArrayList<>();
         for (double[] box : VoxelFragments.boxes(whole)) {
@@ -527,8 +492,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    // ---------------------------------------------------------------- what lies beyond the block
-
     private static boolean extendsOutside(List<MeshPoly> source) {
         for (MeshPoly poly : source) {
             float[] v = poly.verts();
@@ -543,7 +506,6 @@ public final class SmoothFragments {
         return false;
     }
 
-    /** The parts of the polygons that lie beyond the unit cube, as disjoint pieces (one slab at a time). */
     private static List<MeshPoly> outsideOf(List<MeshPoly> source) {
         List<MeshPoly> out = new ArrayList<>();
         List<MeshPoly> rest = source;
@@ -555,7 +517,7 @@ public final class SmoothFragments {
                 for (MeshPoly part : MeshClipper.clip(rest, List.of(beyond))) {
                     float[] v = part.verts();
                     float reach = 0;
-                    for (int i = axis; i < v.length; i += MeshPoly.STRIDE) { // a face in the cube's own plane is not beyond it
+                    for (int i = axis; i < v.length; i += MeshPoly.STRIDE) {
                         reach = Math.max(reach, side == 0 ? -v[i] : v[i] - 1);
                     }
                     if (reach > 1e-5f) {
@@ -568,11 +530,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /**
-     * The pieces of what lies beyond the block that go with a fragment. Each is divided along the planes and the
-     * grid planes the fragments change across, then goes with whichever fragment the nearest point of the block is
-     * in, on the same side of every plane.
-     */
     private List<MeshPoly> keptOutside(List<MeshPoly> pieces) {
         List<CutPlane> divide = new ArrayList<>(transitions);
         divide.addAll(planes);
@@ -605,7 +562,7 @@ public final class SmoothFragments {
             return belongs(p);
         }
         double[] q = {Math.clamp(p[0], 0, 1), Math.clamp(p[1], 0, 1), Math.clamp(p[2], 0, 1)};
-        for (int pass = 0; pass < 3; pass++) { // keep the nearest point on the same side of every plane as the point
+        for (int pass = 0; pass < 3; pass++) {
             for (CutPlane plane : planes) {
                 double sp = plane.signedDistance(p[0], p[1], p[2]), sq = plane.signedDistance(q[0], q[1], q[2]);
                 if ((sp >= 0) != (sq >= 0)) {
@@ -619,7 +576,6 @@ public final class SmoothFragments {
         return belongs(q);
     }
 
-    /** The faces where a cut passes through what lies beyond the block, which the faces inside it do not reach. */
     private List<MeshPoly> outsideCaps(List<MeshPoly> source, float[] uv, Object sprite) {
         List<MeshPoly> out = new ArrayList<>();
         for (int k = 0; k < planes.size(); k++) {
@@ -644,7 +600,7 @@ public final class SmoothFragments {
                 }
                 MeshPoly face = piece;
                 double sign = 1;
-                if (outer) { // the fragment is on the far side: seen from its side the face turns round
+                if (outer) {
                     float[] v = piece.verts();
                     int n = piece.vertexCount();
                     float[] flipped = new float[v.length];
@@ -710,11 +666,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /**
-     * Every face of a kept piece that no other kept piece covers: the surface the fragments have inside the block.
-     *
-     * @param exterior whether to include the faces on the block's own faces too
-     */
     public List<Boundary> boundary(boolean exterior) {
         List<Boundary> out = new ArrayList<>();
         for (int cell = 0; cell < cells.length; cell++) {
@@ -777,7 +728,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /** The piece on the other side of plane {@code k} of this one, in the same cell. */
     private static Piece across(Piece[] pieces, Piece piece, int k) {
         for (Piece other : pieces) {
             if (other == piece) {
@@ -804,12 +754,10 @@ public final class SmoothFragments {
         return null;
     }
 
-    /** The faces the fragments have inside the block, textured from the model's own section by each plane. */
     public List<MeshPoly> caps(List<MeshPoly> source, float[] uv, Object sprite) {
         return caps(source, uv, sprite, true);
     }
 
-    /** @param beyond as in {@link #clip(List, boolean)}: the body of an entity reaches far past its limb's block */
     public List<MeshPoly> caps(List<MeshPoly> source, float[] uv, Object sprite, boolean beyond) {
         boolean cube = source == Polytope.cube();
         Map<String, List<MeshPoly>> sections = new HashMap<>();
@@ -837,7 +785,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /** The half-spaces that keep what lies over the polygon, seen along its normal. */
     private static List<CutPlane> edgePlanes(double[] poly, Boundary face) {
         List<CutPlane> out = new ArrayList<>();
         int n = poly.length / 3;
@@ -853,10 +800,6 @@ public final class SmoothFragments {
         return out;
     }
 
-    /**
-     * A cap polygon with its texture laid on by position, along the axis the face looks along. The same spot of the
-     * block has the same texture whichever plane it is on, so neighbouring faces of a bent surface line up.
-     */
     private static MeshPoly textured(double[] poly, Boundary face, float[] uv, Object sprite, MeshPoly from) {
         float[] v;
         if (from != null) {
@@ -883,7 +826,7 @@ public final class SmoothFragments {
                 a = x;
                 b = 1 - y;
             }
-            if (a < 0 || a > 1) { // beyond the block the texture repeats: it must stay within its sprite
+            if (a < 0 || a > 1) {
                 a -= Math.floor(a);
             }
             if (b < 0 || b > 1) {
@@ -895,13 +838,6 @@ public final class SmoothFragments {
         return new MeshPoly(v, (float) face.nx(), (float) face.ny(), (float) face.nz(), -1, 0, 0xFFFFFFFF, sprite, -1, true);
     }
 
-    // ---------------------------------------------------------------- the outline
-
-    /**
-     * The edges of the fragments, for the selection outline: where their surfaces end, not where the cells do.
-     *
-     * @param shape the boxes {minX, minY, minZ, maxX, maxY, maxZ} the block is made of
-     */
     public List<double[]> outline(List<double[]> shape) {
         boolean fullCube = false;
         for (double[] b : shape) {
@@ -923,7 +859,6 @@ public final class SmoothFragments {
                 }
             }
         }
-        // the faces of the shape itself, where there are fragments behind them (nudged in so they lie in one cell)
         for (int i = 0; i < shape.size(); i++) {
             double[] box = shape.get(i);
             double[][] sides = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
@@ -958,8 +893,6 @@ public final class SmoothFragments {
         }
         return BoundaryEdges.of(faces);
     }
-
-    // ---------------------------------------------------------------- which fragment a point is in
 
     private boolean belongs(double[] p) {
         for (CutPlane plane : real) {

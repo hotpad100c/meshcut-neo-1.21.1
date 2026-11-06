@@ -43,7 +43,7 @@ public final class ConnectionView extends RenderStateShard {
                 || mc.screen != null || !(mc.player.getMainHandItem().getItem() instanceof ml.mypals.meshcut.item.LightsaberItem)
                 || !(mc.level.getBlockEntity(event.getTarget().getBlockPos()) instanceof MimicBlockEntity be)) return;
         BlockPos pos = be.getBlockPos();
-        Vec3 eye = event.getCamera().getPosition(); // Sable supplies the camera in this plot's frame.
+        Vec3 eye = event.getCamera().getPosition();
         Vec3 target = event.getTarget().getLocation();
         Vec3 direction = target.subtract(eye).normalize();
         int selected = FragmentPick.pick(be.grid(), new double[]{eye.x - pos.getX(), eye.y - pos.getY(), eye.z - pos.getZ()},
@@ -92,7 +92,6 @@ public final class ConnectionView extends RenderStateShard {
             int axis = f / 2, sign = f % 2 == 0 ? 1 : -1;
             BlockPos next = be.getBlockPos().offset(axis == 0 ? sign : 0, axis == 1 ? sign : 0, axis == 2 ? sign : 0);
             if (!be.getLevel().hasChunkAt(next)) { unknown++; continue; }
-            // Never report contacts across the edge of a sub-level plot.
             if (dev.ryanhcode.sable.Sable.HELPER.getContaining(be.getLevel(), next)
                     != dev.ryanhcode.sable.Sable.HELPER.getContaining(be.getLevel(), be.getBlockPos())) continue;
             var state = be.getLevel().getBlockState(next);

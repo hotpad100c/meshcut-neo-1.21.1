@@ -4,7 +4,6 @@ import org.joml.Vector3f;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
-/** Player arm and hilt dimensions used by both the server's blade and the client model. */
 public final class SaberPose {
     public static final float EMITTER_Y = 15.35f / 16f;
     public static final float GRIP_Y = 6.4f / 16f;
@@ -14,7 +13,6 @@ public final class SaberPose {
     public static final float SHOULDER_SIDE = 5f / 16f;
     public static final float MOUTH_FROM_HAND = (EMITTER_Y - GRIP_Y) * HILT_SCALE;
     public static final float SUPPORT_GRIP_DISTANCE = 0.12f;
-    /** How much longer than natural an arm may be drawn: the hand is held back where the arms would stretch more. */
     public static final float MAX_STRETCH = 1.2f;
 
     public record ArmPose(float pitch, float yaw, float lengthScale) {}
@@ -33,7 +31,6 @@ public final class SaberPose {
                 (float) -Math.sin(p), (float) (Math.cos(y) * Math.cos(p)));
     }
 
-    /** Positive X/Y mean screen-right/up, including when the camera looks straight down. */
     public static Vector3f screenTranslation(float yaw, float pitch, float x, float y) {
         double angle = Math.toRadians(yaw);
         Vector3f right = new Vector3f((float) -Math.cos(angle), 0, (float) -Math.sin(angle));
@@ -41,7 +38,6 @@ public final class SaberPose {
         return right.mul(x).add(up.mul(y));
     }
 
-    /** Both hands meet on the hilt in front of the chest; the wrist moves slightly with the blade. */
     public static Vector3f grip(float relativeYaw, float pitch, boolean crouching) {
         float shoulderY = crouching ? 5.2f / 16f : 2f / 16f;
         return new Vector3f(0, 1.501f - shoulderY - 0.18f, 0.46f)
@@ -58,7 +54,6 @@ public final class SaberPose {
         float shoulderY = crouching ? 5.2f / 16f : 2f / 16f;
         Vector3f hand = grip(relativeYaw, pitch, crouching).add(translation);
         if (!mainArm) hand.sub(direction(relativeYaw, pitch).mul(SUPPORT_GRIP_DISTANCE));
-        // PlayerRenderer flips Y/Z between the model's coordinates and this body-relative frame.
         Vector3f arm = hand.sub(leftArm ? SHOULDER_SIDE : -SHOULDER_SIDE, 1.501f - shoulderY, 0);
         arm.y = -arm.y;
         arm.z = -arm.z;
@@ -67,11 +62,6 @@ public final class SaberPose {
                 (float) Math.atan2(-arm.x, -arm.z), length / HAND_REACH);
     }
 
-    /**
-     * The hand translation (in the world, before entity scale) drawn back towards the rest position as far as it takes
-     * for both arms to reach it without stretching past {@link #MAX_STRETCH}. Shared by the cutting blade and the
-     * model, so the blade is never held where the arms do not reach.
-     */
     public static Vector3f reachable(Vector3f offset, float aimYaw, float aimPitch, float bodyYaw,
                                      boolean crouching, boolean rightHanded) {
         float relativeYaw = aimYaw - bodyYaw;
@@ -97,7 +87,6 @@ public final class SaberPose {
                 armPose(relativeYaw, pitch, true, !rightHanded, crouching, translation).lengthScale());
     }
 
-    /** Offset from the player's feet: shared front grip, then the mouth along the blade. */
     public static Vector3f emitterOffset(float bodyYaw, Vector3f direction, boolean leftHand,
                                          boolean crouching, float entityScale) {
         Vector3f localDirection = new Vector3f(direction).rotateY((float) Math.toRadians(bodyYaw));

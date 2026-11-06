@@ -4,36 +4,21 @@ import ml.mypals.meshcut.cut.CutPlane;
 
 import java.util.List;
 
-/**
- * A block cut into {@value #N}³ small cells, to find which parts of it are still joined: two neighbouring cells are
- * joined unless the line between their centres runs through a cut. The connected groups are the pieces the block
- * has fallen into, whatever their shape; cells outside the block's real cuts are empty.
- * <p>
- * Also records, for each face of the block, which group each face cell belongs to, so neighbouring blocks can be
- * joined cell to cell.
- */
 public final class CellGrid {
     public static final int N = 8;
     public static final int CELLS = N * N * N;
-    /** Groups smaller than this many cells (4/512 of the lattice) are slivers and are dropped. */
     private static final int MIN_COMPONENT_CELLS = 4;
-    /** How far past its edge a patch still blocks (the polygon is clipped exactly at the block's boundary). */
     private static final double EDGE_TOLERANCE = 0.03;
-    /** Within this distance of a cut (in blocks) a point on a face touches nothing: that is the slit the cut leaves. */
     private static final double FACE_GAP = 0.03;
-    /** A face point belongs to a piece only if one of its cells is this close (a cell is 0.125 across). */
     private static final double FACE_REACH = 0.14;
     private static final double[][] CENTERS = centers();
 
-    /** Every cell is part of one piece: the block has no cuts. */
     public static final CellGrid FULL = new CellGrid();
 
-    /** Nothing is left of the block: it has no pieces at all. */
     public static final CellGrid EMPTY = new CellGrid(0);
 
     private final int[] comp = new int[CELLS];
     private final int[] size;
-    /** Face {@code f} = axis*2 + (positive side ? 0 : 1); cell index along it: the two other axes, in order. */
     private final int[][] faces = new int[6][N * N];
 
     private CellGrid() {
@@ -66,12 +51,6 @@ public final class CellGrid {
         }
     }
 
-    /**
-     * Which piece the point on the block's face (the centre of face cell {@code (a, b)}) belongs to, or -1 if there is
-     * none there. Taken at the face itself rather than from the cell behind it: a cut that runs between the two
-     * would otherwise let a piece touch a neighbour it does not reach, and the two blocks on either side of a face
-     * would not agree where a slanted cut crosses it.
-     */
     private int faceSample(int axis, int value, int a, int b, List<CutPlane> real, List<List<CutPlane>> excluded,
                            List<Patch> patches, List<double[]> shape) {
         double[] q = new double[3];
@@ -80,11 +59,11 @@ public final class CellGrid {
         q[first] = (a + 0.5) / N;
         q[second] = (b + 0.5) / N;
         if (shape != null && !insideShape(shape, q)) {
-            return -1; // nothing of the block is there
+            return -1;
         }
         for (CutPlane p : real) {
             if (p.signedDistance(q[0], q[1], q[2]) < -1e-6) {
-                return -1; // cut away
+                return -1;
             }
         }
         for (List<CutPlane> region : excluded) {
@@ -99,14 +78,13 @@ public final class CellGrid {
                 return -1;
             }
         }
-        for (Patch patch : patches) { // within the slit a cut leaves, nothing touches
+        for (Patch patch : patches) {
             CutPlane p = patch.plane();
             if (Math.abs(p.signedDistance(q[0], q[1], q[2])) < FACE_GAP
                     && (patch.through() || patch.containsProjected(q[0], q[1], q[2], EDGE_TOLERANCE))) {
                 return -1;
             }
         }
-        // the closest cell of the piece that the point can be reached from without crossing a cut
         int best = -1;
         double bestDistance = FACE_REACH * FACE_REACH;
         int depth = value == 1 ? N - 1 : 0;
@@ -134,19 +112,10 @@ public final class CellGrid {
         return best;
     }
 
-    /**
-     * The groups the block's cells fall into, given its real cuts, the convex parts that were cut out of it, and the
-     * scratches on it.
-     */
     public static CellGrid of(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches) {
         return of(real, excluded, patches, null);
     }
 
-    /**
-     * @param shape the boxes {minX, minY, minZ, maxX, maxY, maxZ} the block is made of (its collision shape), or
-     *              {@code null} for a whole block. Only cells that touch the shape exist: a torch has a small part
-     *              that can be cut, not a whole block of it.
-     */
     public static CellGrid of(List<CutPlane> real, List<List<CutPlane>> excluded, List<Patch> patches, List<double[]> shape) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("CellGrid.of")) {
             return build(real, excluded, patches, shape);
@@ -211,14 +180,13 @@ public final class CellGrid {
                 sizes[id] = count;
                 next++;
             } else {
-                for (int i = 0; i < CELLS; i++) { // a sliver: forget it, and let its id be reused
+                for (int i = 0; i < CELLS; i++) {
                     if (components[i] == id) {
                         components[i] = -1;
                     }
                 }
             }
         }
-        // slivers were dropped but may have left their cells marked "visited"; they are simply empty now
         return new CellGrid(components, next, java.util.Arrays.copyOf(sizes, next), real, excluded, patches, shape);
     }
 
@@ -234,7 +202,6 @@ public final class CellGrid {
         return false;
     }
 
-    /** Whether any box of the shape overlaps the cell. */
     private static boolean touchesShape(List<double[]> shape, int index) {
         int x = index / (N * N), y = index / N % N, z = index % N;
         double[] lo = {(double) x / N, (double) y / N, (double) z / N};
@@ -260,14 +227,13 @@ public final class CellGrid {
         return false;
     }
 
-    /** Whether some patch lies between the two points. */
     private static boolean blocked(List<Patch> patches, double[] ca, double[] cb) {
         for (Patch patch : patches) {
             CutPlane p = patch.plane();
             double da = p.d() - (p.nx() * ca[0] + p.ny() * ca[1] + p.nz() * ca[2]);
             double db = p.d() - (p.nx() * cb[0] + p.ny() * cb[1] + p.nz() * cb[2]);
             if ((da > 0) == (db > 0)) {
-                continue; // both on the same side
+                continue;
             }
             double t = da / (da - db);
             double hx = ca[0] + (cb[0] - ca[0]) * t, hy = ca[1] + (cb[1] - ca[1]) * t, hz = ca[2] + (cb[2] - ca[2]) * t;
@@ -288,7 +254,6 @@ public final class CellGrid {
         return result;
     }
 
-    /** Build one patch's immutable axis-edge mask; each grid line has at most one sign transition. */
     static long[][] cellEdges(Patch patch) {
         long[][] result = new long[3][7];
         CutPlane p = patch.plane();
@@ -338,33 +303,26 @@ public final class CellGrid {
         return (x * N + y) * N + z;
     }
 
-    // ---------------------------------------------------------------- queries
-
     public int componentCount() {
         return size.length;
     }
 
-    /** Number of cells in the group. */
     public int size(int component) {
         return size[component];
     }
 
-    /** The group of cell {@code index} (see {@link #center}), or -1 if it is empty. */
     public int component(int index) {
         return comp[index];
     }
 
-    /** The group touching the given face at cell {@code index} along it, or -1. */
     public int faceComponent(int face, int index) {
         return faces[face][index];
     }
 
-    /** Centre of cell {@code index}, in block-local coordinates. */
     public static double[] centerOf(int index) {
         return center(index).clone();
     }
 
-    /** Average position of the group's cells, in block-local coordinates. */
     public double[] centroid(int component) {
         double x = 0, y = 0, z = 0;
         int n = 0;
@@ -380,7 +338,6 @@ public final class CellGrid {
         return n == 0 ? new double[]{0.5, 0.5, 0.5} : new double[]{x / n, y / n, z / n};
     }
 
-    /** Total number of non-empty cells. */
     public int filledCells() {
         int n = 0;
         for (int s : size) {
@@ -389,7 +346,6 @@ public final class CellGrid {
         return n;
     }
 
-    /** How many cells of the group are within each of the groups of {@code face}: not needed outside tests. */
     @Override
     public String toString() {
         return "CellGrid" + java.util.Arrays.toString(size);

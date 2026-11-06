@@ -10,7 +10,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Tells a recording of an entity which model part is drawing (see {@link PartTags}). */
 @Mixin(ModelPart.class)
 public abstract class ModelPartMixin {
     @Inject(require = 0, method = "render(Lcom/mojang/blaze3d/vertex/PoseStack;Lcom/mojang/blaze3d/vertex/VertexConsumer;III)V",

@@ -73,7 +73,6 @@ public final class LaserGunItem extends Item {
         return InteractionResultHolder.consume(stack);
     }
 
-    /** The server derives the ray itself; the request contains only a prediction ID. */
     public static void requestShot(ServerPlayer player,long operation) {
         ItemStack stack=player.getMainHandItem();
         if(!player.isAlive() || player.isSpectator() || !(stack.getItem() instanceof LaserGunItem item)
@@ -94,7 +93,6 @@ public final class LaserGunItem extends Item {
         ServerLevel level = player.serverLevel();
         Vec3 start = player.getEyePosition(), direction = player.getLookAngle();
         Vec3 end = start.add(direction.scale(RANGE));
-        // Bound traversal to loaded terrain. Sable's clip also considers moving sub-levels.
         for (int step = 1; step <= RANGE; step++) {
             Vec3 sample = start.add(direction.scale(step));
             if (!level.hasChunkAt(net.minecraft.core.BlockPos.containing(sample))) {

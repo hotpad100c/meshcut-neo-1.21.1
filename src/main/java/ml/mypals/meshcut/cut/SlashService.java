@@ -42,48 +42,25 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
-/**
- * Cuts with the surface a blade sweeps.
- * <p>
- * A swing sweeps out a surface. Where it crosses a block it leaves a {@link Patch}: a plane and the part of it that
- * was actually swept, which may stop inside the block. Every block that gets one remembers it and stays whole
- * (a cut right through shows as a glowing slit, one that stops midway as a scratch on the block's faces).
- * <p>
- * Then the structure is analysed. Each block is cut into small cells; two neighbouring cells are joined unless a
- * patch runs between them, and touching blocks are joined cell to cell. A patch that goes right through a block
- * therefore separates its two sides, one that stops midway does not (the cells join up around its end), and
- * several scratches that close a loop seal off what is inside. If this severs the structure, the blocks whose
- * parts ended up in different groups are split, and each group that came apart becomes its own sub-level. Each fragment is a union of grid cells; concave fragments can leave just like convex ones.
- * <p>
- * In the static world a group is only released if it is small enough to be an isolated island: one that reaches the
- * ground (or anything too big to follow, or unloaded) is treated as anchored and stays where it is.
- */
 public final class SlashService {
     private static final double SAMPLE_STEP = 0.3;
     private static final int MAX_SAMPLES = 900;
     private static final double SEPARATION_SPEED = 1.5;
-    /** Structure id for everything attached to more than the search was willing to follow; all of it counts as one. */
     private static final int HUGE = -2;
 
-    /** The blade between two instants. */
     public record Swipe(Blade from, Blade to) {}
 
-    /** One swipe's swept surface: the plane through the blade and its motion, its outline, and sample points on it. */
     private record Sweep(Vec3 n, Vec3 center, Vec3[] quad, List<Vec3> samples) {}
 
-    /** One block position: what it holds, its cuts, and the cell groups (pieces) those cuts divide it into. */
     private static final class Info {
         final BlockPos pos;
         @Nullable
         final CutService.Piece piece;
         final List<Patch> patches;
         final CellGrid grid;
-        /** A thin layer of the block was burnt away by a cut along its edge, so it may no longer touch its neighbours. */
         boolean burned;
-        /** Weakly supported cut blocks release all their local pieces together. */
         boolean detached;
 
-        /** A block that was removed entirely: it holds nothing, but what was beside it may have come loose. */
         Info(BlockPos pos) {
             this.pos = pos;
             this.piece = null;
@@ -91,7 +68,6 @@ public final class SlashService {
             this.grid = CellGrid.EMPTY;
         }
 
-        /** A block as its own block entity already holds it: its cells are known, not worked out again. */
         Info(BlockPos pos, CutService.Piece piece, CellGrid grid) {
             this.pos = pos;
             this.piece = piece;
@@ -106,12 +82,10 @@ public final class SlashService {
             this.grid = piece == null ? CellGrid.FULL : CellGrid.of(piece.planes(), piece.excluded(), patches, piece.cutBoxes());
         }
 
-        /** The graph node a cell group belongs to. */
         int node(int component) {
             return component;
         }
 
-        /** The graph nodes of this block. */
         List<Integer> nodes() {
             List<Integer> nodes = new ArrayList<>();
             int count = grid.componentCount();
@@ -121,7 +95,6 @@ public final class SlashService {
             return nodes;
         }
 
-        /** The cell groups a node stands for. */
         Set<Integer> groupsOf(int node) {
             Set<Integer> groups = new HashSet<>();
             groups.add(node);
@@ -131,10 +104,8 @@ public final class SlashService {
 
     private record Node(BlockPos pos, int node) {}
 
-    /** What one group of a block will be once it has been split. */
     private record Spec(BlockPos pos, Info info, List<CutPlane> planes, List<List<CutPlane>> excluded, List<Patch> patches) {}
 
-    /** The blocks of one world (static) or one sub-level's plot, looked up lazily. */
     private static final class Domain {
         final ServerLevel level;
         final CapMode mode;
@@ -151,7 +122,6 @@ public final class SlashService {
             this.sub = sub;
         }
 
-        /** Whether the position is somewhere this domain may look: loaded static chunks, or inside the plot. */
         boolean inside(BlockPos pos) {
             if (sub != null) {
                 return sub.getPlot().getBoundingBox().contains(pos.getX(), pos.getY(), pos.getZ());
@@ -159,7 +129,6 @@ public final class SlashService {
             return level.isInWorldBounds(pos);
         }
 
-        /** Static chunks may be unloaded; looking at them would load them. A plot is loaded as a whole. */
         boolean loaded(BlockPos pos) {
             return sub != null || level.isLoaded(pos);
         }
@@ -187,36 +156,22 @@ public final class SlashService {
         }
     }
 
-    // ---------------------------------------------------------------- entry points
-
     public static CutService.Result slash(ServerLevel level, Blade from, Blade to, CapMode mode) {
         return slashSwing(level, List.of(new Swipe(from, to)), mode);
     }
 
-    /**
-     * Cuts with a whole swing at once: the surface it swept leaves its patches on every block it crossed, and the
-     * result is analysed once.
-     *
-     * @return {@code null} if the blade never moved across itself, so there was no swept surface
-     */
     public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode) {
         return slashSwing(level, swipes, mode, null);
     }
 
-    /** @param wielder who swung (creatures the blade passes through die and are cut too; the wielder never is) */
     public static CutService.Result slashSwing(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                @Nullable net.minecraft.world.entity.Entity wielder) {
         return slashSwing(level, swipes, mode, wielder, true);
     }
 
-    /** Whose blocks a cut leaves alone: one sub-level, or the static world (a laser must not cut what it stands on). */
     private static final ThreadLocal<Object> PROTECTED = new ThreadLocal<>();
     private static final Object STATIC_WORLD = new Object();
 
-    /**
-     * Like {@link #slashBlocks}, but nothing of {@code emitterBody} (the static world if null) is cut: the surface a
-     * beam sweeps starts at its emitter, and a body that moves carries the emitter through it.
-     */
     public static CutService.Result slashBlocksOutside(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                        @Nullable ServerSubLevel emitterBody) {
         PROTECTED.set(emitterBody != null ? emitterBody : STATIC_WORLD);
@@ -227,7 +182,6 @@ public final class SlashService {
         }
     }
 
-    /** Entity contact was already handled while holding the saber; release only applies the recorded world stroke. */
     public static CutService.Result slashBlocks(ServerLevel level, List<Swipe> swipes, CapMode mode,
                                                 @Nullable net.minecraft.world.entity.Entity wielder) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.begin(); var batch = WorldGraphs.batch(level)) {
@@ -249,7 +203,7 @@ public final class SlashService {
             return null;
         }
 
-        MimicBlock.setGlowingCuts(true); // what this swing cuts open glows; see MimicBlockEntity#configure
+        MimicBlock.setGlowingCuts(true);
         try {
             return cutWith(level, sweeps, mode, wielder, entities);
         } finally {
@@ -304,7 +258,7 @@ public final class SlashService {
             }
             collect(worldFragments, n, center, quad, sweep.samples(), null,
                     cell -> level.isInWorldBounds(cell) && !(container != null && container.inBounds(cell))
-                            && level.isLoaded(cell) && !level.getBlockState(cell).isAir()); // empty space is not worth clipping
+                            && level.isLoaded(cell) && !level.getBlockState(cell).isAir());
         }
         int staticBlocks = PROTECTED.get() == STATIC_WORLD ? 0 : process(level, null, surfacePatches(worldFragments), mode, created);
 
@@ -314,7 +268,6 @@ public final class SlashService {
         }
     }
 
-    /** Immediate entity-only contact, including a motionless blade. Never processes world blocks. */
     public static void touchEntities(ServerLevel level, Blade before, Blade now,
                                      net.minecraft.world.entity.Entity wielder) {
         if (now.direction().lengthSqr() < 1e-4) return;
@@ -323,7 +276,6 @@ public final class SlashService {
         if (sweep != null) sweeps.add(sweep);
         Vec3 direction = now.direction().normalize();
         Vec3 helper = Math.abs(direction.y) > 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
-        // The finite ribbon is as thin as the visible core and also supplies a plane for a stationary contact.
         Vec3 side = direction.cross(helper).normalize().scale(0.008);
         Sweep contact = sweepOf(new Blade(now.base().subtract(side), now.tip().subtract(side)),
                 new Blade(now.base().add(side), now.tip().add(side)));
@@ -333,12 +285,9 @@ public final class SlashService {
 
     private static java.util.Set<ServerSubLevel> cutEntities(ServerLevel level, List<Sweep> sweeps, CapMode mode,
                                      @Nullable net.minecraft.world.entity.Entity wielder) {
-        // Without a capture client the fallback body is built synchronously. Do not cut it again in cutWith.
         java.util.Set<ServerSubLevel> builtNow = new java.util.HashSet<>();
-        // creatures first: their bodies become sub-levels, which the cut below then goes through like any other
         List<EntityCutting.Swept> swept = new ArrayList<>(sweeps.size());
         sweeps.forEach(sweep -> swept.add(new EntityCutting.Swept(sweep.quad())));
-        // bodies built later (once a client has said what their limbs are) are cut by the same swing then
         EntityCutting.cut(level, swept, wielder, bodies -> {
             builtNow.addAll(bodies);
             MimicBlock.setGlowingCuts(true);
@@ -351,7 +300,6 @@ public final class SlashService {
         return builtNow;
     }
 
-    /** Cuts the sub-levels with the swing. @return how many of them it went through */
     private static int cutSubLevels(ServerLevel level, List<Sweep> sweeps, List<ServerSubLevel> subLevels, CapMode mode,
                                     int[] created) {
         var container = SubLevelContainer.getContainer(level);
@@ -385,18 +333,10 @@ public final class SlashService {
         return cutLevels;
     }
 
-    /** More candidate blocks than this and the swept quad is not worth walking cell by cell: its samples are used. */
     private static final int MAX_CANDIDATE_CELLS = 600;
-    /** Smallest piece of a sweep inside a block (in square blocks) that counts. */
     private static final double MIN_FRAGMENT_AREA = 1e-3;
 
 
-    /**
-     * Cuts the swept quad up by the blocks it crosses.
-     *
-     * @param pose   the sub-level's pose if the quad was brought into its plot space (for the samples), else null
-     * @param accept which positions may be cut in this frame
-     */
     private static void collect(Map<BlockPos, List<StrokeFit.Fragment>> out, Vector3d n, Vector3d center, Vector3d[] quad,
                                 List<Vec3> samples, @Nullable Pose3dc pose, Predicate<BlockPos> accept) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.collect")) {
@@ -428,9 +368,7 @@ public final class SlashService {
                 candidates.add(BlockPos.containing(local.x, local.y, local.z));
             }
         }
-        // which way the blade travelled across the quad
         Vector3d motion = new Vector3d(quad[3]).sub(quad[0]).add(new Vector3d(quad[2]).sub(quad[1])).mul(0.5);
-        // Keep each triangle in its own plane, including twisted blade sweeps. (The planes do not depend on the cell.)
         int[][] triangles = {{0,1,2},{0,2,3}};
         Vector3d[] normals = new Vector3d[2];
         for (int t = 0; t < 2; t++) {
@@ -463,7 +401,6 @@ public final class SlashService {
         }
     }
 
-    /** Bounded triangles, never upgraded to an infinite cut or averaged across a bend. */
     private static Map<BlockPos,List<Patch>> surfacePatches(Map<BlockPos,List<StrokeFit.Fragment>> fragments) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.surfacePatches")) {
         Map<BlockPos,List<Patch>> result=new LinkedHashMap<>();
@@ -498,7 +435,6 @@ public final class SlashService {
         return new Sweep(n.normalize(), center, quad, sweptSamples(from, to));
     }
 
-    /** Points spread over the quad the blade sweeps, dense enough that every block it crosses contains one. */
     private static List<Vec3> sweptSamples(Blade from, Blade to) {
         double lengthU = Math.max(from.direction().length(), to.direction().length());
         double lengthV = Math.max(to.base().subtract(from.base()).length(), to.tip().subtract(from.tip()).length());
@@ -520,18 +456,11 @@ public final class SlashService {
         return samples;
     }
 
-    // ---------------------------------------------------------------- one domain
-
-    /**
-     * @param sub the sub-level whose plot the cells are in, or {@code null} for the static world
-     * @return the number of blocks the cut passed through
-     */
     private static int process(ServerLevel level, @Nullable ServerSubLevel sub, Map<BlockPos, List<Patch>> cells,
                                CapMode mode, int[] created) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.process")) {
         Domain dom = new Domain(level, mode, sub);
 
-        // 1. every block a patch passes through remembers it
         List<Info> hits = new ArrayList<>();
         Vector3d nl = null;
         double dl = 0;
@@ -549,14 +478,13 @@ public final class SlashService {
             boolean changed = false, burned = false;
             for (Patch patch : entry.getValue()) {
                 if (!straddles(piece.cutBoxes(), patch.plane())) {
-                    continue; // passes through where the block has nothing (a torch is only a thin stick)
+                    continue;
                 }
                 List<Patch> before = new ArrayList<>(merged);
-                // Never convex-hull distinct surfaces or forget earlier connections.
                 if (merged.stream().noneMatch(old -> old.equals(patch) || old.covers(patch))) merged.add(patch);
                 if (!merged.equals(before)) {
                     changed = true;
-                    if (nl == null) { // which way the parts are pushed apart is judged by the first cut
+                    if (nl == null) {
                         CutPlane p = patch.plane();
                         nl = new Vector3d(p.nx(), p.ny(), p.nz());
                         dl = p.d() + nl.x * cell.getX() + nl.y * cell.getY() + nl.z * cell.getZ();
@@ -575,7 +503,6 @@ public final class SlashService {
                 for(List<CutPlane> hole:emptyCells) if(!holes.contains(hole)) holes.add(hole);
                 burned=grid.filledCells()<CellGrid.of(piece.planes(),piece.excluded(),List.of(),piece.cutBoxes()).filledCells();
                 CutService.Piece now=new CutService.Piece(piece.target(),planes,VoxelFragments.compact(holes),merged,piece.mode(),piece.beTag(),piece.undetachedBe(),piece.entity(),piece.glow());
-                // the cells were just worked out for exactly this: slivers are empty in it as they are in the holes
                 Info info = new Info(fixed, now, grid);
                 info.burned = burned;
                 dom.infos.put(fixed, info);
@@ -585,31 +512,18 @@ public final class SlashService {
         if (hits.isEmpty()) {
             return 0;
         }
-        // the pieces are pushed apart along the plane that tells which side they are on (with several swipes in one
-        // swing, it need not be the first swipe's)
         Vector3d world = sub == null ? new Vector3d(nl) : sub.logicalPose().transformNormal(new Vector3d(nl));
         return resolve(level, sub, dom, hits, nl, dl, new Vec3(world.x, world.y, world.z), created, true);
     
         }
     }
 
-    /** Who moves out of the structure, and which of the blocks that were cut are severed. */
     private record Plan(Map<Info, Map<Integer, Set<Integer>>> severed, Map<Integer, StructureGraph.Closure> closures,
                         Set<Integer> movers) {}
 
-    /**
-     * Decides what the cut blocks do: stay whole with their cuts remembered, or split, with every group that came
-     * apart becoming its own sub-level (or staying, if it is the biggest part or anchored).
-     *
-     * @param nl,dl,nWorld the plane the cut was made along (only used to decide which way the parts are pushed)
-     * @param applyUnsevered whether blocks that stay whole are written back with their (possibly new) cuts; off when
-     *                       the blocks were merely re-examined
-     * @return the number of blocks examined
-     */
     private static int resolve(ServerLevel level, @Nullable ServerSubLevel sub, Domain dom, List<Info> hits,
                                Vector3d nl, double dl, Vec3 nWorld, int[] created, boolean applyUnsevered) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.resolve")) {
-        // 2. which pieces are connected to which
         Map<Node, Integer> comp = new HashMap<>();
         Map<Integer, StructureGraph.Closure> closures = components(dom, hits, comp);
         if(sub==null) {
@@ -621,7 +535,6 @@ public final class SlashService {
                     Integer id=comp.get(new Node(hit.pos,node));
                     if(id!=null) ids.add(id);
                 }
-                // Analyse the whole structure first: a chain already severed keeps its neighbouring blocks.
                 if(ids.size()==1 && supportingNeighbours(dom,hit)<3) {hit.detached=true;changed=true;}
             }
             if(changed) {comp.clear();closures=components(dom,hits,comp);}
@@ -632,13 +545,11 @@ public final class SlashService {
         // lose its contents and stop working. Only one that comes apart, or loses a layer, becomes a mimic.
         List<Info> mimics = new ArrayList<>();
         for (Info hit : hits) mimics.add(hit);
-        // Spill the contents of real block entities before they are replaced by mimics.
         Map<BlockPos, CompoundTag> beTags = detachBlockEntities(level, mimics);
 
         for(Info hit:hits) if(hit.grid.componentCount()==0)
             level.setBlock(hit.pos,Blocks.AIR.defaultBlockState(),net.minecraft.world.level.block.Block.UPDATE_CLIENTS | net.minecraft.world.level.block.Block.UPDATE_KNOWN_SHAPE);
         if (plan.severed().isEmpty() && plan.movers().isEmpty()) {
-            // Nothing came apart: the blocks just remember the cut.
             if (applyUnsevered) {
                 for (Info hit : mimics) {
                     if(hit.grid.componentCount()>0) place(level, hit, hit.piece.planes(), hit.piece.excluded(), hit.patches, beTags);
@@ -647,7 +558,6 @@ public final class SlashService {
             return hits.size();
         }
 
-        // 5. the pieces each group will hold
         Map<Integer, List<Spec>> specs = new HashMap<>();
         for (var entry : plan.severed().entrySet()) {
             Info info = entry.getKey();
@@ -672,9 +582,6 @@ public final class SlashService {
         // If nothing would be left in the sub-level while the others move out, Sable would discard it on the spot.
         BlockPos placeholder = null;
         if (sub != null) {
-            // Something attached to more than we followed certainly stays. Otherwise a block stays only if it is in a
-            // part that stays and is not itself being split: a split block is taken away whole with the part that
-            // leaves and only put back (as the piece that stays) after the move, so for that moment it is not there.
             boolean survivor = comp.containsValue(HUGE);
             if (!survivor) {
                 Set<BlockPos> leaving = new HashSet<>();
@@ -704,7 +611,7 @@ public final class SlashService {
                 plan.severed().keySet().forEach(info -> near.add(info.pos));
                 placeholder = CutService.findPlaceholderSpot(level, near);
                 if (placeholder == null) {
-                    return 0; // nothing has been changed yet except spilled contents
+                    return 0;
                 }
                 level.setBlock(placeholder, Blocks.STONE.defaultBlockState(), 2);
             }
@@ -725,7 +632,6 @@ public final class SlashService {
         }
     }
 
-    /** 6. Moves the groups out, then puts the pieces that stay in place. */
     private static void moveOut(ServerLevel level, @Nullable ServerSubLevel sub, Domain dom, Plan plan,
                                 Map<Integer, List<Spec>> specs, Map<BlockPos, CompoundTag> beTags,
                                 Vector3d nl, double dl, Vec3 nWorld, int[] created) {
@@ -745,7 +651,6 @@ public final class SlashService {
                 place(level, spec.info(), spec.planes(), spec.excluded(), spec.patches(), beTags);
             }
             if (sub != null && sub.isRemoved()) {
-                // what stays would be put into the plot of a sub-level that is gone
                 MeshCut.LOGGER.warn("The sub-level being cut was removed while its pieces were moved out; {} blocks could not follow", positions.size());
                 return;
             }
@@ -771,7 +676,6 @@ public final class SlashService {
         }
     }
 
-    /** Which blocks are severed (their pieces are in different groups), and which groups leave the structure. */
     private static Plan plan(Domain dom, @Nullable ServerSubLevel sub, Map<Node, Integer> comp,
                              Map<Integer, StructureGraph.Closure> closures, List<Info> hits, boolean everything) {
         Map<Info, Map<Integer, Set<Integer>>> severed = new LinkedHashMap<>();
@@ -797,7 +701,6 @@ public final class SlashService {
 
         Set<Integer> affected = new LinkedHashSet<>();
         severed.values().forEach(groups -> affected.addAll(groups.keySet()));
-        // a burnt edge may have cut a block off from its neighbours without splitting any single block
         for (Info hit : hits) {
             if (hit.burned) {
                 Set<Integer> ids = new LinkedHashSet<>();
@@ -813,7 +716,6 @@ public final class SlashService {
             }
         }
         if (everything) {
-            // a block that is being re-examined may have lost what held it: whatever of it is no longer attached falls
             affected.addAll(comp.values());
         }
         List<Integer> finite = new ArrayList<>();
@@ -824,7 +726,6 @@ public final class SlashService {
         }
         Set<Integer> movers = new LinkedHashSet<>(finite);
         if (sub != null && !affected.contains(HUGE)) {
-            // Inside a sub-level the biggest part stays where it is.
             finite.stream()
                     .max(Comparator.comparingInt(id -> closures.get(id).blocks()))
                     .ifPresent(movers::remove);
@@ -832,11 +733,6 @@ public final class SlashService {
         return new Plan(severed, closures, movers);
     }
 
-    /**
-     * Recomputes a sub-level's mass, centre of mass and inertia from its blocks as they are now, and moves the body
-     * so that nothing visibly shifts when the centre of mass moves. Blocks that were taken out and put back have
-     * been through many incremental updates; this makes sure the sub-level ends up with the true values.
-     */
     private static void refreshMass(ServerLevel level, ServerSubLevel sub) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.refreshMass")) {
             refreshMassUntimed(level, sub);
@@ -849,7 +745,7 @@ public final class SlashService {
             return;
         }
         var physics = container.physicsSystem();
-        ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, sub, null); // its joints were made for the old centre of mass
+        ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, sub, null);
         try {
             Vector3dc before = sub.getMassTracker().getCenterOfMass();
             Vector3d oldCenter = before == null ? null : new Vector3d(before);
@@ -869,48 +765,24 @@ public final class SlashService {
         }
     }
 
-    // ---------------------------------------------------------------- re-examining
-
     private record Recheck(ServerLevel level, BlockPos pos) {}
 
-    /**
-     * Mimics whose surroundings changed, to be looked at again next tick (server thread only). The value says whether
-     * the look has to be made whatever the block is touching (see {@link #queueLocalRecheck}).
-     */
     private static final Map<Recheck, Boolean> RECHECKS = new LinkedHashMap<>();
-    /**
-     * What each block touched when it was last looked at and found to hang together, as {@link #contacts} sums it up.
-     * A neighbour that changed in a way the block cannot feel (a door opening, a redstone signal) leaves the sum as it
-     * was, and the look is not worth making again.
-     */
     private static final Map<Recheck, Long> HELD_BY = new HashMap<>();
     private static final int RECHECKS_PER_TICK = 16;
-    /** Ticks during which a block that came apart on re-examination is not re-examined again. */
     private static final long SPLIT_COOLDOWN = 40;
-    /** At most this many pieces come loose from re-examinations in one tick. */
     private static final int MAX_LOOSE_PER_TICK = 4;
     private static final Map<Recheck, Long> LAST_SPLIT = new HashMap<>();
     private static int createdThisTick;
 
-    /**
-     * A cut block that stayed whole was only held together by what was around it. When a neighbour changes (it is
-     * broken, say), that may no longer be true, so the block is examined again as if it had just been cut.
-     */
     public static void queueRecheck(ServerLevel level, BlockPos pos) {
         RECHECKS.put(new Recheck(level, pos.immutable()), Boolean.TRUE);
     }
 
-    /**
-     * Like {@link #queueRecheck}, for a block whose neighbour changed. What holds a block can only have changed if the
-     * way it touches its neighbours did, so the look is skipped when that is as it was at the last one. (A change further
-     * away, which cut a structure off from the ground, is queued with {@link #queueRecheck}: nothing next to the block
-     * shows it.)
-     */
     public static void queueLocalRecheck(ServerLevel level, BlockPos pos) {
         RECHECKS.merge(new Recheck(level, pos.immutable()), Boolean.FALSE, Boolean::logicalOr);
     }
 
-    /** Forgets what was queued: it belongs to a server that has stopped. */
     public static void clear() {
         RECHECKS.clear();
         HELD_BY.clear();
@@ -934,10 +806,10 @@ public final class SlashService {
             Recheck r = queued.getKey();
             Long last = LAST_SPLIT.get(r);
             if (last != null && r.level().getGameTime() - last < SPLIT_COOLDOWN) {
-                continue; // it has just come apart; whatever made it look again is most likely its own doing
+                continue;
             }
             if (createdThisTick >= MAX_LOOSE_PER_TICK) {
-                RECHECKS.merge(r, queued.getValue(), Boolean::logicalOr); // enough for one tick: later
+                RECHECKS.merge(r, queued.getValue(), Boolean::logicalOr);
                 continue;
             }
             try {
@@ -948,14 +820,6 @@ public final class SlashService {
         }
     }
 
-    /**
-     * Settles what a tool that carved blocks out directly (the laser) left behind: the blocks it changed, whether they
-     * remain as cut mimics or are gone, and whatever they held up. Everything that no longer hangs together leaves
-     * as its own sub-level, the way it would after a sweep of the blade.
-     *
-     * @param nl,dl a plane through the cut in the frame of {@code sub} (the world if null); it only decides which way
-     *              the parts that come loose are pushed
-     */
     public static void settleCut(ServerLevel level, @Nullable ServerSubLevel sub, java.util.Collection<BlockPos> changed,
                                  Vector3d nl, double dl) {
         if (changed.isEmpty() || sub != null && sub.isRemoved()) {
@@ -977,7 +841,7 @@ public final class SlashService {
                 info = new Info(pos);
                 dom.infos.put(pos, info);
             }
-            info.burned = true; // look at what lies beside it as well: the cut may have left it unattached
+            info.burned = true;
             hits.add(info);
         }
         if (hits.isEmpty()) {
@@ -993,17 +857,12 @@ public final class SlashService {
         createdThisTick += created[0];
     }
 
-    /**
-     * How a cut block touches what is around it: which cells of each face are solid, and what the neighbour is there
-     * (a plain block, nothing, or a cut block's own cells on the shared face). Two blocks that sum up alike hold each
-     * other the same way, whatever else about the neighbours changed.
-     */
     private static long contacts(ServerLevel level, BlockPos pos, MimicBlockEntity be) {
         CellGrid own = be.grid();
         long sum = own.componentCount();
         for (int face = 0; face < 6; face++) {
             for (int i = 0; i < CellGrid.N * CellGrid.N; i++) {
-                sum = sum * 31 + own.faceComponent(face, i); // which piece touches it matters too: pieces hold differently
+                sum = sum * 31 + own.faceComponent(face, i);
             }
         }
         for (Direction direction : Direction.values()) {
@@ -1014,7 +873,6 @@ public final class SlashService {
             }
             var state = level.getBlockState(next);
             if (state.getBlock() instanceof MimicBlock && level.getBlockEntity(next) instanceof MimicBlockEntity other) {
-                // the neighbour's cells on the face towards this block (opposite side of the same axis)
                 int face = direction.getAxis().ordinal() * 2 + (direction.getAxisDirection() == Direction.AxisDirection.POSITIVE ? 1 : 0);
                 CellGrid theirs = other.grid();
                 long mask = 0;
@@ -1040,11 +898,11 @@ public final class SlashService {
         ServerSubLevel sub = container != null && container.inBounds(pos)
                 && Sable.HELPER.getContaining(level, pos) instanceof ServerSubLevel s && !s.isRemoved() ? s : null;
         if (sub == null && container != null && container.inBounds(pos)) {
-            return; // left behind in the plot of a sub-level that is gone: not part of the world, nothing to do
+            return;
         }
         long held = contacts(level, pos, be);
         if (!full && HELD_BY.getOrDefault(key, held + 1) == held) {
-            return; // it touches what it touched when it was last found to hang together
+            return;
         }
         Domain dom = new Domain(level, be.getCapMode(), sub);
         if (!dom.loaded(pos)) {
@@ -1057,7 +915,6 @@ public final class SlashService {
         Info info = new Info(pos, piece, piece.patches());
         dom.infos.put(pos, info);
 
-        // the plane of its newest cut, in the domain's frame, only decides which way the parts are pushed
         CutPlane newest = !piece.patches().isEmpty() ? piece.patches().get(piece.patches().size() - 1).plane()
                 : !piece.planes().isEmpty() ? piece.planes().get(piece.planes().size() - 1) : new CutPlane(0, 1, 0, 0.5);
         Vector3d nl = new Vector3d(newest.nx(), newest.ny(), newest.nz());
@@ -1076,18 +933,6 @@ public final class SlashService {
         }
     }
 
-    // ---------------------------------------------------------------- graph
-
-    /**
-     * Finds out which structure each piece of the cut blocks belongs to, using the world's structure graph. The cut
-     * blocks are always taken as they are described here (as the cut would leave them, or as they are now when
-     * re-examined), not as the graph remembers them: what the graph knows of a block can lag behind (a block entity
-     * whose data arrived after the block was placed, for instance).
-     *
-     * @param comp    receives, for every piece of the cut blocks, its structure's id ({@link #HUGE} for everything
-     *                attached to more than the search was willing to follow)
-     * @return the structures that are not attached, by id
-     */
     private static Map<Integer, StructureGraph.Closure> components(Domain dom, List<Info> hits, Map<Node, Integer> comp) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SlashService.components")) {
         Map<Long, BlockNodes> over = new HashMap<>();
@@ -1131,10 +976,6 @@ public final class SlashService {
         return count;
     }
 
-    /**
-     * The pieces to start from for a cut block: its own, and if a layer of it was burnt away, the pieces of the
-     * blocks next to it too (the burn may have left them no longer touching it).
-     */
     private static List<Node> seedsOf(Domain dom, Info hit) {
         List<Node> seeds = new ArrayList<>();
         for (int node : hit.nodes()) {
@@ -1156,7 +997,6 @@ public final class SlashService {
         return seeds;
     }
 
-    /** Whether the plane has some of the shape on both sides of it. */
     private static boolean straddles(List<double[]> shape, CutPlane plane) {
         double min = Double.MAX_VALUE, max = -Double.MAX_VALUE;
         for (double[] b : shape) {
@@ -1169,14 +1009,11 @@ public final class SlashService {
         return min < -1e-6 && max > 1e-6;
     }
 
-    /** Which side of the cut plane a piece is on (positive: the normal's side), judged by its centre. */
     private static double sideOf(Domain dom, Node node, Vector3d nl, double dl) {
         Info info = dom.infos.get(node.pos());
         double[] c = info.grid == CellGrid.FULL ? new double[]{0.5, 0.5, 0.5} : info.grid.centroid(node.node());
         return nl.x * (node.pos().getX() + c[0]) + nl.y * (node.pos().getY() + c[1]) + nl.z * (node.pos().getZ() + c[2]) - dl;
     }
-
-    // ---------------------------------------------------------------- placing
 
     private static Map<BlockPos, CompoundTag> detachBlockEntities(ServerLevel level, List<Info> hits) {
         Map<BlockPos, CompoundTag> tags = new HashMap<>();

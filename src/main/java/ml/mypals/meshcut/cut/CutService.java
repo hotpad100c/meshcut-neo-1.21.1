@@ -44,49 +44,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Cuts blocks and sub-levels with a world-space plane.
- * <ul>
- *   <li>Static blocks the plane passes through become two mimics: the kept half stays in place, the other half
- *       is assembled into a new sub-level.</li>
- *   <li>Every sub-level the plane passes through is split into the pieces on either side; pieces that end up
- *       disconnected become their own sub-levels.</li>
- * </ul>
- */
 public final class CutService {
     public static final int MAX_RADIUS = 16;
-    /** Speed (blocks/s) with which the two halves are pushed apart, so overlapping colliders separate gently. */
     private static final double SEPARATION_SPEED = 1.5;
-    /** At most this many items are spilled from a block that is cut (a double chest holds 3456). */
     private static final int MAX_SPILLED = 4096;
 
     public record Result(int staticBlocks, int subLevelsCut, int subLevelsCreated) {}
 
-    /** Blocks that are never cut (command blocks, bedrock, barriers, ...). */
     public static final net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> UNCUTTABLE = net.minecraft.tags.TagKey.create(
             net.minecraft.core.registries.Registries.BLOCK, net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "uncuttable"));
 
-    /**
-     * What a block position currently holds: the imitated block and the cuts already applied to it.
-     * {@code beTag} is the saved data of the original block entity; {@code undetachedBe} marks a real block entity
-     * that still has to be emptied and saved before the block is replaced by mimics.
-     */
     record Piece(BlockState target, List<CutPlane> planes, List<List<CutPlane>> excluded, List<Patch> patches,
                  CapMode mode, @Nullable CompoundTag beTag, boolean undetachedBe, @Nullable EntityAppearance entity,
                  @Nullable MimicBlockEntity.GlowHistory glow) {
-        /** What there is of it to cut: the part of an entity it holds, or the imitated block's shape. */
         List<double[]> cutBoxes() {
             return entity != null ? entity.boxes() : MimicShapes.cutBoxes(target);
         }
     }
 
-    /** A block the plane passes through, with the plane expressed in that block's local frame. */
     record Split(Piece piece, CutPlane keep) {}
 
-    /**
-     * @param normal points towards the side that is split off in the static world
-     * @return {@code null} if the normal is degenerate
-     */
     public static Result cut(ServerLevel level, Vec3 point, Vec3 normal, double radius, CapMode mode) {
         if (normal.lengthSqr() < 1e-12) {
             return null;
@@ -114,8 +91,6 @@ public final class CutService {
         return new Result(staticBlocks, cutLevels, created[0]);
     }
 
-    // ---------------------------------------------------------------- static world
-
     private static int cutStatic(ServerLevel level, Vec3 point, Vec3 n, double radius, CapMode mode, int[] created) {
         var container = SubLevelContainer.getContainer(level);
         List<BlockPos> candidates = new ArrayList<>();
@@ -125,7 +100,7 @@ public final class CutService {
                 for (int z = (int) Math.floor(point.z - radius); z <= Math.floor(point.z + radius); z++) {
                     pos.set(x, y, z);
                     if (level.isInWorldBounds(pos) && !(container != null && container.inBounds(pos))) {
-                        candidates.add(pos.immutable()); // plot space belongs to sub-levels, handled separately
+                        candidates.add(pos.immutable());
                     }
                 }
             }
@@ -133,12 +108,6 @@ public final class CutService {
         return cutStaticCells(level, candidates, n, n.dot(point), mode, created);
     }
 
-    /**
-     * Cuts the given static blocks with the plane {@code n·p = d}: each block the plane passes through keeps one half
-     * in the world and sends the other to a sub-level, depending on which half is held up.
-     *
-     * @return the number of blocks that were cut
-     */
     static int cutStaticCells(ServerLevel level, Iterable<BlockPos> candidates, Vec3 n, double d, CapMode mode, int[] created) {
         Map<BlockPos, Split> splits = new LinkedHashMap<>();
         for (BlockPos cell : candidates) {
@@ -152,9 +121,8 @@ public final class CutService {
             }
         }
 
-        // Support is judged on the world as it is now, before any block is replaced.
         List<List<BlockPos>> comps = components(splits.keySet());
-        List<boolean[]> floating = new ArrayList<>(); // {plusSide, minusSide}
+        List<boolean[]> floating = new ArrayList<>();
         for (List<BlockPos> comp : comps) {
             floating.add(new boolean[]{!isSupported(level, comp, splits, true), !isSupported(level, comp, splits, false)});
         }
@@ -164,7 +132,6 @@ public final class CutService {
             List<BlockPos> comp = comps.get(c);
             boolean plusFloats = floating.get(c)[0];
             boolean minusFloats = floating.get(c)[1];
-            // A floating half falls, so it becomes a sub-level. If both are held up, the normal side is split off.
             boolean plusFree = plusFloats || !minusFloats;
             boolean minusFree = minusFloats;
 
@@ -178,7 +145,6 @@ public final class CutService {
                     }
                 }
             }
-            // whichever half is still held up stays in the world
             if (!plusFree) {
                 placeHalf(level, comp, splits, true);
             }
@@ -189,7 +155,6 @@ public final class CutService {
         return splits.size();
     }
 
-    /** Puts one half of every block of {@code comp} in place as a mimic. */
     static void placeHalf(ServerLevel level, List<BlockPos> comp, Map<BlockPos, Split> splits, boolean plusSide) {
         for (BlockPos p : comp) {
             Split s = splits.get(p);
@@ -199,10 +164,6 @@ public final class CutService {
         }
     }
 
-    /**
-     * Whether one half of a cut group is held up: some block of that half has, on a face the cut hasn't removed,
-     * a solid neighbour that isn't itself part of the cut.
-     */
     private static boolean isSupported(ServerLevel level, List<BlockPos> comp, Map<BlockPos, Split> splits, boolean plusSide) {
         for (BlockPos p : comp) {
             Split s = splits.get(p);
@@ -223,8 +184,6 @@ public final class CutService {
         return false;
     }
 
-    // ---------------------------------------------------------------- sub-levels
-
     private static boolean cutSubLevel(ServerLevel level, ServerSubLevel sub, Vec3 point, Vec3 n, CapMode mode, int[] created) {
         Pose3dc pose = sub.logicalPose();
         Vector3d pl = pose.transformPositionInverse(new Vector3d(point.x, point.y, point.z));
@@ -235,8 +194,8 @@ public final class CutService {
         nl.normalize();
         double dl = nl.dot(pl);
 
-        Set<BlockPos> plus = new HashSet<>();      // blocks (or the removed half of split blocks) on the normal side
-        Set<BlockPos> minus = new HashSet<>();     // blocks (or the kept half of split blocks) on the other side
+        Set<BlockPos> plus = new HashSet<>();
+        Set<BlockPos> minus = new HashSet<>();
         Map<BlockPos, Split> splits = new LinkedHashMap<>();
 
         BoundingBox3ic bb = sub.getPlot().getBoundingBox();
@@ -254,7 +213,6 @@ public final class CutService {
                     Piece piece = pieceAt(level, pos, mode);
                     Polytope.Side side;
                     if (piece == null) {
-                        // uncuttable (fluid, block entity, ...): goes whole to the side of its centre
                         side = keep.signedDistance(0.5, 0.5, 0.5) >= 0 ? Polytope.Side.ALL_KEPT : Polytope.Side.ALL_REMOVED;
                     } else {
                         side = Polytope.classify(piece.planes(), keep);
@@ -273,7 +231,7 @@ public final class CutService {
             }
         }
         if (plus.isEmpty() || minus.isEmpty()) {
-            return false; // the plane doesn't separate anything
+            return false;
         }
 
         // Every split position is in both sets, so this is the number of blocks that stay put untouched. If it is
@@ -283,7 +241,7 @@ public final class CutService {
         if (minus.size() == splits.size()) {
             placeholder = findPlaceholderSpot(level, splits.keySet());
             if (placeholder == null) {
-                return false; // nothing has been touched yet
+                return false;
             }
             level.setBlock(placeholder, Blocks.STONE.defaultBlockState(), 2);
         }
@@ -291,13 +249,11 @@ public final class CutService {
         Vec3 push = n.scale(SEPARATION_SPEED);
         try {
             detachBlockEntities(level, splits);
-            // 1. the removed half of split blocks takes the block's place so it can be moved out with the rest
             for (var e : splits.entrySet()) {
                 Split s = e.getValue();
                 MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep().flipped()),
                         s.piece().excluded(), s.piece().patches(), s.piece().mode(), s.piece().beTag(), s.piece().entity(), s.piece().glow());
             }
-            // 2. every connected group on the normal side becomes its own sub-level
             for (List<BlockPos> comp : components(plus)) {
                 ServerSubLevel created1 = assemble(level, comp);
                 if (created1 != null) {
@@ -306,9 +262,8 @@ public final class CutService {
                 }
             }
             if (sub.isRemoved()) {
-                return true; // the kept halves would go into the plot of a sub-level that is gone
+                return true;
             }
-            // 3. the kept half of split blocks goes back into the original sub-level
             for (var e : splits.entrySet()) {
                 Split s = e.getValue();
                 MimicBlock.place(level, e.getKey(), s.piece().target(), with(s.piece().planes(), s.keep()),
@@ -319,7 +274,6 @@ public final class CutService {
                 level.setBlock(placeholder, Blocks.AIR.defaultBlockState(), 2);
             }
         }
-        // 4. the other side may itself have fallen apart; the biggest piece stays, the rest are split off
         List<List<BlockPos>> rest = new ArrayList<>(components(minus));
         rest.sort(Comparator.comparingInt((List<BlockPos> c) -> c.size()).reversed());
         for (int i = 1; i < rest.size(); i++) {
@@ -335,9 +289,6 @@ public final class CutService {
         return true;
     }
 
-    // ---------------------------------------------------------------- helpers
-
-    /** An empty spot next to one of {@code near}, in the same chunk (so it needs no new plot chunk). */
     @Nullable
     static BlockPos findPlaceholderSpot(ServerLevel level, Set<BlockPos> near) {
         for (BlockPos p : near) {
@@ -352,7 +303,6 @@ public final class CutService {
         return null;
     }
 
-    /** The imitated block and existing cuts at {@code pos}, or {@code null} if the block can't be cut. */
     static Piece pieceAt(ServerLevel level, BlockPos pos, CapMode mode) {
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
@@ -369,12 +319,11 @@ public final class CutService {
             return null;
         }
         if (state.hasBlockEntity() && !canSpill(level, pos)) {
-            return null; // holds more than can be spilled (a drawer of thousands): it is not cut
+            return null;
         }
         return new Piece(state, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), mode, null, state.hasBlockEntity(), null, null);
     }
 
-    /** Whether what the block holds can all be spilled when it is cut (see {@link #MAX_SPILLED}). */
     private static boolean canSpill(ServerLevel level, BlockPos pos) {
         BlockEntity be = level.getBlockEntity(pos);
         if (be == null) {
@@ -400,10 +349,6 @@ public final class CutService {
         return items <= MAX_SPILLED;
     }
 
-    /**
-     * Real block entities are about to be replaced by mimics: spill their contents (as breaking the block would)
-     * and keep their saved data so the mimic can still look like a sign with text, a banner with patterns, ...
-     */
     static void detachBlockEntities(ServerLevel level, Map<BlockPos, Split> splits) {
         splits.replaceAll((pos, split) -> new Split(detachBlockEntity(level, pos, split.piece()), split.keep()));
     }
@@ -422,7 +367,6 @@ public final class CutService {
     static void spillContents(ServerLevel level, BlockPos pos, BlockEntity be) {
         List<ItemStack> stacks = new ArrayList<>();
         if (be instanceof Container container) {
-            // only the block's own slots: the item handler of half a double chest is the whole chest's
             for (int i = 0; i < container.getContainerSize(); i++) {
                 ItemStack stack = container.getItem(i);
                 if (!stack.isEmpty()) {
@@ -447,7 +391,6 @@ public final class CutService {
                 }
             }
         }
-        // the block may sit in a sub-level's plot; items must appear where the block actually is
         Vec3 at = Sable.HELPER.projectOutOfSubLevel(level, Vec3.atCenterOf(pos));
         for (ItemStack stack : stacks) {
             Containers.dropItemStack(level, at.x, at.y, at.z, stack);
@@ -460,7 +403,6 @@ public final class CutService {
         return out;
     }
 
-    /** Face-connected groups of the given positions. */
     static List<List<BlockPos>> components(Set<BlockPos> positions) {
         List<List<BlockPos>> result = new ArrayList<>();
         Set<BlockPos> seen = new HashSet<>();
@@ -493,7 +435,6 @@ public final class CutService {
         for(BlockPos pos:blocks) {
             if(level.getBlockEntity(pos) instanceof MimicBlockEntity) snapshots.put(pos,pieceAt(level,pos,CapMode.LAVA));
         }
-        // limbs joined to the sub-level the blocks leave may have to follow them; see RagdollJoints
         ServerSubLevel source = Sable.HELPER.getContaining(level, blocks.getFirst()) instanceof ServerSubLevel s ? s : null;
         if (source != null) {
             ml.mypals.meshcut.physics.RagdollJoints.noteSplit(level, source, null);

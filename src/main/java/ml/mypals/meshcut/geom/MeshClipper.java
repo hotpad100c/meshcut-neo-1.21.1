@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Sutherland–Hodgman clipping of {@link MeshPoly}s against a list of half-spaces. */
 public final class MeshClipper {
     private static final int S = MeshPoly.STRIDE;
     private static final float MIN_AREA = 1e-8f;
@@ -31,11 +30,6 @@ public final class MeshClipper {
         return out;
     }
 
-    /**
-     * What is left of the polygons after removing the convex region (the part satisfying every half-space). Each
-     * polygon is cut by the region's planes in turn: the part outside the plane is kept, the part inside goes on to
-     * the next plane, and what is inside them all is dropped.
-     */
     public static List<MeshPoly> subtract(List<MeshPoly> polys, List<CutPlane> region) {
         if (region.isEmpty()) {
             return new ArrayList<>();
@@ -67,10 +61,6 @@ public final class MeshClipper {
         return out;
     }
 
-    /**
-     * Whether some plane of the region has the whole polygon strictly on its outer side: they share no volume. (A polygon
-     * lying in a plane of the region is not clear of it: a hole that starts at a face of the block opens that face.)
-     */
     static boolean separated(float[] verts, List<CutPlane> region) {
         for (CutPlane plane : region) {
             boolean clear = true;
@@ -87,7 +77,7 @@ public final class MeshClipper {
 
     private static float[] clipOnce(float[] in, CutPlane plane) {
         int n = in.length / S;
-        float[] out = new float[(2 * n + 2) * S]; // a concave polygon can cross the plane at every edge
+        float[] out = new float[(2 * n + 2) * S];
         int m = 0;
         for (int i = 0; i < n; i++) {
             int a = i * S;
@@ -101,7 +91,7 @@ public final class MeshClipper {
                 m++;
             }
             if (aIn != bIn) {
-                float t = (float) (da / (da - db)); // da and db have opposite signs, so da - db != 0
+                float t = (float) (da / (da - db));
                 for (int k = 0; k < S; k++) {
                     out[m * S + k] = in[a + k] + (in[b + k] - in[a + k]) * t;
                 }
@@ -111,7 +101,6 @@ public final class MeshClipper {
         return Arrays.copyOf(out, m * S);
     }
 
-    /** Polygon area via the cross-product sum. */
     public static float area(float[] v) {
         int n = v.length / S;
         double ax = 0, ay = 0, az = 0;

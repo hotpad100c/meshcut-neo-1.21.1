@@ -19,7 +19,6 @@ import org.joml.Vector3d;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Removes one continuous polygon capsule across every block it overlaps in a world or body plot. */
 public final class LaserCutting {
     private record Query(long pos,List<CutPlane> capsule){}
     private record Seen(long epoch,long revision){}
@@ -43,7 +42,6 @@ public final class LaserCutting {
         var bounds=new BoundingBox3d(
                 new Vec3(Math.min(a.x,b.x)-r,Math.min(a.y,b.y)-r,Math.min(a.z,b.z)-r),
                 new Vec3(Math.max(a.x,b.x)+r,Math.max(a.y,b.y)+r,Math.max(a.z,b.z)+r));
-        // Snapshot candidates before edits can remove or split a body.
         List<SubLevel> subs=new ArrayList<>();
         for(var body:Sable.HELPER.getAllIntersecting(level,bounds)) subs.add(body);
         vaporize(level,null,a,b,radius);
@@ -54,7 +52,6 @@ public final class LaserCutting {
         vaporize(level, sub, worldA, worldB, PolygonCapsule.radius(radius));
     }
 
-    /** @param r the radius of the hole, in blocks */
     public static void vaporize(ServerLevel level, SubLevel sub, Vec3 worldA, Vec3 worldB, double r) {
         try (var timing = ml.mypals.meshcut.util.CutTiming.begin(); var batch = ml.mypals.meshcut.cut.graph.WorldGraphs.batch(level)) {
             vaporizeBlocks(level, sub, worldA, worldB, r);
@@ -82,7 +79,6 @@ public final class LaserCutting {
         }
         List<BlockPos> affected=new ArrayList<>();
         for(int x=minX;x<=maxX;x++) for(int y=minY;y<=maxY;y++) for(int z=minZ;z<=maxZ;z++) {
-            // Bound both latitude and longitude discretisation; reject before querying chunks or Sable.
             double near=r*1.072+0.8661;
             if(distanceSquared(a,b,x+0.5,y+0.5,z+0.5)>near*near) continue;
             var pos=new BlockPos(x,y,z);
@@ -98,7 +94,6 @@ public final class LaserCutting {
             if(vaporizeBlock(level,pos,PolygonCapsule.local(capsule,pos.getX(),pos.getY(),pos.getZ()))) changed.add(pos);
             remember(level,pos,capsule);
         }
-        // Whatever the beam left disconnected (inside a block, or between blocks) comes apart now, like after a slash.
         Vector3d axis=new Vector3d(b).sub(a);
         if(axis.lengthSquared()<1e-12) axis.set(0,0,1); else axis.normalize();
         Vector3d side=axis.cross(Math.abs(axis.y)>0.9 ? new Vector3d(1,0,0) : new Vector3d(0,1,0),new Vector3d()).normalize();
@@ -106,7 +101,6 @@ public final class LaserCutting {
     }
 
     private static boolean vaporizeBlock(ServerLevel level, BlockPos pos, List<CutPlane> hole) {
-        // Only what the block can see of the hole is kept: a few planes of its 62.
         var reduced=HoleReducer.reduce(hole);
         if(reduced==null) return false;
         var piece=CutService.pieceAt(level,pos,CapMode.LAVA);
@@ -129,7 +123,6 @@ public final class LaserCutting {
         }
         return true;
     }
-    /** Squared distance from a point to the segment a-b. */
     private static double distanceSquared(Vector3d a, Vector3d b, double x, double y, double z) {
         double dx=b.x-a.x, dy=b.y-a.y, dz=b.z-a.z;
         double length=dx*dx+dy*dy+dz*dz;

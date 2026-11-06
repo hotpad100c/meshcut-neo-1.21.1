@@ -31,17 +31,14 @@ import java.util.List;
 public final class MeshCutCommand {
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext ctx) {
         dispatcher.register(Commands.literal("meshcut").requires(s -> s.hasPermission(2))
-                // /meshcut debugmimic <block> [<nx> <ny> <nz> <d>]
                 .then(Commands.literal("debugmimic")
                         .then(Commands.argument("block", BlockStateArgument.block(ctx))
                                 .executes(c -> debugMimic(c.getSource(), blockArg(c), null))
                                 .then(planeArgs(c -> debugMimic(c.getSource(), blockArg(c), planeArg(c))))))
-                // /meshcut cutblock <pos> <nx> <ny> <nz> <d>  -- adds a block-local half-space to an existing mimic
                 .then(Commands.literal("cutblock")
                         .then(Commands.argument("pos", BlockPosArgument.blockPos())
                                 .then(planeArgs(c -> cutBlock(c.getSource(),
                                         BlockPosArgument.getLoadedBlockPos(c, "pos"), planeArg(c))))))
-                // /meshcut cut <point> <nx> <ny> <nz> [<radius> [lava|plain]]  -- world-space plane
                 .then(Commands.literal("cut")
                         .then(Commands.argument("point", Vec3Argument.vec3())
                                 .then(Commands.argument("nx", DoubleArgumentType.doubleArg())
@@ -54,7 +51,6 @@ public final class MeshCutCommand {
                                                                         cutWorld(c, DoubleArgumentType.getDouble(c, "radius"), CapMode.LAVA)))
                                                                 .then(Commands.literal("plain").executes(c ->
                                                                         cutWorld(c, DoubleArgumentType.getDouble(c, "radius"), CapMode.PLAIN)))))))))
-                // /meshcut cutlook <vertical|horizontal> [radius]  -- plane through the point 4 blocks ahead of you
                 .then(Commands.literal("cutlook")
                         .then(Commands.literal("vertical").executes(c -> cutLook(c.getSource(), false, 3.0))
                                 .then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.5, CutService.MAX_RADIUS))
@@ -94,7 +90,6 @@ public final class MeshCutCommand {
         return result.staticBlocks() + result.subLevelsCut();
     }
 
-    /** nx ny nz d; the executor is attached to the last argument. */
     private static RequiredArgumentBuilder<CommandSourceStack, Double> planeArgs(Command<CommandSourceStack> executor) {
         return Commands.argument("nx", DoubleArgumentType.doubleArg())
                 .then(Commands.argument("ny", DoubleArgumentType.doubleArg())
@@ -111,7 +106,6 @@ public final class MeshCutCommand {
                 DoubleArgumentType.getDouble(c, "nz"), DoubleArgumentType.getDouble(c, "d"));
     }
 
-    /** Places a mimic 3 blocks above the executor and assembles it into a Sable sub-level. */
     private static int debugMimic(CommandSourceStack source, BlockState target, CutPlane plane) {
         ServerLevel level = source.getLevel();
         BlockPos pos = BlockPos.containing(source.getPosition()).above(3);
@@ -140,7 +134,6 @@ public final class MeshCutCommand {
         if (source.getLevel().getBlockEntity(pos) instanceof MimicBlockEntity be) {
             List<CutPlane> planes = new java.util.ArrayList<>(be.getPlanes());
             planes.add(plane);
-            // goes through place() so Sable's collider and mass bookkeeping are updated too
             MimicBlock.place(source.getLevel(), pos, be.getTargetState(), planes, be.getExcluded(), be.getPatches(), be.getCapMode(), be.getTargetBeTag(), be.getAppearance());
             return 1;
         }

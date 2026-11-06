@@ -10,42 +10,20 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
-/**
- * While an entity is being recorded, what is drawing: every face the recording takes is labelled with it, so the
- * entity can be taken apart into limbs afterwards. Two kinds of label:
- * <ul>
- *   <li>the vanilla model part (and which of its cubes), fed by {@code ModelPartMixin} and {@code ModelPartCubeMixin};</li>
- *   <li>the level of the pose stack it was drawn at ({@link PoseNode}), fed by {@code PoseStackMixin}. Every model
- *       system draws a part the same way (push, turn to the part, draw, draw the children, pop), whatever its parts
- *       are (Citadel's, GeckoLib's, a mod's own), so the levels are its parts and their nesting its hierarchy.</li>
- * </ul>
- * Render thread only.
- */
 public final class PartTags {
-    /**
-     * One time a model part was drawn.
-     *
-     * @param pose   where it was drawn: its pivot and its rotation, in the recording's space
-     * @param parent the part it was drawn as a child of, if any
-     */
     public record DrawnPart(ModelPart part, @Nullable DrawnPart parent, Matrix4f pose) {}
 
-    /** One level of the pose stack, pushed while recording. */
     public static final class PoseNode {
         @Nullable
         final PoseNode parent;
-        /** In the order the levels were pushed: parents before their children. */
         final int index;
         private final PoseStack.Pose live;
-        /** Where it drew, taken when it drew its first face (the level is turned after it is pushed); null if it drew none. */
         @Nullable
         Matrix4f pose;
-        /** The model part that pushed it, if a model system told (see {@code compat.CitadelModelBoxMixin}). */
         @Nullable
         Object owner;
         @Nullable
         String name;
-        /** Set by {@link #hinge}: a bone of a model system that tells where its parts hinge (GeckoLib). */
         boolean hinged;
 
         PoseNode(@Nullable PoseNode parent, int index, PoseStack.Pose live) {
@@ -55,7 +33,6 @@ public final class PartTags {
         }
     }
 
-    /** What drew a face: the vanilla part, if any, and the level of the pose stack. */
     public record Tag(@Nullable DrawnPart part, @Nullable ModelPart.Cube cube, @Nullable PoseNode node) {}
 
     private static final Deque<DrawnPart> STACK = new ArrayDeque<>();
@@ -64,7 +41,6 @@ public final class PartTags {
     private static int nodes;
     @Nullable
     private static ModelPart.Cube cube;
-    /** Only an entity being taken apart is labelled (block entity renderers are recorded too). */
     private static volatile boolean active;
     private static volatile Thread thread;
 
@@ -82,7 +58,6 @@ public final class PartTags {
         cube = null;
     }
 
-    /** The parts drawn since {@link #begin}, in the order they were drawn (parents before their children). */
     static List<DrawnPart> end() {
         active = false;
         thread = null;
@@ -116,21 +91,18 @@ public final class PartTags {
         }
     }
 
-    /** A level was pushed onto the pose stack. */
     public static void pushed(PoseStack.Pose top) {
         if (on()) {
             NODES.push(new PoseNode(NODES.peek(), nodes++, top));
         }
     }
 
-    /** A level was popped off the pose stack. */
     public static void popped() {
         if (on()) {
             NODES.poll();
         }
     }
 
-    /** The model part that pushed the current level, and its name (a model system that names its parts tells). */
     public static void own(Object owner, @Nullable String name) {
         PoseNode top = on() ? NODES.peek() : null;
         if (top != null) {
@@ -139,10 +111,6 @@ public final class PartTags {
         }
     }
 
-    /**
-     * As {@link #own}, for a model system that moves to a part's pivot, turns, and moves back before it draws (GeckoLib):
-     * the pose at this moment is the part's frame, hinging at its pivot, and is taken as where the part was drawn.
-     */
     public static void hinge(Object owner, @Nullable String name) {
         PoseNode top = on() ? NODES.peek() : null;
         if (top != null) {

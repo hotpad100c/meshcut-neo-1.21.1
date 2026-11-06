@@ -16,10 +16,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * A block being moved by a piston carries the data of the mimic it is ({@link MovedMimic}): saved with it, sent to
- * clients with it, and given back to the mimic placed where it stops.
- */
 @Mixin(PistonMovingBlockEntity.class)
 public abstract class PistonMovingBlockEntityMixin implements MovedMimic {
     @Unique
@@ -57,7 +53,6 @@ public abstract class PistonMovingBlockEntityMixin implements MovedMimic {
         MovedMimic.land(level, pos, ((MovedMimic) entity).meshcut$mimic());
     }
 
-    /** Stopped early (the piston was moved or pulled back mid-way): it lands where it is. */
     @Inject(method = "finalTick", at = @At(value = "INVOKE", shift = At.Shift.AFTER,
             target = "Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"))
     private void meshcut$landedEarly(CallbackInfo ci) {

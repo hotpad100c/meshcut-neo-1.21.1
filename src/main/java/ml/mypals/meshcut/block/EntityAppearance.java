@@ -11,31 +11,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * The part of a cut-up entity one block holds: what the entity looked like ({@link #look}), which of its limbs this
- * is, and where in that block it was. The body of a creature that was cut becomes a few sub-levels, one per limb, each
- * made of blocks; each block draws its limb, moved so that it is where it was, and keeps only what is inside it.
- * <p>
- * A point {@code p} of the recorded entity (relative to its feet, axes as in the world) is at
- * {@code rotation⁻¹·p + origin} in this block.
- *
- * @param part     the limb, as the client that took the entity apart named it; null for the whole entity
- * @param rotation the limb's orientation as a quaternion {x, y, z, w}
- * @param origin   see above
- * @param boxes    what there is of the limb in this block, each {minX, minY, minZ, maxX, maxY, maxZ} in block space:
- *                 what there is of it to cut, and what it collides with
- */
 public record EntityAppearance(Look look, @Nullable String part, double[] rotation, double[] origin, List<double[]> boxes) {
     public static final double[] NO_ROTATION = {0, 0, 0, 1};
 
-    /**
-     * Everything that decides how the entity is drawn; the same for all blocks of one body, so one recording serves
-     * them all.
-     *
-     * @param type    the entity type's id
-     * @param data    the entity's saved data (equipment, variant, armour stand pose, ...)
-     * @param profile for a player, whose skin to show; else null
-     */
     public record Look(String type, CompoundTag data, float bodyYaw, float headYaw, float pitch,
                        @Nullable UUID profileId, @Nullable String profileName) {
         public CompoundTag save() {
@@ -83,7 +61,6 @@ public record EntityAppearance(Look look, @Nullable String part, double[] rotati
         }
         double[] origin = read(tag.getList("origin", Tag.TAG_DOUBLE));
         double[] rotation = tag.contains("rotation") ? read(tag.getList("rotation", Tag.TAG_DOUBLE)) : NO_ROTATION.clone();
-        // bodies made before limbs were told apart had one box, "bounds"
         double[] flat = read(tag.getList(tag.contains("boxes") ? "boxes" : "bounds", Tag.TAG_DOUBLE));
         if (origin.length != 3 || rotation.length != 4 || flat.length % 6 != 0) {
             return null;

@@ -3,7 +3,6 @@ package ml.mypals.meshcut.network;
 import net.minecraft.nbt.*;
 import java.util.Objects;
 
-/** Versioned NBT deltas. Disk saves remain ordinary complete block-entity data. */
 public final class GeometrySync {
     public static final String HEADER = "meshcut_sync";
     public enum Status { APPLIED, STALE, NEED_SNAPSHOT }
@@ -44,9 +43,6 @@ public final class GeometrySync {
         }
         h.put("set",set); h.put("append",append); h.put("remove",removed);
         result.put(HEADER,h);
-        // Use NBT's cheap size estimate to select a checkpoint for replacements/tiny payloads.
-        // sizeInBytes is an allocation estimate, not an exact serialized or compressed wire length. The header is
-        // in both, so only the data is compared: the copy a snapshot makes is not worth it for a comparison.
         return result.sizeInBytes() < after.sizeInBytes() + result.getCompound(HEADER).sizeInBytes() ? result : snapshot(after,epoch,revision);
     }
 

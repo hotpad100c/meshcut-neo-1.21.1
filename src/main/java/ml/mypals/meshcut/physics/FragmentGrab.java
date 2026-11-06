@@ -75,14 +75,13 @@ public final class FragmentGrab {
         NeoForge.EVENT_BUS.addListener(FragmentGrab::serverTick);
     }
 
-    /** 0 accepted, 1 invalid coordinates/target, 2 out of reach, 3 cannot pull here. */
     public static int hold(ServerPlayer player, UUID body, Vector3d point, float distance, int request) {
         if (!ml.mypals.meshcut.InteractionLimits.grabNumbers(point.x, point.y, point.z, distance)) return 1;
         ServerLevel level = player.serverLevel();
         ServerSubLevel sub = subLevel(level, body);
         if (sub == null || !sub.getPlot().getBoundingBox().contains((int) Math.floor(point.x), (int) Math.floor(point.y), (int) Math.floor(point.z))
                 || !(level.getBlockState(BlockPos.containing(point.x, point.y, point.z)).getBlock() instanceof MimicBlock)) {
-            return 1; // only cut pieces, at a point of one of their blocks
+            return 1;
         }
         Vector3d world = sub.logicalPose().transformPosition(new Vector3d(point));
         double reach = reach(player);
@@ -91,7 +90,7 @@ public final class FragmentGrab {
             return 2;
         }
         if (!canPull(player, sub)) return 3;
-        CutMarks.keep(sub); // held by hand: it is not to be cleared away
+        CutMarks.keep(sub);
         float clamped = (float) Math.max(MIN_DISTANCE, Math.min(distance, reach));
         Grab grab = GRABS.get(player.getUUID());
         if (grab != null && grab.body.equals(body) && grab.level == level) {

@@ -8,7 +8,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Tells a recording of an entity how deep in the pose stack it is drawing (see {@link PartTags.PoseNode}). */
 @Mixin(PoseStack.class)
 public abstract class PoseStackMixin {
     @Inject(method = "pushPose", at = @At("TAIL"))

@@ -1,6 +1,5 @@
 package ml.mypals.meshcut.cut;
 
-/** Mouse input in degrees: the blade uses the free range, and only overflow turns the camera. */
 public final class SaberControl {
     public static final float YAW_LIMIT = 30;
     public static final float PITCH_LIMIT = 22;

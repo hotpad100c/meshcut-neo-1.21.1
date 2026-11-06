@@ -37,7 +37,6 @@ public final class MeshCutClient {
         event.registerBlockEntityRenderer(MeshCut.MIMIC_BE.get(), MimicRenderer::new);
     }
 
-    /** Swaps the (empty) baked model of every mimic block state for one that draws the cut block. */
     @SubscribeEvent
     public static void wrapMimicModels(ModelEvent.ModifyBakingResult event) {
         event.getModels().replaceAll((id, model) ->
@@ -45,7 +44,6 @@ public final class MeshCutClient {
                         && !(model instanceof MimicBakedModel) ? new MimicBakedModel(model) : model);
     }
 
-    /** Cut grass stays grass-coloured: tints are forwarded to the imitated block's colour handler. */
     @SubscribeEvent
     public static void registerBlockColors(RegisterColorHandlersEvent.Block event) {
         event.register((state, level, pos, tintIndex) -> MimicTint.color(level, pos, tintIndex), MeshCut.MIMIC_BLOCK.get());
@@ -63,7 +61,6 @@ public final class MeshCutClient {
         }, MeshCut.LIGHTSABER.get());
     }
 
-    /** Captured meshes hold atlas UVs, so they're stale after any resource reload. */
     @SubscribeEvent
     public static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener((ResourceManagerReloadListener) rm -> {

@@ -1,14 +1,12 @@
 #version 150
 
 uniform sampler2D Sampler0;
-uniform vec2 TexelSize; // of the source
+uniform vec2 TexelSize;
 uniform float Strength;
 
 in vec2 texCoord;
 out vec4 fragColor;
 
-// Centred Gaussian approximation: a separable 1-2-1 kernel, including the centre.
-// The previous hollow eight-tap diamond can expose its aperture shape around small emitters.
 void main() {
     vec2 h = TexelSize;
     vec3 sum = texture(Sampler0, texCoord).rgb * 4.0;

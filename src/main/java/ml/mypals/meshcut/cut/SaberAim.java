@@ -2,9 +2,7 @@ package ml.mypals.meshcut.cut;
 
 import org.joml.Vector2f;
 
-/** Critically damped aim lag, shared by rendering and cutting. Angles are in degrees. */
 public final class SaberAim {
-    /** Time to complete 95% of a turn from rest, retaining continuous position and velocity. */
     public static final float SETTLE_SECONDS = 0.22f;
     private static final float FREQUENCY = 4.743865f / SETTLE_SECONDS;
     private float previousYaw;
@@ -28,7 +26,6 @@ public final class SaberAim {
         previousYawVelocity = yawVelocity;
         previousPitchVelocity = pitchVelocity;
         interval = seconds;
-        // Exact spring solution for a fixed target during this tick, without Euler-step instability.
         float decay = (float) Math.exp(-FREQUENCY * seconds);
         float yawError = -wrap(targetYaw - yaw);
         float yawTerm = yawVelocity + FREQUENCY * yawError;
@@ -43,7 +40,6 @@ public final class SaberAim {
             pitch = Math.clamp(pitch, -90f, 90f);
             pitchVelocity = 0;
         }
-        // Keep both endpoints in one unwrapped interval, including turns across +/-180 degrees.
         float yawShift = wrap(yaw) - yaw;
         yaw += yawShift;
         previousYaw += yawShift;
@@ -56,7 +52,6 @@ public final class SaberAim {
     }
 
     private float interpolate(float start, float end, float startVelocity, float endVelocity, float t) {
-        // Cubic Hermite interpolation preserves angular velocity at consecutive tick boundaries.
         float t2 = t * t;
         float t3 = t2 * t;
         return (2 * t3 - 3 * t2 + 1) * start + (t3 - 2 * t2 + t) * interval * startVelocity

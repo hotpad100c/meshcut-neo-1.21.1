@@ -10,7 +10,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** A beam that has burnt through a cut block goes on: see {@link MimicBeamPass}. */
 @Pseudo
 @Mixin(targets = "dev.dubhe.anvilcraft.api.laser.LaserTypeComponent", remap = false)
 public abstract class AnvilLaserPassMixin {

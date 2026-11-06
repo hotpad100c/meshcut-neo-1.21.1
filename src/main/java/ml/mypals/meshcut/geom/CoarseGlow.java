@@ -4,7 +4,6 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Temporary emission is derived directly from cut patches, never from the detailed fragment mesh. */
 public final class CoarseGlow {
     public static List<MeshPoly> build(List<CutPlane> cuts, List<Patch> patches, List<CutPlane> material,
                                       float[] uv, Object sprite) {
@@ -18,7 +17,6 @@ public final class CoarseGlow {
         boolean[] mask = VoxelFragments.latticeMask(excluded);
         List<List<CutPlane>> bases = shape.stream().map(VoxelFragments::planes).toList();
 
-        // Calculate centroid and bounding box of kept voxels
         double[] centroid = null;
         List<CutPlane> keptBoxPlanes = null;
         if (mask != null) {
@@ -56,7 +54,6 @@ public final class CoarseGlow {
         }
 
         List<List<CutPlane>> smoothHoles = VoxelFragments.smoothHoles(excluded);
-        // Holes that could potentially carve into the cut plane from inside the kept material
         List<List<CutPlane>> holes = new ArrayList<>();
         if (mask != null) {
             holes.addAll(smoothHoles);
@@ -64,7 +61,6 @@ public final class CoarseGlow {
             holes.addAll(excluded);
         }
 
-        // Looked up by plane instead of by walking every hole for every cut (a laser leaves hundreds of cuts).
         PlaneIndex<Object[]> wallOf = new PlaneIndex<>();
         for (List<CutPlane> hole : smoothHoles) {
             for (int j = 0; j < hole.size(); j++) wallOf.put(hole.get(j), new Object[]{hole, j});
@@ -81,7 +77,6 @@ public final class CoarseGlow {
             if (same.stream().anyMatch(c -> identical(c, cut))) continue;
             same.add(cut);
 
-            // Check if this cut is a side wall of a smooth hole (e.g. laser capsule)
             List<CutPlane> holeBounds = null;
             CutPlane holeOutward = null;
             Object[] wall = wallOf.find(cut);
@@ -100,7 +95,6 @@ public final class CoarseGlow {
             if (polygon==null) polygon=Patch.full(cut).polygon();
             if (polygon==null || polygon.length<9) continue;
 
-            // 1. Determine unique outward normal (pointing towards removed / air side)
             CutPlane outward = holeOutward;
             if (outward == null) {
                 for (CutPlane plane : material) {
@@ -119,33 +113,27 @@ public final class CoarseGlow {
                 }
             }
 
-            // 2. Add single outward-facing polygon (never add opposite inner face)
             List<MeshPoly> section = new ArrayList<>();
             add(section, polygon, outward, uv, sprite);
 
-            // 3. Clip against base bounding shapes (e.g. unit cube or model boxes)
             for (List<CutPlane> base : bases) {
                 section = MeshClipper.clip(section, base);
             }
 
-            // 4. If this is a hole wall, clip against the other planes bounding that hole
             if (holeBounds != null) {
                 section = MeshClipper.clip(section, holeBounds);
             }
 
-            // 5. Clip against bounding box of remaining fragment to never spill into empty space
             if (keptBoxPlanes != null) {
                 section = MeshClipper.clip(section, keptBoxPlanes);
             }
 
-            // 6. Clip against other material planes (excluding self to prevent float self-erasure)
             CutPlane finalOutward = outward;
             List<CutPlane> others = material.stream().filter(p -> !finalOutward.sameAs(p)).toList();
             if (!others.isEmpty()) {
                 section = MeshClipper.clip(section, others);
             }
 
-            // 7. Subtract other holes that genuinely intrude into the kept material
             List<List<CutPlane>> ownHoles = holeBounds != null ? holesWith.findAll(cut) : List.of();
             for (List<CutPlane> hole : holes) {
                 if (section.isEmpty()) break;

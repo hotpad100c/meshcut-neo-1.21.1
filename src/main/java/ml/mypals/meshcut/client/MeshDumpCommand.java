@@ -17,10 +17,6 @@ import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * {@code /meshcutdump}: writes everything the mesh of the cut block being looked at is made of (see
- * {@link MimicMesh#describe}) to {@code meshcut-dumps/} in the game directory, and copies it to the clipboard.
- */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MeshDumpCommand {
     @SubscribeEvent

@@ -10,17 +10,12 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/**
- * Sable caches "is this block solid / a full cube" per state, but for a mimic that depends on the cut. Reporting
- * "solid, not full" keeps its mass counted and stops neighbours from hiding the faces that touch a cut-away void.
- */
 @Mixin(value = VoxelNeighborhoodState.class, remap = false)
 public abstract class VoxelNeighborhoodStateMixin {
     @Inject(method = "isSolid", at = @At("HEAD"), cancellable = true)
     private static void meshcut$mimicSolid(BlockGetter level, BlockPos pos, BlockState state,
                                            CallbackInfoReturnable<Boolean> cir) {
         if (state.getBlock() instanceof MimicBlock) {
-            // a piece of a torch in the world is nothing to the physics engine (see MimicColliders)
             boolean passable = level.getBlockEntity(pos) instanceof ml.mypals.meshcut.block.MimicBlockEntity be && be.passable();
             cir.setReturnValue(!passable || meshcut$inPlot(level, pos));
         }
@@ -29,7 +24,7 @@ public abstract class VoxelNeighborhoodStateMixin {
     private static boolean meshcut$inPlot(BlockGetter level, BlockPos pos) {
         var container = level instanceof net.minecraft.world.level.Level l
                 ? dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(l) : null;
-        return container == null || container.inBounds(pos); // not knowing: counted solid, as before
+        return container == null || container.inBounds(pos);
     }
 
     @Inject(method = "isFullBlock", at = @At("HEAD"), cancellable = true)

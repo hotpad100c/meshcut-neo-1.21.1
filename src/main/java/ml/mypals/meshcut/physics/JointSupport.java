@@ -4,7 +4,6 @@ import org.joml.Vector3d;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Fixed material samples for an attachment, independent of body motion and world loading. */
 public final class JointSupport {
     public static Vector3d inset(double[] box, double[] target) {
         double[] point = new double[3];

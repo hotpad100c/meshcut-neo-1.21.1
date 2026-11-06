@@ -16,11 +16,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Map;
 import java.util.UUID;
 
-/** AnvilCraft's laser gun cuts what it hits, as a laser emitter does. */
 @Pseudo
 @Mixin(targets = "dev.dubhe.anvilcraft.item.weapon.LaserGunItem", remap = false)
 public abstract class AnvilLaserGunMixin {
-    /** Has an entry for everyone who is firing the gun (it is only entered once the gun has what it needs to fire). */
     @Shadow
     private static Map<UUID, ?> STATES;
 

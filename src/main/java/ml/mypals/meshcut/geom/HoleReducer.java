@@ -5,11 +5,6 @@ import ml.mypals.meshcut.cut.CutPlane;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Cuts a convex cut-out part down to what the block can see of it. A laser's capsule has 62 planes, but a block is one
- * unit cube, and only a few of them ever touch it; the rest change nothing there and yet cost something everywhere the
- * region is used (stored, sent, hashed, clipped against, ...). Dropping them leaves {@code region ∩ cube} as it was.
- */
 public final class HoleReducer {
     private static final double MIN_FACE_AREA = 1e-7;
     private static final double REACH = 8;
@@ -43,7 +38,6 @@ public final class HoleReducer {
             return w;
         }
 
-        /** {minX, minY, minZ, maxX, maxY, maxZ} of the part inside the block (the whole block if it has no wall in it). */
         public double[] bounds() {
             double[] b = bounds;
             if (b == null) {
@@ -65,21 +59,16 @@ public final class HoleReducer {
             return b;
         }
 
-        /**
-         * The wall on plane {@code j}, facing into the part, as a polygon to draw: texture coordinates spread over the
-         * section of the block by the plane (as {@code CapBuilder} does), or null if the plane has no wall in the block.
-         */
         public MeshPoly wall(int j, float[] uv, Object sprite) {
             float[] wall = walls()[j];
             if (wall == null) return null;
-            CutPlane facing = planes[j].flipped(); // the wall is seen from inside the part
+            CutPlane facing = planes[j].flipped();
             double nx = facing.nx(), ny = facing.ny(), nz = facing.nz();
             double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
             double tx = hy * nz, ty = -hx * nz, tz = hx * ny - hy * nx;
             double tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
             tx /= tl; ty /= tl; tz /= tl;
             double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
-            // the section of the block by the plane decides how the texture is spread
             double minA = Double.MAX_VALUE, minB = Double.MAX_VALUE, maxA = -Double.MAX_VALUE, maxB = -Double.MAX_VALUE;
             for (MeshPoly section : MeshClipper.clip(List.of(squareIn(planes[j])), CUBE)) {
                 float[] s = section.verts();
@@ -93,7 +82,6 @@ public final class HoleReducer {
             int n = wall.length / MeshPoly.STRIDE;
             float[] v = new float[wall.length];
             for (int i = 0; i < n; i++) {
-                // reversed: the stored polygon runs counter-clockwise seen from outside the part
                 int from = (n - 1 - i) * MeshPoly.STRIDE, to = i * MeshPoly.STRIDE;
                 v[to] = wall[from]; v[to + 1] = wall[from + 1]; v[to + 2] = wall[from + 2];
                 double a = v[to] * tx + v[to + 1] * ty + v[to + 2] * tz, b = v[to] * bx + v[to + 1] * by + v[to + 2] * bz;
@@ -104,12 +92,10 @@ public final class HoleReducer {
         }
     }
 
-    /** A region as it is, with its walls and bounds to be worked out when they are first asked for. */
     public static ReducedPlanes adopt(List<CutPlane> region) {
         return region instanceof ReducedPlanes already ? already : new ReducedPlanes(region, null);
     }
 
-    /** The wall of the region on plane {@code j} inside the unit cube, {x,y,z,u,v} per vertex; null if there is none. */
     private static float[] wallOn(List<CutPlane> region, int j) {
         CutPlane plane = region.get(j);
         if (!crossesCube(plane)) return null;
@@ -130,10 +116,6 @@ public final class HoleReducer {
         return best;
     }
 
-    /**
-     * The bounding box of a region inside the block, {minX, minY, minZ, maxX, maxY, maxZ}; the whole block when it is not
-     * known (nothing is then ruled out by it).
-     */
     public static double[] bounds(List<CutPlane> region) {
         if (region instanceof ReducedPlanes prepared) return prepared.bounds();
         return WHOLE;
@@ -141,7 +123,6 @@ public final class HoleReducer {
 
     private static final double[] WHOLE = {0, 0, 0, 1, 1, 1};
 
-    /** Whether the polygon lies outside the bounding box of the region: they cannot meet. */
     public static boolean apart(List<CutPlane> region, float[] verts) {
         if (!(region instanceof ReducedPlanes prepared)) return false;
         double[] b = prepared.bounds();
@@ -155,13 +136,8 @@ public final class HoleReducer {
         return hx < b[0] - eps || lx > b[3] + eps || hy < b[1] - eps || ly > b[4] + eps || hz < b[2] - eps || lz > b[5] + eps;
     }
 
-    /** Regions this small are boxes of the cell lattice (or burn prisms): nothing to gain, and others read them as such. */
     private static final int WORTH_REDUCING = 8;
 
-    /**
-     * @return the part restricted to the unit cube, or {@code null} if it has no volume in it. Regions that are already
-     *         small are returned as they are.
-     */
     public static Reduced reduce(List<CutPlane> region) {
         List<CutPlane> kept = new ArrayList<>();
         List<float[]> walls = new ArrayList<>();
@@ -177,7 +153,6 @@ public final class HoleReducer {
             }
         }
         if (kept.isEmpty()) {
-            // no wall inside the block: the part either swallows all of it or misses it
             boolean everything = true;
             for (CutPlane p : region) {
                 everything &= p.signedDistance(0.5, 0.5, 0.5) > 0;
@@ -196,7 +171,6 @@ public final class HoleReducer {
         return new Reduced(new ReducedPlanes(kept, walls.toArray(new float[0][])), vertices);
     }
 
-    /** Whether every corner of the part (inside the block) lies within the region: it removes nothing new. */
     public static boolean contains(List<CutPlane> region, List<double[]> vertices) {
         for (double[] v : vertices) {
             for (CutPlane p : region) {
@@ -218,7 +192,6 @@ public final class HoleReducer {
         return min < 1e-9 && max > -1e-9;
     }
 
-    /** A big square lying in the plane. */
     private static MeshPoly squareIn(CutPlane plane) {
         double[] n = {plane.nx(), plane.ny(), plane.nz()};
         double[] helper = Math.abs(n[0]) < 0.9 ? new double[]{1, 0, 0} : new double[]{0, 1, 0};
@@ -230,7 +203,6 @@ public final class HoleReducer {
         double[][] corner = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
         for (int i = 0; i < 4; i++) {
             for (int axis = 0; axis < 3; axis++) {
-                // d - n·p = 0 on the plane, so the point nearest the origin is n*d
                 v[i * MeshPoly.STRIDE + axis] = (float) (n[axis] * plane.d() + REACH * (corner[i][0] * t[axis] + corner[i][1] * b[axis]));
             }
         }

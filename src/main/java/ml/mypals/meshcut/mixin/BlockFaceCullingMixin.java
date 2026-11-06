@@ -41,8 +41,6 @@ public abstract class BlockFaceCullingMixin {
             cir.setReturnValue(false);
             return;
         }
-        // a whole side of another mimic (a mimic is a solid-layer block: NeoForge's supportsExternalFaceHiding would
-        // say no to this, as for any block in that layer; see above)
         if (neighbour.hidesNeighborFace(level, pos, state, face.getOpposite())) {
             cir.setReturnValue(false);
             return;
@@ -57,6 +55,6 @@ public abstract class BlockFaceCullingMixin {
             return;
         }
         VoxelShape theirs = neighbour.getFaceOcclusionShape(level, pos, face.getOpposite());
-        cir.setReturnValue(Shapes.joinIsNotEmpty(mine, theirs, BooleanOp.ONLY_FIRST)); // drawn where theirs does not cover it
+        cir.setReturnValue(Shapes.joinIsNotEmpty(mine, theirs, BooleanOp.ONLY_FIRST));
     }
 }

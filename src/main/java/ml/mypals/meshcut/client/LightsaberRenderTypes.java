@@ -8,7 +8,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.Util;
 import java.util.function.Function;
 
-/** Unlit translucent beam geometry tested against the main scene's depth, without writing glow depth. */
 final class LightsaberRenderTypes extends RenderStateShard {
     static final Function<ResourceLocation, RenderType> FADED_HANDS = Util.memoize(texture -> RenderType.create(
             "meshcut_faded_hands", DefaultVertexFormat.NEW_ENTITY, VertexFormat.Mode.QUADS, 1536, false, true,
@@ -24,7 +23,7 @@ final class LightsaberRenderTypes extends RenderStateShard {
                     .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
                     .setCullState(NO_CULL)
                     .setDepthTestState(LEQUAL_DEPTH_TEST)
-                    .setLayeringState(POLYGON_OFFSET_LAYERING) // marks lie on surfaces: pull them towards the camera
+                    .setLayeringState(POLYGON_OFFSET_LAYERING)
                     .setWriteMaskState(COLOR_WRITE)
                     .setOutputState(MAIN_TARGET)
                     .createCompositeState(false));
@@ -37,7 +36,6 @@ final class LightsaberRenderTypes extends RenderStateShard {
                     .setWriteMaskState(COLOR_WRITE)
                     .setOutputState(MAIN_TARGET)
                     .createCompositeState(false));
-    // A separate buffer lets the caller flush the trail before the bright blade.
     static final RenderType TRAIL = RenderType.create("meshcut_lightsaber_trail", DefaultVertexFormat.POSITION_COLOR,
             VertexFormat.Mode.QUADS, 1536, false, true, RenderType.CompositeState.builder()
                     .setShaderState(POSITION_COLOR_SHADER)

@@ -36,7 +36,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Holds the block this mimic imitates and the cuts that have been made in it. */
 public class MimicBlockEntity extends BlockEntity {
     public static final long NEVER = Long.MIN_VALUE;
 
@@ -54,15 +53,12 @@ public class MimicBlockEntity extends BlockEntity {
         return configured ? null : REPLACED.get(worldPosition.asLong());
     }
 
-    /** Nothing is known of what to draw yet (a client waiting for data): draw nothing rather than the default. */
     public boolean isPending() {
         return !configured && replaced() == null;
     }
-    /** Cuts that have really separated this piece from the rest of its block: they shape its collision and mass. */
     /** Guards the three lists below: meshing threads read them while the main thread rewrites them. */
     private final Object cutLock = new Object();
     private final List<CutPlane> planes = new ArrayList<>();
-    /** Convex parts of the block that were cut out and went elsewhere; this piece is what is left around them. */
     private final List<List<CutPlane>> excluded = new ArrayList<>();
     private final List<Patch> patches = new ArrayList<>();
     private CapMode capMode = CapMode.LAVA;
@@ -154,52 +150,30 @@ public class MimicBlockEntity extends BlockEntity {
         return appearance;
     }
 
-    /** What there is of this block to cut: the part of an entity it holds, or the imitated block's shape. */
     public List<double[]> cutBoxes() {
         return appearance != null ? appearance.boxes() : MimicShapes.cutBoxes(targetState);
     }
 
-    /** The key of this block's collision geometry, cached per version. */
     public MimicShapes.Key shapeKey() {
         return shapeData().key();
     }
 
-    /** Collision / selection shape of what is left of the block, cached per version. */
     public VoxelShape getShape() {
         return shapeData().shape();
     }
 
-    /**
-     * Whether its face on that side is still whole and opaque, as the imitated block's: it then hides the face of
-     * what lies against it (see {@link MimicBlock#hidesNeighborFace}). Cached per version; asked from meshing threads.
-     */
     public boolean coversFace(net.minecraft.core.Direction dir) {
         return (shapeData().wholeFaces() & 1 << dir.get3DDataValue()) != 0;
     }
 
-    /**
-     * Whether one walks through it, as through what it imitates (a torch, a flower): it then collides with nothing in
-     * the world and with no entity, and only a body it is part of collides with its outline (see MimicColliders).
-     */
     public boolean passable() {
         return appearance == null && !MimicShapes.hasCollision(targetState);
     }
 
-    /** Fraction of the imitated block that survives the cuts; scales the physics mass. */
     public double getVolumeFraction() {
         return shapeData().volumeFraction();
     }
 
-    /**
-     * Mass data for the given mimic block state.
-     * <p>
-     * Sable updates a sub-level's mass incrementally on block changes: add the new state's mass, subtract the old
-     * one's, both looked up through the state. Mimics change without changing state, so to make that arithmetic work
-     * the two values of {@code refresh} act as two slots: during a transition the old slot answers with what was
-     * accounted before the change, the other with the current data.
-     *
-     * @return {@code null} to let Sable use its default for the state
-     */
     @Nullable
     public MassSnapshot massFor(BlockState mimicState) {
         if (transitionActive && mimicState.getValue(MimicBlock.REFRESH) == transitionSlot) {
@@ -213,13 +187,6 @@ public class MimicBlockEntity extends BlockEntity {
         return currentMass;
     }
 
-    /**
-     * Call before changing the data (or, for a block that Sable has just accounted with defaults, before
-     * announcing it): the state with {@code refresh == oldSlot} will keep answering with the previous data.
-     *
-     * @param previousIsDefault the previous value was never computed from this block entity (the block entity did
-     *                          not exist yet when Sable looked), so Sable's default is what it holds
-     */
     public void beginMassTransition(boolean previousIsDefault, boolean oldSlot) {
         transitionMass = previousIsDefault ? null : massFor(getBlockState());
         transitionSlot = oldSlot;
@@ -232,7 +199,7 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     private ShapeData shapeData() {
-        int v = version; // read first: a change made meanwhile bumps it, and the next call works it out again
+        int v = version;
         ShapeData data = shapeData;
         if (data == null || data.version() != v) {
             synchronized (cutLock) {
@@ -245,13 +212,11 @@ public class MimicBlockEntity extends BlockEntity {
         return data;
     }
 
-    /** Replaces the whole configuration with a single sync to clients. */
     public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
                           List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag) {
         configure(target, newPlanes, newExcluded, newPatches, mode, beTag, null);
     }
 
-    /** @param entity for a part of a cut-up entity, what it looked like; null for a block */
     public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
                           List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag, @Nullable EntityAppearance entity) {
         configure(target, newPlanes, newExcluded, newPatches, mode, beTag, entity, null);
@@ -260,7 +225,6 @@ public class MimicBlockEntity extends BlockEntity {
     public void configure(BlockState target, List<CutPlane> newPlanes, List<List<CutPlane>> newExcluded,
                           List<Patch> newPatches, CapMode mode, @Nullable CompoundTag beTag,
                           @Nullable EntityAppearance entity, @Nullable GlowHistory inherited) {
-        // the cut planes it has now that it did not have before are what this change opened
         List<CutPlane> before = inherited == null
                 ? allCuts(planes, excluded, patches.stream().map(Patch::plane).toList()) : inherited.knownCuts();
         if (inherited != null) {
@@ -292,7 +256,6 @@ public class MimicBlockEntity extends BlockEntity {
                     glowCuts.addAll(fresh);
                 }
                 glowStart = now;
-                // a laser adds planes every tick: only the newest ones are still hot
                 while (glowCuts.size() > MAX_GLOW_PLANES) glowCuts.remove(0);
             }
         }
@@ -300,7 +263,6 @@ public class MimicBlockEntity extends BlockEntity {
         this.targetState = target;
         this.configured = true;
         this.targetBeTag = beTag;
-        // the arguments may be views of our own lists
         List<CutPlane> planesCopy = List.copyOf(newPlanes);
         List<List<CutPlane>> excludedCopy = reducedRegions(newExcluded);
         List<Patch> patchesCopy = List.copyOf(newPatches);
@@ -316,10 +278,8 @@ public class MimicBlockEntity extends BlockEntity {
         changed();
     }
 
-    /** Saves from before regions were cut down hold the capsule's 62 planes. */
     private static final int LEGACY_REGION_PLANES = 40;
 
-    /** Planes found again in about constant time (what {@code noneMatch(p::sameAs)} over a list does in a loop). */
     private static final class PlaneSet {
         private final java.util.Map<Long, List<CutPlane>> buckets = new java.util.HashMap<>();
 
@@ -328,7 +288,6 @@ public class MimicBlockEntity extends BlockEntity {
         }
 
         private static long key(CutPlane p) {
-            // facing either way is the same plane: take the normal whose first non-zero part is positive
             double s = p.nx() > 1e-6 || p.nx() > -1e-6 && (p.ny() > 1e-6 || p.ny() > -1e-6 && p.nz() >= 0) ? 1 : -1;
             long x = Math.round(s * p.nx() * 100), y = Math.round(s * p.ny() * 100), z = Math.round(s * p.nz() * 100);
             return (x + 128) | (y + 128) << 8 | (z + 128) << 16;
@@ -349,12 +308,10 @@ public class MimicBlockEntity extends BlockEntity {
         }
     }
 
-    /** Copies the regions, each cut down to the planes that matter inside this block (see {@link HoleReducer}). */
     private static List<List<CutPlane>> reducedRegions(List<List<CutPlane>> regions) {
         List<List<CutPlane>> out = new ArrayList<>(regions.size());
         for (List<CutPlane> region : regions) {
             if (region.size() <= 12 || region instanceof HoleReducer.ReducedPlanes) {
-                // a lattice box or a burn prism, or one that was reduced when it was made: as small as it gets
                 out.add(region instanceof HoleReducer.ReducedPlanes ? region : List.copyOf(region));
                 continue;
             }
@@ -390,7 +347,6 @@ public class MimicBlockEntity extends BlockEntity {
         changed();
     }
 
-    /** What the block model needs to draw this block; safe to read from chunk-compile threads. */
     public MimicRenderData renderData() {
         MimicRenderData data = renderData;
         if (data == null) {
@@ -420,11 +376,10 @@ public class MimicBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        updateLight(); // e.g. moved into a sub-level: the light is set for the new place
+        updateLight();
         requestModelDataUpdate();
     }
 
-    /** The server sent new data: refresh the model data and re-mesh the chunk section this block is in. */
     @Override
     public void onDataPacket(Connection net, ClientboundBlockEntityDataPacket pkt, HolderLookup.Provider registries) {
         super.onDataPacket(net, pkt, registries);
@@ -434,7 +389,6 @@ public class MimicBlockEntity extends BlockEntity {
         }
     }
 
-    /** A grid the caller has just worked out for exactly what it is about to configure: not worked out twice. */
     private static final ThreadLocal<CellGrid> PRESET_GRID = new ThreadLocal<>();
 
     public static void presetGrid(@Nullable CellGrid grid) {
@@ -464,14 +418,10 @@ public class MimicBlockEntity extends BlockEntity {
         }
     }
 
-    /** Gives off the light the imitated block does (see {@link MimicBlock#getLightEmission}). */
     void updateLight() {
-        // On both sides: the client works out its own lighting, and the synced light data may come later than this
-        // block entity's data, so it sets the value itself and relights rather than wait.
         if (level == null) {
             return;
         }
-        // a piece of something that floats still floats (server only; see MimicFloating)
         if (level instanceof ServerLevel) {
             ml.mypals.meshcut.physics.MimicFloating.update(level, worldPosition, targetState, MimicShapes.volumeFraction(shapeKey()));
         }
@@ -495,7 +445,6 @@ public class MimicBlockEntity extends BlockEntity {
     }
 
     public static final double GLOW_TICKS = 600;
-    /** Of the faces a cut opened, this many glow at most. */
     private static final int MAX_GLOW_PLANES = 192;
 
     public int glowLight() {
@@ -511,7 +460,7 @@ public class MimicBlockEntity extends BlockEntity {
             return 0f;
         }
         double age = gameTime + partialTick - glowStart;
-        if (age < 0) return 0f; // future/mismatched timestamps must never revive a cooled cut
+        if (age < 0) return 0f;
         if (age >= GLOW_TICKS) {
             return 0f;
         }

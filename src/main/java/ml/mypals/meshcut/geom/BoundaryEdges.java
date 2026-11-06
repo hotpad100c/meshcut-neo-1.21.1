@@ -8,11 +8,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * The outline of a surface made of many small polygons: the edges of the union of the polygons that lie in one plane.
- * An edge two of them share is inside that union, so it is not drawn; what remains is where the surface really ends or
- * turns into another plane.
- */
 final class BoundaryEdges {
     private static final double SNAP = 1e4;
     private static final double ON_EDGE = 1e-5;
@@ -57,7 +52,6 @@ final class BoundaryEdges {
                 if (a == b) {
                     continue;
                 }
-                // a vertex of another polygon on this edge splits it, so the pieces can meet their neighbours' edges
                 List<double[]> cuts = new ArrayList<>();
                 double[] p = points.get(a), q = points.get(b);
                 double dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
@@ -90,7 +84,7 @@ final class BoundaryEdges {
         }
         for (int[] e : pieces) {
             if (directed.contains((long) e[1] << 32 | e[0])) {
-                continue; // the neighbouring polygon runs the other way along it: inside the union
+                continue;
             }
             double[] p = points.get(e[0]), q = points.get(e[1]);
             String id = key(p[0], p[1], p[2]) < key(q[0], q[1], q[2])

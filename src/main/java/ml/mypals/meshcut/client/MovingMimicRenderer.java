@@ -18,13 +18,7 @@ import net.neoforged.neoforge.client.model.data.ModelData;
 import java.util.Map;
 import java.util.WeakHashMap;
 
-/**
- * Draws a mimic while a piston moves it. The moving block only knows the block it moves, not the mimic's data, so it
- * would be drawn as a mimic of nothing; it is drawn from the data it carries instead, as its model and as its block
- * entity renderer would draw it.
- */
 public final class MovingMimicRenderer {
-    /** A stand-in mimic per moving block, holding the carried data (never in the world). Render thread only. */
     private static final Map<PistonMovingBlockEntity, MimicBlockEntity> STAND_INS = new WeakHashMap<>();
 
     public static void render(PistonMovingBlockEntity moving, CompoundTag data, BlockPos pos, BlockState state, PoseStack poseStack,
@@ -32,7 +26,7 @@ public final class MovingMimicRenderer {
         MimicBlockEntity mimic = STAND_INS.get(moving);
         if (mimic == null) {
             mimic = new MimicBlockEntity(pos, state);
-            mimic.loadWithComponents(data, level.registryAccess()); // with no level yet: it touches no light, no graph
+            mimic.loadWithComponents(data, level.registryAccess());
             mimic.setLevel(level);
             STAND_INS.put(moving, mimic);
         }

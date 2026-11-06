@@ -5,7 +5,6 @@ import org.joml.Vector3d;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Intersects a blade's swept triangle with a model face, then clips the scorch to that face. */
 public final class SaberScorch {
     private static final double EPSILON = 1e-7;
 
@@ -41,7 +40,6 @@ public final class SaberScorch {
             polygon = new ArrayList<>(List.of(new Vector3d(a).sub(side), new Vector3d(b).sub(side),
                     new Vector3d(b).add(side), new Vector3d(a).add(side)));
         }
-        // Work with either winding; captured model normals and winding need not agree.
         Vector3d area = new Vector3d();
         for (int i = 0; i < boundary.size(); i++)
             area.add(new Vector3d(boundary.get(i)).cross(boundary.get((i + 1) % boundary.size())));

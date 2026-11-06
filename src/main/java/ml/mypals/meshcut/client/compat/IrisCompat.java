@@ -2,7 +2,6 @@ package ml.mypals.meshcut.client.compat;
 
 import java.lang.reflect.Method;
 
-/** Whether Iris is running a shader pack. Looked up by name: Iris is not a dependency. */
 public final class IrisCompat {
     private static Method inUse;
     private static Object api;

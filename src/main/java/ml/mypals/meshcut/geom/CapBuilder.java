@@ -9,16 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * Builds the flat faces exposed by cuts.
- * <p>
- * For each plane the section of the <em>original</em> model is found by clipping with that plane alone and
- * stitching the edges lying on it into closed loops. The loops are triangulated and then clipped by all the
- * other planes, so the cap is bounded correctly even where two cuts meet inside the solid.
- * <p>
- * Limitations: loops with the "wrong" orientation (holes, e.g. a cauldron's interior) are ignored, and an open
- * (non-watertight) model yields no cap for the gaps it can't close.
- */
 public final class CapBuilder {
     private static final double ON_PLANE = 1e-4;
     private static final double MIN_EDGE = 1e-5;
@@ -27,15 +17,10 @@ public final class CapBuilder {
 
     private record Edge(long from, long to) {}
 
-    /**
-     * @param original the unclipped, opaque polygons of the model
-     * @param uv       {u0, v0, u1, v1} rectangle of the sprite the cap is textured with
-     */
     public static List<MeshPoly> build(List<MeshPoly> original, List<CutPlane> planes, float[] uv) {
         return build(original, planes, uv, null);
     }
 
-    /** @param sprite stored on every cap polygon (opaque to this class) so the renderer knows what the UVs refer to */
     public static List<MeshPoly> build(List<MeshPoly> original, List<CutPlane> planes, float[] uv, Object sprite) {
         List<MeshPoly> caps = new ArrayList<>();
         for (int i = 0; i < planes.size(); i++) {
@@ -50,11 +35,6 @@ public final class CapBuilder {
         return caps;
     }
 
-    /**
-     * The face the plane leaves on the model, clipped to the region {@code others} (given as half-spaces to stay
-     * inside). Unlike {@link #build} this is for one plane at a time, and the plane need not be one of a block's cuts:
-     * it is used for the boundary of a part that was cut out, seen from the side of what is left around it.
-     */
     public static List<MeshPoly> face(List<MeshPoly> original, CutPlane plane, List<CutPlane> others, float[] uv, Object sprite) {
         if (!removesSomething(original, plane)) {
             return List.of();
@@ -87,7 +67,7 @@ public final class CapBuilder {
                 coplanar = Math.abs(plane.signedDistance(v[k * S], v[k * S + 1], v[k * S + 2])) < ON_PLANE;
             }
             if (coplanar) {
-                continue; // a face lying in the cut plane has no section edge of its own
+                continue;
             }
             for (int k = 0; k < n; k++) {
                 int a = k * S;
@@ -100,7 +80,6 @@ public final class CapBuilder {
                 if (dx * dx + dy * dy + dz * dz < MIN_EDGE * MIN_EDGE) {
                     continue;
                 }
-                // the cap runs against the neighbouring face's winding, so store the edge reversed
                 long from = key(v[b], v[b + 1], v[b + 2]);
                 long to = key(v[a], v[a + 1], v[a + 2]);
                 points.putIfAbsent(from, new double[]{v[b], v[b + 1], v[b + 2]});
@@ -108,7 +87,7 @@ public final class CapBuilder {
                 if (from == to) {
                     continue;
                 }
-                if (!edges.remove(new Edge(to, from))) { // opposite edges cancel (shared seam of two solids)
+                if (!edges.remove(new Edge(to, from))) {
                     edges.add(new Edge(from, to));
                 }
             }
@@ -117,15 +96,14 @@ public final class CapBuilder {
             return List.of();
         }
 
-        // plane basis: t x b = n, so loops that are CCW seen from the removed side have positive area
         double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
         double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
-        double tx = hy * nz, ty = -hx * nz, tz = hx * ny - hy * nx; // h x n
+        double tx = hy * nz, ty = -hx * nz, tz = hx * ny - hy * nx;
         double tl = Math.sqrt(tx * tx + ty * ty + tz * tz);
         tx /= tl;
         ty /= tl;
         tz /= tl;
-        double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx; // n x t
+        double bx = ny * tz - nz * ty, by = nz * tx - nx * tz, bz = nx * ty - ny * tx;
 
         List<List<double[]>> loops = stitch(edges, points);
         double minA = Double.MAX_VALUE, minB = Double.MAX_VALUE, maxA = -Double.MAX_VALUE, maxB = -Double.MAX_VALUE;
@@ -151,7 +129,7 @@ public final class CapBuilder {
                 ys[k] = p[0] * bx + p[1] * by + p[2] * bz;
             }
             if (signedArea(xs, ys) <= 1e-8) {
-                continue; // hole or degenerate
+                continue;
             }
             for (int[] tri : earClip(xs, ys)) {
                 float[] verts = new float[3 * S];
@@ -184,7 +162,7 @@ public final class CapBuilder {
                 loop.add(points.get(cur));
                 List<Long> outs = next.get(cur);
                 if (outs == null) {
-                    break; // open chain
+                    break;
                 }
                 long to = outs.remove(outs.size() - 1);
                 if (outs.isEmpty()) {
@@ -212,7 +190,6 @@ public final class CapBuilder {
         return a / 2;
     }
 
-    /** Ear clipping of a simple CCW polygon; returns index triples. */
     private static List<int[]> earClip(double[] xs, double[] ys) {
         int n = xs.length;
         List<Integer> idx = new ArrayList<>(n);
@@ -227,12 +204,12 @@ public final class CapBuilder {
                 int ia = idx.get((k + idx.size() - 1) % idx.size()), ib = idx.get(k), ic = idx.get((k + 1) % idx.size());
                 double cross = (xs[ib] - xs[ia]) * (ys[ic] - ys[ia]) - (ys[ib] - ys[ia]) * (xs[ic] - xs[ia]);
                 if (cross < 1e-10) {
-                    if (Math.abs(cross) < 1e-10) { // collinear: drop the middle vertex
+                    if (Math.abs(cross) < 1e-10) {
                         idx.remove(k);
                         clipped = true;
                         break;
                     }
-                    continue; // reflex
+                    continue;
                 }
                 boolean ear = true;
                 for (int other : idx) {
@@ -250,7 +227,7 @@ public final class CapBuilder {
                 }
             }
             if (!clipped) {
-                break; // not simple; give up on the remainder
+                break;
             }
         }
         if (idx.size() == 3) {

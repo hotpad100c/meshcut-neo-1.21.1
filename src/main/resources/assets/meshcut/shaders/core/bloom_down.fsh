@@ -1,12 +1,11 @@
 #version 150
 
 uniform sampler2D Sampler0;
-uniform vec2 TexelSize; // of the source
+uniform vec2 TexelSize;
 
 in vec2 texCoord;
 out vec4 fragColor;
 
-// Dual-filter downsample: the centre and four diagonal taps between texels.
 void main() {
     vec2 h = TexelSize * 0.5;
     vec4 sum = texture(Sampler0, texCoord) * 4.0;

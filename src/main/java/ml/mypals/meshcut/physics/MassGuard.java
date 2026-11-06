@@ -15,7 +15,6 @@ public final class MassGuard {
     private static final double MIN_MASS = 1e-9;
     private static boolean warned;
 
-    /** Called before the physics engine steps (see {@code SubLevelPhysicsSystemMixin}). */
     public static void check(SubLevelPhysicsSystem system, ServerSubLevelContainer container) {
         for (SubLevel s : new ArrayList<>(container.getAllSubLevels())) {
             if (!(s instanceof ServerSubLevel sub) || sub.isRemoved() || healthy(sub.getMassTracker())) {
@@ -45,7 +44,7 @@ public final class MassGuard {
 
     private static boolean healthy(MassData mass) {
         if (mass == null) {
-            return true; // not tracked (yet): nothing to say
+            return true;
         }
         Vector3dc center = mass.getCenterOfMass();
         return mass.getMass() > MIN_MASS && center != null

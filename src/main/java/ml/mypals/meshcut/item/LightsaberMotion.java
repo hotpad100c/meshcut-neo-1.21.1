@@ -27,13 +27,10 @@ import org.joml.Vector2f;
 
 import java.util.function.Supplier;
 
-/** Each logical side owns its players' aim state; rendering only interpolates these tick snapshots. */
 @EventBusSubscriber(modid = MeshCut.MODID)
 public final class LightsaberMotion {
     private static final DeferredRegister<AttachmentType<?>> ATTACHMENTS =
             DeferredRegister.create(NeoForgeRegistries.ATTACHMENT_TYPES, MeshCut.MODID);
-    // Entity.equals compares IDs, so a shared player-keyed map aliases client and server copies.
-    // An unsynced, transient attachment belongs to each entity instance, including after respawn/reconnect.
     private static final Supplier<AttachmentType<State>> STATE = ATTACHMENTS.register("saber_motion",
             () -> AttachmentType.builder(holder -> new State((Player) holder)).build());
 
@@ -53,7 +50,6 @@ public final class LightsaberMotion {
         }
     }
 
-    /** Degrees the lit blade is held above where the player looks (negative pitch is up). */
     private static final float REST_TILT = -9f;
 
     private static final class State {
@@ -80,7 +76,6 @@ public final class LightsaberMotion {
         }
     }
 
-    // Advance before LightsaberHandler samples the blade for this tick's actual cut.
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onPlayerTick(PlayerTickEvent.Post event) {
         Player player = event.getEntity();
@@ -101,7 +96,6 @@ public final class LightsaberMotion {
             return;
         }
         if (state.tick == player.tickCount) return;
-        // Missing callbacks should advance elapsed simulation time, rather than snap to the target.
         float yaw = state.remoteTarget == null ? player.getYRot() + state.yawOffset : state.remoteTarget.x;
         float pitch = state.remoteTarget == null ? player.getXRot() + state.pitchOffset + REST_TILT : state.remoteTarget.y;
         SaberGesture.Sample gesture = state.remoteTarget == null
@@ -165,19 +159,16 @@ public final class LightsaberMotion {
         return true;
     }
 
-    /** Translation in world coordinates before entity scale, shared by the grip and the cutting emitter. */
     public static Vector3f handOffset(Player player, float partial) {
         State state = player.getExistingDataOrNull(STATE);
         if (state == null) return new Vector3f();
         return handOffset(player, partial, state.hand.position(partial), angles(player, partial));
     }
 
-    /** As {@link #handOffset(Player, float)}, for a hand position and aim given (the server's, as the client sees it). */
     public static Vector3f handOffset(Player player, float partial, Vector2f hand, Vector2f aim) {
         float yaw = Mth.rotLerp(partial, player.yRotO, player.getYRot());
         float pitch = Mth.lerp(partial, player.xRotO, player.getXRot());
         Vector3f offset = SaberPose.screenTranslation(yaw, pitch, hand.x, hand.y).mul(SaberPose.PLAYER_MODEL_SCALE);
-        // never further than the arms reach: they are not stretched to follow
         return SaberPose.reachable(offset, aim.x, aim.y, Mth.rotLerp(partial, player.yBodyRotO, player.yBodyRot),
                 player.isCrouching(), player.getMainArm() == HumanoidArm.RIGHT);
     }

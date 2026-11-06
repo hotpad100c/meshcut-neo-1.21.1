@@ -3,7 +3,6 @@ package ml.mypals.meshcut.client;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
-/** Centered gun-model coordinates and vanilla player/held-item transforms, shared by drawing and beam origins. */
 public final class GunPose {
     public static Vector3f muzzle() { return new Vector3f(0, 6.6f/16 - 0.5f, 0.05f/16 - 0.5f); }
 
@@ -26,14 +25,12 @@ public final class GunPose {
 
     public static Matrix4f thirdPerson(boolean right, boolean crouch, float bodyYaw, float aimYaw, float pitch, float scale, float recoil) {
         Arm a=arm(right,crouch,aimYaw-bodyYaw,pitch,recoil);
-        float modelScale=0.9375f*scale; // PlayerRenderer's skin-model scale.
+        float modelScale=0.9375f*scale;
         return new Matrix4f().translate(0,1.501f*modelScale-(crouch?0.125f*scale:0),0)
                 .rotateY((float)Math.toRadians(180-bodyYaw)).scale(-modelScale,-modelScale,modelScale)
                 .translate(a.x/16,a.y/16,a.z/16).rotateY(a.yaw).rotateX(a.pitch)
-                // ItemInHandLayer: translateToHand, rotate X -90/Y 180, hand offset.
                 .rotateX(-(float)Math.PI/2).rotateY((float)Math.PI)
                 .translate((right?1:-1)/16f,0.125f,-0.625f)
-                // laser_gun.json third-person display; positions below are already centered.
                 .translate(0,3.2f/16,-2.1f/16).scale(0.75f);
     }
     private GunPose() {}

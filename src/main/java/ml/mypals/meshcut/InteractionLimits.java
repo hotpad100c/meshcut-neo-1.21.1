@@ -1,6 +1,5 @@
 package ml.mypals.meshcut;
 
-/** Shared numerical boundaries; usable without booting a Minecraft world. */
 public final class InteractionLimits {
     public static final float MIN_LENGTH = 0.25f, MAX_LENGTH = 2f;
 

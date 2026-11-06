@@ -6,11 +6,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Convex half-space intersections on the 64 columns of the cell lattice. */
 final class CellMasks {
     private static final int N = CellGrid.N;
     private record Key(List<CutPlane> planes, boolean strict) {}
-    // Values are immutable after publication; compute outside the small cache lock.
     private static final Map<Key, long[]> CACHE = Collections.synchronizedMap(new LinkedHashMap<>(256, .75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<Key, long[]> entry) { return size() > 256; }
     });
@@ -26,7 +24,6 @@ final class CellMasks {
 
     private static boolean accepts(CutPlane p, int x, double y, double z, boolean strict) {
         double distance = p.signedDistance((x + .5) / N, y, z);
-        // Preserve the original comparisons, including their handling of NaN.
         return strict ? !(distance <= 1e-9) : !(distance < 0);
     }
 

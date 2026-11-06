@@ -2,7 +2,6 @@ package ml.mypals.meshcut;
 
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-/** Client preferences only; the server does not impose an input scheme. */
 public final class MeshCutClientConfig {
     public enum SaberActivation { HOLD, TOGGLE }
     public static final ModConfigSpec SPEC;

@@ -30,7 +30,6 @@ import java.util.Map;
  */
 @Mixin(PistonBaseBlock.class)
 public abstract class PistonBaseBlockMixin {
-    /** The data of the mimics a piston is about to move, by where they stand (per thread: client and server both move). */
     @Unique
     private static final ThreadLocal<Map<BlockPos, CompoundTag>> meshcut$moving = ThreadLocal.withInitial(HashMap::new);
 
@@ -39,13 +38,11 @@ public abstract class PistonBaseBlockMixin {
                                                    boolean allowDestroy, Direction pistonFacing, CallbackInfoReturnable<Boolean> cir) {
         if (state.getBlock() instanceof MimicBlock && level.getBlockEntity(pos) instanceof MimicBlockEntity be) {
             BlockState target = be.getTargetState();
-            // a piece of a chest (or anything with a block entity of its own) stays, as the chest would
             cir.setReturnValue(!(target.getBlock() instanceof MimicBlock)
                     && PistonBaseBlock.isPushable(target, level, pos, movement, allowDestroy, pistonFacing));
         }
     }
 
-    /** Before anything moves (blocks may land where others stood), the data of every mimic that will move is kept. */
     @WrapOperation(method = "moveBlocks", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/block/piston/PistonStructureResolver;getToPush()Ljava/util/List;"))
     private List<BlockPos> meshcut$keepData(PistonStructureResolver resolver, Operation<List<BlockPos>> original,
@@ -61,14 +58,12 @@ public abstract class PistonBaseBlockMixin {
         return toPush;
     }
 
-    /** The moving block made for a mimic carries its data. */
     @WrapOperation(method = "moveBlocks", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/level/block/piston/MovingPistonBlock;newMovingBlockEntity(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/core/Direction;ZZ)Lnet/minecraft/world/level/block/entity/BlockEntity;"))
     private BlockEntity meshcut$carryData(BlockPos pos, BlockState state, BlockState moved, Direction facing, boolean extending,
                                           boolean source, Operation<BlockEntity> original) {
         BlockEntity entity = original.call(pos, state, moved, facing, extending, source);
         if (moved.getBlock() instanceof MimicBlock && entity instanceof MovedMimic carrier) {
-            // it moves the way the piston faces when pushing, the other way when pulling
             BlockPos from = pos.relative(extending ? facing.getOpposite() : facing);
             carrier.meshcut$setMimic(meshcut$moving.get().get(from));
         }

@@ -81,10 +81,6 @@ public final class Debris {
             }
         }
 
-        /**
-         * Every piece a cut made goes after a while, unless somebody has held or clicked it. Sable draws a sub-level at
-         * the size it was made at (the scale of a pose is not sent to clients), so it cannot be seen to shrink: it poofs.
-         */
         private void expire(SubLevelContainer container, long now) {
             long lifetime = MeshCutConfig.PIECE_EXPIRE_MINUTES.get() * 1200L;
             if (lifetime <= 0) {
@@ -138,7 +134,7 @@ public final class Debris {
                     }
                 }
             }
-            return cut; // a few plain blocks someone assembled are not debris
+            return cut;
         }
     }
 

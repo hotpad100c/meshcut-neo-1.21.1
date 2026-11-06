@@ -4,17 +4,10 @@ import ml.mypals.meshcut.geom.PolygonCapsule;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.Vec3;
 
-/**
- * What AnvilCraft's laser gun does to blocks and living things, as a laser emitter does: see {@link BeamCutter}. Free of
- * AnvilCraft's types for the same reason as {@link AnvilLaserBeam}.
- */
 public final class AnvilGunBeam {
-    /** AnvilCraft's gun reaches this far. */
     private static final double RANGE = 48;
-    /** The hole is a third narrower than the radius-two hole of the gun of this mod. */
     private static final double RADIUS = PolygonCapsule.radius(2) * 2 / 3;
 
-    /** Called every tick the gun is firing. */
     public static void fire(ServerPlayer player) {
         var level = player.serverLevel();
         Vec3 from = player.getEyePosition();

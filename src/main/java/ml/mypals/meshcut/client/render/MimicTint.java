@@ -24,17 +24,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * The tint of what a mimic imitates (grass, leaves, water), taken where the block really is: a block in a sub-level
- * lies in a plot far out, whose biome says nothing, so it is tinted by the place in the world the sub-level is over.
- * <p>
- * Tints are asked for while chunk sections are meshed, on worker threads, which must not read Sable's poses (the
- * main thread changes them meanwhile). The poses are copied once a tick on the main thread instead, and the workers
- * read the copies.
- */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class MimicTint {
-    /** Where each sub-level was at the last tick, by id; replaced as a whole, never changed. */
     private static volatile Map<UUID, Pose3dc> poses = Map.of();
 
     public static int color(@Nullable BlockAndTintGetter level, @Nullable BlockPos pos, int tintIndex) {
@@ -49,7 +40,6 @@ public final class MimicTint {
         return client.getBlockColors().getColor(target, level, inWorld(client.level, pos), tintIndex);
     }
 
-    /** Where the block is in the world, as of the last tick; the block's own position if it is in no sub-level. */
     private static BlockPos inWorld(@Nullable ClientLevel level, BlockPos pos) {
         if (level == null) {
             return pos;
@@ -59,11 +49,11 @@ public final class MimicTint {
             if (container == null || !container.inBounds(pos)) {
                 return pos;
             }
-            SubLevel sub = Sable.HELPER.getContaining(level, pos); // which plot: a lookup, no pose read
+            SubLevel sub = Sable.HELPER.getContaining(level, pos);
             Pose3dc pose = sub == null ? null : poses.get(sub.getUniqueId());
             return pose == null ? pos : BlockPos.containing(pose.transformPosition(Vec3.atCenterOf(pos)));
         } catch (RuntimeException e) {
-            return pos; // a tint a little off rather than no chunk at all
+            return pos;
         }
     }
 

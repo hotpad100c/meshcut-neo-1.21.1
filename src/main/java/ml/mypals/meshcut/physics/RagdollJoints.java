@@ -1,6 +1,5 @@
 package ml.mypals.meshcut.physics;
 
-import dev.ryanhcode.sable.Sable;
 import dev.ryanhcode.sable.api.physics.constraint.ConstraintJointAxis;
 import dev.ryanhcode.sable.api.physics.constraint.GenericConstraintConfiguration;
 import dev.ryanhcode.sable.api.physics.constraint.PhysicsConstraintHandle;
@@ -40,48 +39,20 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-/**
- * What holds a cut-down body together, and keeps it from tearing itself apart.
- * <ul>
- *   <li><b>Joints</b>, as in sable-player-ragdoll: where a limb hung from its parent, a generic joint whose position
- *       is locked and whose rotation is pulled back towards how it was by a soft motor on each axis. The two limbs do
- *       not collide.</li>
- *   <li><b>Ghost pairs</b>: limbs (and pieces cut off them) that overlap one another do not collide either, until they
- *       have come apart. A model's parts overlap all the time, and two bodies that start inside each other are
- *       thrown apart with all the force the physics engine has.</li>
- * </ul>
- * Sable keeps constraints only while both bodies are loaded, so both are saved here and made again whenever they are.
- * <p>
- * <b>When a joint breaks.</b> Each end holds a small, fixed area inside the limb near the joint pivot. A shallow
- * nick of one sample does not detach the limb. If all samples are gone the joint breaks; if surviving material
- * moves into a piece made by cutting this limb, the joint follows that piece. Unrelated bodies cannot take it over.
- */
 public final class RagdollJoints extends SavedData {
     private static final String NAME = "meshcut_joints";
-    /** How hard a joint pulls a limb back to how it was, and how much it damps it (as in the ragdoll mod). */
     private static final double STIFFNESS = 20, DAMPING = 20;
-    /** Slack (in blocks) when telling whether a point is in the material. */
     private static final double EPS = 1e-3;
-    /** Every this many ticks, every joint checks that its limbs still hold on to it, and ghost pairs that came apart part. */
     private static final int CHECK_EVERY = 10;
-    /** Ghost pairs whose bounds are further apart than this (in blocks) have come apart. */
     private static final double APART = 0.25;
-    /** How long (ticks) the two sides of a cut pass through each other at most. */
     private static final int CUT_GHOST_TICKS = 40;
-    /**
-     * At most this many ghost pairs; each is a constraint the physics engine keeps. Overlapping limbs keep theirs for
-     * good, so bodies lying about fill this up; then the oldest pairs make room (see {@link #makeRoom}).
-     */
     private static final int MAX_GHOSTS = 2048;
 
-    /** One end of a joint. */
     private static final class End {
         UUID body;
         @Nullable
         final String limb;
-        /** Where the joint is, in the body's plot (block coordinates). */
         final Vector3d anchor;
-        /** The point of the limb's material the end holds on to, in the body's plot; null until worked out. */
         @Nullable
         Vector3d hold;
         final List<Vector3d> supports = new ArrayList<>();
@@ -114,7 +85,6 @@ public final class RagdollJoints extends SavedData {
         }
 
         static End load(CompoundTag tag) {
-            // joints saved before ends held on to a point had the anchor as "x", "y", "z"
             Vector3d anchor = tag.contains("anchor") ? getVector(tag, "anchor")
                     : new Vector3d(tag.getDouble("x"), tag.getDouble("y"), tag.getDouble("z"));
             End end = new End(tag.getUUID("body"), tag.contains("limb") ? tag.getString("limb") : null, anchor,
@@ -126,7 +96,6 @@ public final class RagdollJoints extends SavedData {
 
     private static final class Joint {
         final End parent, child;
-        /** The child's orientation in the parent's frame when the joint was made: where the motors pull back to. */
         final Quaterniond frame;
         @Nullable
         PhysicsConstraintHandle handle;
@@ -146,13 +115,8 @@ public final class RagdollJoints extends SavedData {
         }
     }
 
-    /**
-     * Two bodies that do not collide until they have come apart. Limbs of a body may overlap for good (the model's
-     * parts do); two sides of a cut only touch, and collide again after a while even if they are still touching.
-     */
     private static final class Ghost {
         final UUID a, b;
-        /** Game time after which the two collide whatever, or {@link Long#MAX_VALUE}. */
         final long until;
         @Nullable
         PhysicsConstraintHandle handle;
@@ -178,17 +142,11 @@ public final class RagdollJoints extends SavedData {
 
     private final List<Joint> joints = new ArrayList<>();
     private final List<Ghost> ghosts = new ArrayList<>();
-    /** Sub-levels whose blocks changed (some left, or their mass did), with where they were just before. */
     private final Map<UUID, Pose3d> touched = new HashMap<>();
-    /** Sub-levels made of blocks that left another one, by where they came from. */
     private final Map<UUID, Set<UUID>> madeFrom = new HashMap<>();
-    /** Sub-levels that are gone for good, with where they were last. */
     private final Map<UUID, Pose3d> removed = new HashMap<>();
     private long ticks;
 
-    // ---------------------------------------------------------------- set up
-
-    /** Watches the sub-levels of every server level. */
     public static void register() {
         SableEventPlatform.INSTANCE.onSubLevelContainerReady((level, container) -> {
             if (level instanceof ServerLevel server) {
@@ -201,10 +159,6 @@ public final class RagdollJoints extends SavedData {
         return level.getDataStorage().computeIfAbsent(new SavedData.Factory<>(RagdollJoints::new, RagdollJoints::load, null), NAME);
     }
 
-    /**
-     * Joins a limb to the limb it hangs from at {@code anchor} (in the world). Both must stand where they stood in
-     * the body.
-     */
     public static void join(ServerLevel level, ServerSubLevel parent, @Nullable String parentLimb, ServerSubLevel child,
                             @Nullable String childLimb, Vec3 anchor) {
         Vector3d world = new Vector3d(anchor.x, anchor.y, anchor.z);
@@ -221,7 +175,6 @@ public final class RagdollJoints extends SavedData {
         data.connect(level, joint);
     }
 
-    /** The limbs of a body just built: those that overlap do not collide until they have come apart. */
     public static void ghostOverlapping(ServerLevel level, List<ServerSubLevel> limbs) {
         RagdollJoints data = of(level);
         for (int i = 0; i < limbs.size(); i++) {
@@ -231,15 +184,9 @@ public final class RagdollJoints extends SavedData {
         }
     }
 
-    /**
-     * The blocks of {@code source} changed: some left it for {@code made} (if not null), or its mass changed. Its
-     * joints are looked at again, and the new piece does not collide with the rest of the body where it overlaps it.
-     * Call before the blocks leave (with {@code made} null) and again once they have (with it).
-     */
     public static void noteSplit(ServerLevel level, ServerSubLevel source, @Nullable ServerSubLevel made) {
         RagdollJoints data = of(level);
         UUID id = source.getUniqueId();
-        // any sub-level's cut sides pass through each other for a moment; only a body's joints need looking at
         if (data.joints.stream().anyMatch(j -> j.touches(id)) || data.ghosts.stream().anyMatch(g -> g.touches(id))) {
             data.touched.putIfAbsent(id, copy(source.logicalPose()));
         }
@@ -247,8 +194,6 @@ public final class RagdollJoints extends SavedData {
             data.madeFrom.computeIfAbsent(id, k -> new LinkedHashSet<>()).add(made.getUniqueId());
         }
     }
-
-    // ---------------------------------------------------------------- keeping them
 
     private static final class Observer implements SubLevelObserver {
         private final ServerLevel level;
@@ -275,7 +220,6 @@ public final class RagdollJoints extends SavedData {
                 }
             }
             if (any && reason == SubLevelRemovalReason.REMOVED) {
-                // its last piece may have gone to another sub-level that takes its joints over; see tick
                 data.removed.put(id, copy(sub.logicalPose()));
             }
         }
@@ -301,7 +245,6 @@ public final class RagdollJoints extends SavedData {
         Set<UUID> changed = new HashSet<>(touched.keySet());
         changed.addAll(removed.keySet());
 
-        // 1. new pieces do not collide with what the piece they came off did not collide with (or was joined to)
         for (var entry : madeFrom.entrySet()) {
             Set<UUID> partners = new LinkedHashSet<>();
             for (Joint j : joints) {
@@ -337,7 +280,6 @@ public final class RagdollJoints extends SavedData {
             }
         }
 
-        // 2. joints follow the material they hold on to, or break
         if (all || !changed.isEmpty()) {
             for (Joint joint : new ArrayList<>(joints)) {
                 boolean involved = changed.contains(joint.parent.body) || changed.contains(joint.child.body);
@@ -350,12 +292,11 @@ public final class RagdollJoints extends SavedData {
                     joints.remove(joint);
                     setDirty();
                 } else if (involved) {
-                    joint.drop(); // made again below: the ends may have moved, or the bodies' centres of mass
+                    joint.drop();
                 }
             }
         }
 
-        // 3. ghost pairs part once their bodies have come apart, or one of them is gone
         if (all || !removed.isEmpty()) {
             for (Ghost ghost : new ArrayList<>(ghosts)) {
                 SubLevel a = container.getSubLevel(ghost.a), b = container.getSubLevel(ghost.b);
@@ -373,7 +314,6 @@ public final class RagdollJoints extends SavedData {
         madeFrom.clear();
         removed.clear();
 
-        // 4. whatever is not in the physics engine (both bodies loaded) goes in
         for (Joint joint : joints) {
             if (joint.handle == null || !joint.handle.isValid()) {
                 connect(level, joint);
@@ -386,22 +326,16 @@ public final class RagdollJoints extends SavedData {
         }
     }
 
-    /**
-     * Makes sure the end still holds on to its point of material: if its body no longer has it, the piece that does
-     * takes the end over.
-     *
-     * @return false if no piece has it any more (the limb was cut off there)
-     */
     private boolean follow(ServerLevel level, SubLevelContainer container, End end, End other) {
         SubLevel current = container.getSubLevel(end.body);
         boolean loaded = current instanceof ServerSubLevel sub && !sub.isRemoved();
         if (end.hold == null) {
             if (!loaded) {
-                return true; // worked out once it is loaded
+                return true;
             }
             end.hold = holdPoint(level, (ServerSubLevel) current, end.limb, end.anchor);
             if (end.hold == null) {
-                return false; // nothing of the limb is left
+                return false;
             }
             setDirty();
         }
@@ -418,11 +352,10 @@ public final class RagdollJoints extends SavedData {
         } else if (removed.containsKey(end.body)) {
             pose = removed.get(end.body);
         } else {
-            return true; // not loaded: it is looked at when it is
+            return true;
         }
         Vector3d anchor = pose.transformPosition(new Vector3d(end.anchor));
-        if (end.supports.isEmpty()) end.supports.add(new Vector3d(end.hold)); // legacy removed end
-        // Transfer only to pieces actually made from this limb, never an unrelated corpse nearby.
+        if (end.supports.isEmpty()) end.supports.add(new Vector3d(end.hold));
         for (UUID id : madeFrom.getOrDefault(end.body, Set.of())) {
             ServerSubLevel candidate = loaded(level, id);
             if (candidate == null || id.equals(other.body)) continue;
@@ -443,7 +376,6 @@ public final class RagdollJoints extends SavedData {
         return false;
     }
 
-    /** A small fixed attachment area tolerates a shallow nick; it never grows back after cutting. */
     private static void supportPoints(ServerLevel level, ServerSubLevel body, End end) {
         if (end.hold == null || !end.supports.isEmpty()) return;
         for (Vector3d point : JointSupport.samples(end.hold)) {
@@ -451,10 +383,6 @@ public final class RagdollJoints extends SavedData {
         }
     }
 
-    /**
-     * Whether the point (plot space) is in the material of the limb in the sub-level: in one of its blocks' boxes,
-     * on the kept side of every cut of that block, and in no part cut out of it.
-     */
     private static boolean holds(ServerLevel level, ServerSubLevel sub, Vector3d point, @Nullable String limb) {
         int bx = (int) Math.floor(point.x), by = (int) Math.floor(point.y), bz = (int) Math.floor(point.z);
         for (int dx = -1; dx <= 1; dx++) {
@@ -508,10 +436,6 @@ public final class RagdollJoints extends SavedData {
         return true;
     }
 
-    /**
-     * The point of the limb's material nearest {@code near} (plot space), moved a little into it: what an end of a
-     * joint at {@code near} holds on to. Null if the limb has no material in the sub-level.
-     */
     @Nullable
     private static Vector3d holdPoint(ServerLevel level, ServerSubLevel sub, @Nullable String limb, Vector3d near) {
         BoundingBox3ic bounds = sub.getPlot().getBoundingBox();
@@ -532,7 +456,7 @@ public final class RagdollJoints extends SavedData {
                         Vector3d point = JointSupport.inset(b, target);
                         c.add(point);
                         if (!inside(be, be.getAppearance(), point.x, point.y, point.z)) {
-                            continue; // already cut away there
+                            continue;
                         }
                         double d = c.distanceSquared(near);
                         if (d < bestDistance) {
@@ -560,10 +484,6 @@ public final class RagdollJoints extends SavedData {
         connect(level, ghost);
     }
 
-    /**
-     * Drops the oldest ghost pair if there are too many: one whose bodies are not loaded if there is one (it costs
-     * nothing until they are, and they may never be), else the oldest of all, most likely a body long at rest.
-     */
     private void makeRoom() {
         if (ghosts.size() < MAX_GHOSTS) {
             return;
@@ -579,7 +499,6 @@ public final class RagdollJoints extends SavedData {
         setDirty();
     }
 
-    /** Where the sub-level's blocks are in the world, roughly (its plot box, turned and moved as the body is). */
     private static BoundingBox3d worldBounds(ServerSubLevel sub) {
         BoundingBox3ic b = sub.getPlot().getBoundingBox();
         Pose3dc pose = sub.logicalPose();
@@ -602,9 +521,6 @@ public final class RagdollJoints extends SavedData {
         return new BoundingBox3d(b.minX() - by, b.minY() - by, b.minZ() - by, b.maxX() + by, b.maxY() + by, b.maxZ() + by);
     }
 
-    // ---------------------------------------------------------------- the physics engine
-
-    /** Makes the joint in the physics engine, if both its limbs are there. */
     private void connect(ServerLevel level, Joint joint) {
         ServerSubLevel parent = loaded(level, joint.parent.body), child = loaded(level, joint.child.body);
         if (parent == null || child == null) {
@@ -621,7 +537,6 @@ public final class RagdollJoints extends SavedData {
         joint.handle = handle;
     }
 
-    /** A constraint that locks nothing: it is only there so the two do not collide. */
     private void connect(ServerLevel level, Ghost ghost) {
         ServerSubLevel a = loaded(level, ghost.a), b = loaded(level, ghost.b);
         if (a == null || b == null) {
@@ -678,8 +593,6 @@ public final class RagdollJoints extends SavedData {
         return out;
     }
 
-    // ---------------------------------------------------------------- saving
-
     private static void putVector(CompoundTag tag, String key, Vector3d v) {
         CompoundTag t = new CompoundTag();
         t.putDouble("x", v.x);
@@ -728,7 +641,6 @@ public final class RagdollJoints extends SavedData {
         }
         for (Tag t : tag.getList("ghosts", Tag.TAG_COMPOUND)) {
             CompoundTag g = (CompoundTag) t;
-            // the two sides of a cut have long been apart, or come to rest touching, by the time the world is loaded
             if (!g.getBoolean("cut")) {
                 data.ghosts.add(new Ghost(g.getUUID("a"), g.getUUID("b"), Long.MAX_VALUE));
             }

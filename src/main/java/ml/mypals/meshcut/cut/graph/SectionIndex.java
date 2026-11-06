@@ -7,30 +7,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * The connectivity of one 16³ section of blocks, in two layers.
- * <p>
- * <b>Regions</b> are axis-aligned boxes of ordinary solid blocks (they are joined by definition). A mimic block is
- * not part of a region: each of its fragments is a node of its own. <b>Groups</b> are the sets of nodes (regions and
- * fragments) of this section that touch each other face to face, where touching means that the 8×8 face masks of the
- * two overlap. A group also knows which blocks on the section's border could connect to the next section
- * ({@link #portals}); the next section is only looked at when a search crosses into it, so rebuilding a section never
- * leaves stale links in its neighbours.
- * <p>
- * Edits ({@link #apply}) are resolved on the region layer first: removing a block splits its region into at most six
- * boxes, adding one adds a 1×1×1 region. Groups are only touched if that can have changed what is connected: the
- * pieces left by a removal are checked among themselves and the nodes that touched the removed block, and only if
- * they have come apart is the whole section's group layer recomputed.
- */
 public final class SectionIndex {
     public static final int SIZE = 16;
     public static final int CELLS = SIZE * SIZE * SIZE;
-    /** More live regions than this (or twice what the last build made) and the section is rebuilt, which merges the fragments edits have left. */
     private static final int REGION_MIN = 12;
 
     public final int sx, sy, sz;
     private final BlockNodes[] blocks = new BlockNodes[CELLS];
-    /** Bumped by every change; a cached result that depends on this section is valid while it is unchanged. */
     private int version;
 
     private final List<Node> nodes = new ArrayList<>();
@@ -38,10 +21,8 @@ public final class SectionIndex {
     private final int[] fragFirst = new int[CELLS];
     private final Set<Group> groups = new LinkedHashSet<>();
     private int liveRegions;
-    /** How many regions the last full build made; edits that leave many more than that trigger a new one. */
     private int builtRegions;
 
-    /** One region (a box, bounds inclusive and local) or one fragment of a mimic block. */
     static final class Node {
         boolean alive = true;
         final boolean region;
@@ -66,10 +47,8 @@ public final class SectionIndex {
         }
     }
 
-    /** Whether a group is cut off from everything but itself, found by a search that crossed sections. */
     static final class Island {
         boolean attached;
-        /** The search gave up at a section that was not loaded (rather than at the size it was willing to follow). */
         boolean unloaded;
         long epoch;
         SectionIndex[] sections;
@@ -80,7 +59,6 @@ public final class SectionIndex {
     public static final class Group {
         final SectionIndex section;
         final List<Node> nodes = new ArrayList<>();
-        /** The result of the last search from here, so a group already known to be an island needs no new one. */
         Island island;
         private List<int[]> portals;
         private List<Long> portalMasks;
@@ -140,7 +118,6 @@ public final class SectionIndex {
         rebuild();
     }
 
-    /** A copy with some blocks replaced, for looking at what a change would do before making it. Not cached. */
     public SectionIndex overlaid(Map<Integer, BlockNodes> overrides) {
         return new SectionIndex(this, overrides);
     }
@@ -157,7 +134,6 @@ public final class SectionIndex {
         return blocks[cell];
     }
 
-    /** The cells that hold mimic blocks. */
     public List<Integer> mimicCells() {
         List<Integer> out = new ArrayList<>();
         for (int c = 0; c < CELLS; c++) {
@@ -167,8 +143,6 @@ public final class SectionIndex {
         }
         return out;
     }
-
-    // ---------------------------------------------------------------- building
 
     private void rebuild() {
         try (var timing = ml.mypals.meshcut.util.CutTiming.phase("SectionIndex.rebuild")) {
@@ -351,9 +325,6 @@ public final class SectionIndex {
         parent[find(parent, a)] = find(parent, b);
     }
 
-    // ---------------------------------------------------------------- queries
-
-    /** The ids of the nodes in a cell: one region, or the fragments of a mimic. */
     private int[] nodesAt(int c) {
         if (regionAt[c] >= 0) {
             return new int[]{regionAt[c]};
@@ -376,7 +347,6 @@ public final class SectionIndex {
         return blocks[cell(node.x0, node.y0, node.z0)].mask(node.fragment, face);
     }
 
-    /** The group of fragment {@code fragment} of the block in the cell, or null if there is no such piece. */
     public Group groupOf(int c, int fragment) {
         if (regionAt[c] >= 0) {
             return nodes.get(regionAt[c]).group;
@@ -387,7 +357,6 @@ public final class SectionIndex {
         return null;
     }
 
-    /** The groups of the pieces in the cell whose face {@code face} overlaps {@code mask}. */
     public List<Group> touching(int c, int face, long mask) {
         List<Group> out = new ArrayList<>(2);
         for (int id : nodesAt(c)) {
@@ -402,10 +371,6 @@ public final class SectionIndex {
         return groups;
     }
 
-    /**
-     * Where the group meets the section's border: {x, y, z, face} in absolute block coordinates of the block inside
-     * the section, with the face mask of the piece on that face in {@link #portalMask}.
-     */
     List<int[]> portals(Group g) {
         if (g.portals == null) {
             List<int[]> out = new ArrayList<>();
@@ -441,7 +406,6 @@ public final class SectionIndex {
         return g.portalMasks.get(index);
     }
 
-    /** Every box (inclusive absolute bounds) the group is made of: its regions, and one per mimic fragment's cell. */
     public List<int[]> boxes(Group g) {
         List<int[]> out = new ArrayList<>(g.nodes.size());
         for (Node node : g.nodes) {
@@ -463,7 +427,6 @@ public final class SectionIndex {
         return false;
     }
 
-    /** A region box or a fragment, with the number of the group (within this section) it belongs to; for debug views. */
     public record DebugNode(boolean region, int x0, int y0, int z0, int x1, int y1, int z1, int fragment, int group) {}
 
     public List<DebugNode> debugNodes() {
@@ -479,7 +442,6 @@ public final class SectionIndex {
         return out;
     }
 
-    /** The groups of the pieces in the cell (a mimic may have fragments in several); for debug views. */
     public List<Group> groupsAt(int c) {
         List<Group> out = new ArrayList<>(2);
         for (int id : nodesAt(c)) {
@@ -491,7 +453,6 @@ public final class SectionIndex {
         return out;
     }
 
-    /** The groups in other sections that the group touches across the section border; for debug views. */
     public List<Group> neighbourGroups(Group g, java.util.function.Function<int[], SectionIndex> neighbours) {
         List<Group> out = new ArrayList<>();
         List<int[]> portals = portals(g);
@@ -511,15 +472,8 @@ public final class SectionIndex {
         return out;
     }
 
-    /** A line across a section border, from a block of a group to the block of the group it touches on the other side. */
     public record DebugLink(double x0, double y0, double z0, double x1, double y1, double z1) {}
 
-    /**
-     * The links from this section's groups to the groups they touch across the section border: one line for each
-     * pair, drawn between the two blocks that touch.
-     *
-     * @param neighbours finds the section at the given section coordinates, or null
-     */
     public List<DebugLink> debugLinks(java.util.function.Function<int[], SectionIndex> neighbours) {
         List<DebugLink> out = new ArrayList<>();
         for (Group g : groups) {
@@ -543,15 +497,6 @@ public final class SectionIndex {
         return out;
     }
 
-    // ---------------------------------------------------------------- editing
-
-    /**
-     * Replaces what the block in the cell is.
-     *
-     * @return {@code true} if the connectivity of the section's groups may have changed in a way that was not simply
-     *         "things joined": a group was split (the group layer was recomputed), so anything depending on it is
-     *         worth another look
-     */
     public boolean apply(int c, BlockNodes now) {
         BlockNodes old = blocks[c];
         if (old == now || (old != null && old.sameAs(now))) {
@@ -560,7 +505,6 @@ public final class SectionIndex {
         version++;
         int x = c / (SIZE * SIZE), y = c / SIZE % SIZE, z = c % SIZE;
 
-        // what is there now, and what touched it (while the old block still decides the masks)
         List<Node> removed = new ArrayList<>();
         List<Node> replacement = new ArrayList<>();
         for (int id : nodesAt(c)) {
@@ -592,11 +536,10 @@ public final class SectionIndex {
         neighbours.removeIf(n -> !n.alive);
 
         if (liveRegions > Math.max(REGION_MIN, builtRegions * 2)) {
-            rebuild(); // merges the boxes edits have cut up; what is connected does not change
+            rebuild();
             return false;
         }
 
-        // Region layer: do the pieces that replace what was removed still tie together what it tied together?
         Set<Group> oldGroups = new LinkedHashSet<>();
         for (Node r : removed) {
             if (r.group != null) {
@@ -612,15 +555,13 @@ public final class SectionIndex {
             return true;
         }
 
-        // Group layer: the replacements take the removed nodes' place. Each set of replacements that touch one another
-        // (or the same groups) joins those groups; one that touches nothing starts a group of its own.
         for (Node r : removed) {
             if (r.group != null) {
                 r.group.nodes.remove(r);
             }
         }
         Map<Node, Group> contactOf = new IdentityHashMap<>();
-        Map<Object, Object> parent = new IdentityHashMap<>(); // union-find over replacement nodes and groups
+        Map<Object, Object> parent = new IdentityHashMap<>();
         for (Node n : replacement) {
             parent.put(n, n);
         }
@@ -634,7 +575,6 @@ public final class SectionIndex {
                 }
             }
         }
-        // groups that lost a node are joined with the ones the removed nodes' neighbours are in only if tied above
         Map<Object, List<Node>> components = new IdentityHashMap<>();
         for (Node n : replacement) {
             components.computeIfAbsent(findObject(parent, n), k -> new ArrayList<>()).add(n);
@@ -677,7 +617,6 @@ public final class SectionIndex {
         return false;
     }
 
-    /** Apply the final state of a cut once, rather than rebuilding groups for each intermediate edit. */
     public boolean applyBatch(Map<Integer, BlockNodes> changes) {
         Map<Integer, BlockNodes> different = new java.util.LinkedHashMap<>();
         changes.forEach((c, now) -> {
@@ -685,8 +624,6 @@ public final class SectionIndex {
             if (old != now && (old == null || !old.sameAs(now))) different.put(c, now);
         });
         if (different.isEmpty()) return false;
-        // A full 4096-cell rebuild is excessive for a short laser crossing. Keep the local path
-        // for small batches; deduplication and neighbour notification are still done once outside.
         if (different.size() <= 8) {
             boolean split = false;
             for (var edit : different.entrySet()) split |= apply(edit.getKey(), edit.getValue());
@@ -695,7 +632,7 @@ public final class SectionIndex {
         different.forEach((c, now) -> blocks[c] = now);
         version++;
         rebuild();
-        return true; // a conservative recheck; rebuilt group identities must not escape as old certificates
+        return true;
     }
 
     private static Object findObject(Map<Object, Object> parent, Object o) {
@@ -724,7 +661,6 @@ public final class SectionIndex {
         }
     }
 
-    /** The region without the one cell, as up to six boxes. */
     private void splitAround(Node r, int x, int y, int z, List<Node> out) {
         if (x > r.x0) {
             out.add(addRegion(r.x0, r.y0, r.z0, x - 1, r.y1, r.z1));
@@ -746,11 +682,6 @@ public final class SectionIndex {
         }
     }
 
-    /**
-     * Whether the new pieces and the old neighbours all end up in one connected set, using only contacts among
-     * themselves. (Contacts that go out of the section are ignored: this can only make the answer "no" too often,
-     * never "yes" wrongly.)
-     */
     private boolean stillTied(List<Node> replacement, Set<Node> neighbours) {
         List<Node> all = new ArrayList<>(replacement);
         all.addAll(neighbours);
@@ -782,11 +713,6 @@ public final class SectionIndex {
         return true;
     }
 
-    /**
-     * Live nodes of this section that touch the node face to face.
-     *
-     * @param only if not -1, only the cell of the node's that has this index is looked at
-     */
     private Set<Node> contacts(Node node, int only) {
         Set<Node> out = new LinkedHashSet<>();
         for (int x = node.x0; x <= node.x1; x++) {

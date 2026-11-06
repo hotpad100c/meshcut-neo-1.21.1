@@ -11,10 +11,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * A {@link MultiBufferSource} that records what a block entity renderer draws instead of drawing it,
- * so the geometry can be clipped and replayed later. Only quads and triangles are kept.
- */
 public final class RecordingBufferSource implements MultiBufferSource {
     private final Map<RenderType, Recorder> recorders = new LinkedHashMap<>();
 
@@ -23,10 +19,8 @@ public final class RecordingBufferSource implements MultiBufferSource {
         return recorders.computeIfAbsent(type, Recorder::new);
     }
 
-    /** A recorded face and what drew it (see {@link PartTags}); the tag is null outside a model part. */
     public record Tagged(MeshPoly poly, @org.jetbrains.annotations.Nullable PartTags.Tag tag) {}
 
-    /** The recorded faces per render type, each with what drew it. */
     public Map<RenderType, List<Tagged>> finishTagged() {
         Map<RenderType, List<Tagged>> out = new LinkedHashMap<>();
         recorders.forEach((type, rec) -> {
@@ -55,9 +49,7 @@ public final class RecordingBufferSource implements MultiBufferSource {
 
     private static final class Recorder implements VertexConsumer {
         private final int primitive;
-        /** x, y, z, u, v, argb(as float bits), nx, ny, nz per vertex */
         private final List<float[]> vertices = new ArrayList<>();
-        /** What drew each primitive, taken as its first vertex comes. */
         final List<PartTags.Tag> tags = new ArrayList<>();
         private float[] cur;
 
@@ -131,7 +123,6 @@ public final class RecordingBufferSource implements MultiBufferSource {
         private static float[] faceNormal(float[] v) {
             int n = v.length / MeshPoly.STRIDE;
             int s = MeshPoly.STRIDE;
-            // diagonal cross product works for triangles and quads alike
             int last = n - 1, mid = n / 2;
             float d1x = v[mid * s] - v[0], d1y = v[mid * s + 1] - v[1], d1z = v[mid * s + 2] - v[2];
             float d2x = v[last * s] - v[s], d2y = v[last * s + 1] - v[s + 1], d2z = v[last * s + 2] - v[s + 2];

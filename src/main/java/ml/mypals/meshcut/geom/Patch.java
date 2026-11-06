@@ -6,16 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * A cut that may end inside a block: a plane together with the convex polygon, in that plane, the blade actually
- * swept. A cut that crosses the whole block ({@link #through()}) is the same as a half-space cut. One that stops
- * midway only blocks passage where it is, so a block can be scratched without coming apart, and several scratches
- * that close a loop seal off what is inside.
- * <p>
- * The polygon is in block-local coordinates (the block is the unit cube) and has {@code x,y,z} per vertex.
- */
 public final class Patch {
-    /** A patch covering at least this much of the plane's cross-section of the block counts as going through it. */
     public static final double THROUGH_COVERAGE = 0.9;
     private static final double BIG = 3.0;
 
@@ -24,7 +15,6 @@ public final class Patch {
     private final boolean through;
     private volatile long[][] cellEdges;
 
-    /** Derived only from this immutable patch; shared by successive grid builds. */
     long[][] cellEdges() {
         long[][] known = cellEdges;
         if (known == null) cellEdges = known = CellGrid.cellEdges(this);
@@ -37,32 +27,19 @@ public final class Patch {
         this.through = through;
     }
 
-    /** The plane's whole cross-section of the block. */
     public static Patch full(CutPlane plane) {
         return new Patch(plane, fullPolygon(plane), true);
     }
 
-    /**
-     * @param swept a convex polygon in (or near) the plane, in block-local coordinates; it is clipped to the block
-     * @return {@code null} if nothing of it is inside the block
-     */
     public static Patch of(CutPlane plane, float[] swept) {
         float[] clipped = clipToCube(swept);
         if (clipped.length < 9) {
             return null;
         }
         double coverage = area(clipped) / area(fullPolygon(plane));
-        // a cut that stops inside the block is not a cut: only those that go right through count
         return coverage >= THROUGH_COVERAGE ? full(plane) : null;
     }
 
-    /**
-     * The cut that approximates a bent stroke: all the given points, projected onto the plane and grown by
-     * {@code pad} on every side (so that a stroke that reaches the edge of the block really reaches it), as one
-     * patch.
-     *
-     * @return {@code null} if nothing of it is inside the block
-     */
     public static Patch fromPoints(CutPlane plane, List<float[]> points, double pad) {
         double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
         double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
@@ -85,7 +62,6 @@ public final class Patch {
         return hull.length < 9 ? null : of(plane, hull);
     }
 
-    /** A patch from stored data. */
     public static Patch restore(CutPlane plane, float[] polygon, boolean through) {
         return new Patch(plane, polygon, through);
     }
@@ -98,7 +74,6 @@ public final class Patch {
         return polygon;
     }
 
-    /** Whether it crosses the whole block, i.e. is a half-space cut. */
     public boolean through() {
         return through;
     }
@@ -107,10 +82,6 @@ public final class Patch {
         return polygon.length / 3;
     }
 
-    /**
-     * Whether this and {@code other} are the same cut, or the continuation of one: about the same plane. (The
-     * normals of two sweeps of one slash differ a little from tick to tick.)
-     */
     public boolean samePlane(Patch other) {
         CutPlane a = plane, b = other.plane;
         double dot = a.nx() * b.nx() + a.ny() * b.ny() + a.nz() * b.nz();
@@ -118,10 +89,6 @@ public final class Patch {
         return Math.abs(dot) > 0.96 && offset < 0.12;
     }
 
-    /**
-     * Whether this cut already is the other: the same plane (to a hair), and everything of the other inside this one.
-     * A swing over a spot that was cut before makes patches that differ only in the last bits of their floats.
-     */
     public boolean covers(Patch other) {
         double dot = plane.nx() * other.plane.nx() + plane.ny() * other.plane.ny() + plane.nz() * other.plane.nz();
         double offset = dot >= 0 ? Math.abs(plane.d() - other.plane.d()) : Math.abs(plane.d() + other.plane.d());
@@ -142,7 +109,6 @@ public final class Patch {
         return true;
     }
 
-    /** The cut made by both: the smallest convex polygon in this plane that contains both patches. */
     public Patch union(Patch other) {
         if (through || other.through) {
             return full(plane);
@@ -166,7 +132,6 @@ public final class Patch {
         return out;
     }
 
-    /** Whether the point, projected onto the plane, lies inside the polygon grown by {@code tolerance}. */
     public boolean containsProjected(double x, double y, double z, double tolerance) {
         int n = vertexCount();
         double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
@@ -187,7 +152,7 @@ public final class Patch {
         return true;
     }
 
-    private double orientation; // 0 until worked out; not part of the value
+    private double orientation;
 
     private double orientationSign() {
         if (orientation != 0) return orientation;
@@ -206,9 +171,6 @@ public final class Patch {
         return sx * plane.nx() + sy * plane.ny() + sz * plane.nz() >= 0 ? 1 : -1;
     }
 
-    // ---------------------------------------------------------------- geometry
-
-    /** The plane's cross-section of the unit cube. */
     public static float[] fullPolygon(CutPlane plane) {
         double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
         double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
@@ -230,7 +192,6 @@ public final class Patch {
         return clipToCube(square);
     }
 
-    /** Clips a convex polygon by the six faces of the unit cube. */
     public static float[] clipToCube(float[] poly) {
         float[] current = poly;
         for (int axis = 0; axis < 3 && current.length >= 9; axis++) {
@@ -283,7 +244,6 @@ public final class Patch {
         }
     }
 
-    /** Convex hull of coplanar points (Andrew's monotone chain in the plane's own 2D frame). */
     private float[] hull(List<float[]> points) {
         double nx = plane.nx(), ny = plane.ny(), nz = plane.nz();
         double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
@@ -328,8 +288,6 @@ public final class Patch {
     private static double cross(double[] o, double[] a, double[] b) {
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
     }
-
-    // ---------------------------------------------------------------- value semantics (patches are cache keys)
 
     @Override
     public boolean equals(Object o) {

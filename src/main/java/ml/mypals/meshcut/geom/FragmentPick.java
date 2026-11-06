@@ -1,15 +1,8 @@
 package ml.mypals.meshcut.geom;
 
-/** Which fragment of a block a line of sight meets first. */
 public final class FragmentPick {
     private static final double STEP = 1.0 / 32;
 
-    /**
-     * @param origin the eye, in the block's own frame (the block is the unit cube)
-     * @param dir    the direction of sight in the same frame
-     * @return the fragment first met inside the block, or the one closest to the line if it passes through gaps only;
-     *         -1 if the block has none
-     */
     public static int pick(CellGrid grid, double[] origin, double[] dir) {
         double enter = 0, exit = 16;
         for (int axis = 0; axis < 3; axis++) {

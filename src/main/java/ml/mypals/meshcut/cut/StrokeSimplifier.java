@@ -3,7 +3,6 @@ package ml.mypals.meshcut.cut;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Reduces both endpoints together; reversals and extension changes retain their sweep. */
 public final class StrokeSimplifier {
     public static final double ERROR = 0.005;
     private static final double MAX_SPAN = 2;

@@ -44,23 +44,17 @@ public class MeshCut {
 
     public static final DeferredBlock<MimicBlock> MIMIC_BLOCK = BLOCKS.registerBlock("mimic",
             MimicBlock::new, BlockBehaviour.Properties.of().strength(1.5f).noOcclusion()
-                    // glows like what it imitates (magma, for instance, is drawn at full brightness)
                     .emissiveRendering((state, level, pos) -> level.getBlockEntity(pos) instanceof ml.mypals.meshcut.block.MimicBlockEntity be
                             && !(be.getTargetState().getBlock() instanceof MimicBlock) && be.getTargetState().emissiveRendering(level, pos))
                     // the shape depends on the block entity; without this vanilla caches one shape per state
                     .dynamicShape());
 
-    /**
-     * What the parts of a cut-up entity imitate: never placed in the world, it gives them their weight (see its
-     * physics properties) and the texture of their cut faces.
-     */
     public static final DeferredBlock<net.minecraft.world.level.block.Block> ENTITY_BODY = BLOCKS.registerSimpleBlock("entity_body",
             BlockBehaviour.Properties.of().strength(0.5f).noLootTable().sound(net.minecraft.world.level.block.SoundType.SLIME_BLOCK));
 
     public static final Supplier<BlockEntityType<MimicBlockEntity>> MIMIC_BE = BLOCK_ENTITIES.register("mimic",
             () -> BlockEntityType.Builder.of(MimicBlockEntity::new, MIMIC_BLOCK.get()).build(null));
 
-    /** Whether a lightsaber is switched on. */
     public static final Supplier<DataComponentType<Boolean>> SABER_ACTIVE = COMPONENTS.registerComponentType("active",
             builder -> builder.persistent(Codec.BOOL).networkSynchronized(ByteBufCodecs.BOOL));
 
@@ -109,8 +103,6 @@ public class MeshCut {
         NeoForge.EVENT_BUS.addListener(SlashService::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerTick);
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onInvulnerabilityCheck);
-        // what is queued refers to the levels of the server that is stopping (in single player, the next world
-        // would run it against them)
         NeoForge.EVENT_BUS.addListener(ml.mypals.meshcut.cut.EntityCutting::onServerStopping);
         NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> {
             SlashService.clear();

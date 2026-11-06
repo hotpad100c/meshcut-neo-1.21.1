@@ -28,13 +28,8 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
-/**
- * Picking a cut piece up by hand: right-click it with an empty hand and keep the button down. The point clicked is
- * held in front of the eyes; the scroll wheel brings it nearer or takes it further away. See FragmentGrab.
- */
 @EventBusSubscriber(modid = MeshCut.MODID, value = Dist.CLIENT)
 public final class FragmentGrabClient {
-    /** Players holding a piece, as the server last said: their arms are drawn up. */
     private static final Set<UUID> HOLDERS = new HashSet<>();
 
     @Nullable
@@ -73,7 +68,7 @@ public final class FragmentGrabClient {
                 || !player.getMainHandItem().isEmpty() || player.isSpectator()) {
             return;
         }
-        if (holding()) { // already holding: the button is only being kept down
+        if (holding()) {
             event.setCanceled(true);
             event.setSwingHand(false);
             return;
@@ -84,9 +79,8 @@ public final class FragmentGrabClient {
         BlockPos pos = hit.getBlockPos();
         SubLevel sub = Sable.HELPER.getContaining(minecraft.level, pos);
         if (sub == null || !(minecraft.level.getBlockState(pos).getBlock() instanceof MimicBlock)) {
-            return; // only pieces that were cut off
+            return;
         }
-        // where it was clicked, in the piece's own plot (the hit may be given in the world or in the plot)
         Vec3 location = hit.getLocation();
         Vector3d local = new Vector3d(location.x, location.y, location.z);
         if (local.distanceSquared(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) > 4) {
@@ -132,7 +126,6 @@ public final class FragmentGrabClient {
         event.setCanceled(true);
     }
 
-    /** Arms drawn up towards what is held (from {@code HumanoidModelGrabMixin}). */
     public static void pose(net.minecraft.world.entity.LivingEntity entity, HumanoidModel<?> model) {
         if (!HOLDERS.contains(entity.getUUID()) || Minecraft.getInstance().isPaused()) {
             return;

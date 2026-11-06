@@ -5,7 +5,6 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 
-/** What is drawn into the glow buffer: unlit, added up, tested against the scene depth, which it never writes. */
 final class BloomRenderTypes extends RenderStateShard {
     private static final OutputStateShard GLOW_OUTPUT = new OutputStateShard("meshcut_glow",
             Bloom::bindGlow, Bloom::bindMain);

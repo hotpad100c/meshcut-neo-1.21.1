@@ -4,7 +4,6 @@ import java.util.*;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 
-/** Ordered prediction inputs; confirmation retires them only after the matching authority arrives. */
 public final class PendingCuts<K, I, S> {
     private static final class Operation<K,I,S> {
         final long started;

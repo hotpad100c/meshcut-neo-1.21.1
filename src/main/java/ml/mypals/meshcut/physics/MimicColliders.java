@@ -26,26 +26,14 @@ import java.util.function.Supplier;
 
 
 public final class MimicColliders {
-    /**
-     * How many exact collider shapes are made before new ones are snapped to a coarser grid and shared. Every box of a
-     * cut block costs Rapier a cuboid test against every box it touches, so the shape count drives the step time
-     * (measured: 40 to 70 ms at 600 exact shapes, 5 to 10 ms at 64). {@code -Dmeshcut.maxEntries=N} overrides it.
-     */
-
     private static final int MAX_COARSE = 4096;
     private static final Map<MimicShapes.Key, RapierVoxelColliderData> ENTRIES = new HashMap<>();
-    /**
-     * The coarse shape of each exact shape that was snapped (a block is asked for its collider by itself and by each of
-     * its six neighbours whenever it changes, so the same exact shape comes back seven times, and a laser makes a new
-     * one every tick).
-     */
     private static final Map<MimicShapes.Key, MimicShapes.Key> COARSE_OF = new java.util.LinkedHashMap<>(256, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<MimicShapes.Key, MimicShapes.Key> eldest) {
             return size() > 8192;
         }
     };
 
-    // diagnostics, read by PhysicsDiag
     static long createdEntries;
     static long createdBoxes;
     static long overflowFallbacks;
@@ -126,9 +114,6 @@ public final class MimicColliders {
 
 
     private static MimicShapes.Key coarse(MimicShapes.Key key, List<double[]> boxes) {
-        // Snapped to quarters, a shape is a subset of 4x4x4 cells whatever it was made of: mark them, take the boxes of
-        // those (a handful), and only then join those. (Joining the exact boxes pair by pair costs the cube of their
-        // number, and a cut block has hundreds.)
         boolean[] cells = new boolean[64];
         for (double[] b : boxes) {
             int[] lo = new int[3], hi = new int[3];
@@ -163,7 +148,6 @@ public final class MimicColliders {
         return true;
     }
 
-    /** Re-reads colliders of mimics that were first seen without their block entity. */
     public static void onServerTick(ServerTickEvent.Post event) {
         if (PENDING.isEmpty()) {
             return;
@@ -177,7 +161,6 @@ public final class MimicColliders {
         }
     }
 
-    /** Forgets the blocks waiting to be refreshed: they belong to a server that has stopped. */
     public static void clear() {
         PENDING.clear();
         COARSE_OF.clear();
@@ -187,7 +170,6 @@ public final class MimicColliders {
         return ENTRIES.size();
     }
 
-    /** Total volume of the boxes, for diagnostics. */
     public static double volumeOf(MimicShapes.Key key) {
         return VoxelBoxes.volume(MimicShapes.boxes(key));
     }

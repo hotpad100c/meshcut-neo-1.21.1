@@ -37,11 +37,6 @@ public final class LightsaberNet {
         @Override public @NotNull Type<Input> type() { return TYPE; }
     }
 
-    /**
-     * Where the player's blade was this tick, as the client has it, relative to the player: the base, and the tip
-     * from the base. The cut is made along what the client drew (within what is believable, see LightsaberHandler),
-     * so what the player sees burn is what is cut.
-     */
     public record Swing(float bx, float by, float bz, float dx, float dy, float dz) implements CustomPacketPayload {
         public static final Type<Swing> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "saber_swing"));
         public static final StreamCodec<FriendlyByteBuf, Swing> CODEC = StreamCodec.of(

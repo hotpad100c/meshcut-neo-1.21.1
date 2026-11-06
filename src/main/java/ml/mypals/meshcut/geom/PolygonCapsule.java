@@ -5,7 +5,6 @@ import org.joml.Vector3d;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Convex polygon capsule. These planes cut actual model triangles; voxels only decide connectivity. */
 public final class PolygonCapsule {
     public static double radius(int value) { return (VoxelCapsule.radius(value) + 0.50001) / 8.0; }
 

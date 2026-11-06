@@ -7,20 +7,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/**
- * The edges of a cut block, for its selection outline: each piece is a convex shape (the block's boxes clipped by the
- * piece's half-spaces), with the parts that were cut out of the block taken away. Pure geometry.
- */
 public final class Outline {
     private static final double EPS = 1e-5;
     private static final double BIG = 4;
 
-    /**
-     * @param pieces the pieces, each a list of half-spaces
-     * @param holes  convex parts cut out of the block, each a list of half-spaces (strictly inside is gone)
-     * @param boxes  what the block is made of, {minX, minY, minZ, maxX, maxY, maxZ} in block space
-     * @return line segments {x0, y0, z0, x1, y1, z1}
-     */
     public static List<double[]> edges(List<List<CutPlane>> pieces, List<List<CutPlane>> holes, List<double[]> boxes) {
         List<double[]> out = new ArrayList<>();
         Set<String> seen = new HashSet<>();
@@ -28,13 +18,11 @@ public final class Outline {
             for (double[] box : boxes) {
                 List<CutPlane> shape = new ArrayList<>(piece);
                 shape.addAll(boxPlanes(box));
-                // the piece's own edges, without what lies inside a cut-out part
                 for (double[] e : convexEdges(shape)) {
                     for (double[] kept : outsideAll(e, holes)) {
                         add(out, seen, kept);
                     }
                 }
-                // the edges of the notches the cut-out parts leave in it
                 for (List<CutPlane> hole : holes) {
                     List<CutPlane> notch = new ArrayList<>(shape);
                     notch.addAll(hole);
@@ -58,7 +46,6 @@ public final class Outline {
                 new CutPlane(0, 1, 0, b[4]), new CutPlane(0, 0, -1, -b[2]), new CutPlane(0, 0, 1, b[5]));
     }
 
-    /** The edges of the convex shape the half-spaces make: the outline of each of its faces. */
     private static List<double[]> convexEdges(List<CutPlane> planes) {
         List<double[]> edges = new ArrayList<>();
         for (int i = 0; i < planes.size(); i++) {
@@ -84,7 +71,6 @@ public final class Outline {
         return edges;
     }
 
-    /** A big square lying in the plane. */
     private static double[] square(CutPlane p) {
         double nx = p.nx(), ny = p.ny(), nz = p.nz();
         double hx = Math.abs(nx) < 0.9 ? 1 : 0, hy = hx == 1 ? 0 : 1;
@@ -106,7 +92,6 @@ public final class Outline {
         return out;
     }
 
-    /** Sutherland-Hodgman: the part of a convex polygon on the kept side of the plane. */
     private static double[] clip(double[] in, CutPlane p) {
         int n = in.length / 3;
         double[] out = new double[(2 * n + 2) * 3];
@@ -130,13 +115,11 @@ public final class Outline {
         return java.util.Arrays.copyOf(out, m * 3);
     }
 
-    /** The parts of the segment that are not strictly inside any of the regions. */
     private static List<double[]> outsideAll(double[] e, List<List<CutPlane>> regions) {
         List<double[]> parts = new ArrayList<>(List.of(e));
         for (List<CutPlane> region : regions) {
             List<double[]> next = new ArrayList<>();
             for (double[] s : parts) {
-                // the stretch [lo, hi] of the segment that is inside the region
                 double lo = 0, hi = 1;
                 for (CutPlane p : region) {
                     double d0 = p.signedDistance(s[0], s[1], s[2]), d1 = p.signedDistance(s[3], s[4], s[5]);
@@ -147,7 +130,7 @@ public final class Outline {
                         }
                         continue;
                     }
-                    double t = d0 / (d0 - d1); // where it crosses the plane
+                    double t = d0 / (d0 - d1);
                     if (d1 > d0) {
                         lo = Math.max(lo, t + EPS);
                     } else {
@@ -175,7 +158,6 @@ public final class Outline {
                 s[0] + (s[3] - s[0]) * t1, s[1] + (s[4] - s[1]) * t1, s[2] + (s[5] - s[2]) * t1};
     }
 
-    /** Whether both ends of the segment lie on one of the planes. */
     private static boolean onAny(double[] e, List<CutPlane> planes) {
         for (CutPlane p : planes) {
             if (Math.abs(p.signedDistance(e[0], e[1], e[2])) < 1e-4 && Math.abs(p.signedDistance(e[3], e[4], e[5])) < 1e-4) {

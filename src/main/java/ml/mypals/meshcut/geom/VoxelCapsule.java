@@ -2,7 +2,6 @@ package ml.mypals.meshcut.geom;
 
 import java.util.Arrays;
 
-/** A capsule rasterized against voxel boxes, in block-local coordinates. No world or entity dependencies. */
 public final class VoxelCapsule {
     public static int radius(int value) { return Math.clamp(value, 1, 4); }
 
@@ -18,7 +17,6 @@ public final class VoxelCapsule {
         for (int i = 0; i < 3; i++) {
             a[i] = Math.clamp(a[i], 0, 1);
             if (i == axis) continue;
-            // Half-cell phase gives the requested radius-one 2 / 4 / 2 cross-section.
             a[i] = transverse++ == 0 ? Math.rint(a[i] * 8) / 8
                     : (Math.clamp((int) Math.floor(a[i] * 8), 0, 7) + 0.5) / 8;
         }
@@ -41,7 +39,6 @@ public final class VoxelCapsule {
         return out;
     }
 
-    /** Distance to a box is piecewise quadratic along a segment; minimize each interval exactly. */
     private static double distanceSquared(double[] a, double[] b, double[] low) {
         double[] cuts = new double[8];
         cuts[0] = 0; cuts[1] = 1;

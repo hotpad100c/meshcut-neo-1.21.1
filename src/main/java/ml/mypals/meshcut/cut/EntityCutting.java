@@ -51,48 +51,20 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
 
-/**
- * Entities the blade passes through are cut down and leave their body behind: one sub-level per limb, made of blocks
- * that each hold a part of it (see {@link EntityAppearance}), the limbs held together by joints (see
- * {@link RagdollJoints}). The body is then cut like anything else. A creature dies (and drops what it drops); a
- * thing (a boat, a painting) breaks into its item, and its body is one rigid piece.
- * <p>
- * Only clients have entity models, so the server asks one (the wielder's, or another player's nearby) to take the
- * entity apart into limbs; meanwhile the entity stands frozen. Without an answer the body is one piece the size of
- * the entity's box.
- */
 public final class EntityCutting {
-    /**
-     * The parts of a limb in a block lie on a grid this fine (per block), and are never thinner than one step of it: a
-     * sliver of a limb that just reaches into a block still gets that block, or what of the model is there would not
-     * be drawn by anyone.
-     */
     private static final int GRID = 16;
-    /** At most this many collision boxes in one block of a body. */
     private static final int MAX_BOXES_PER_BLOCK = 6;
-    /** At most this many blocks for one body (a client could ask for anything). */
     public static final int MAX_CELLS = 524288;
-    /**
-     * No part of a body is further than this (in blocks) from the entity's feet. The biggest bodies (the ender dragon)
-     * reach a few blocks; numbers beyond it would only come from a client sending nonsense, and would make the cells
-     * counted below overflow, or the loops over them run for ever.
-     */
     private static final double MAX_REACH = 64;
-    /** Saved data of an entity that are never needed to draw it. */
     private static final Set<String> NOT_DRAWN = Set.of("EnderItems", "recipeBook", "Brain", "Gossips", "Offers",
             "Passengers", "Items", "LastDeathLocation", "warden_spawn_tracker", "enteredNetherPosition", "abilities");
-    /** At most this much of an entity's saved data goes into its body (every block of which holds it). */
     private static final int MAX_LOOK_BYTES = 8 * 1024;
-    /** How long a client may take to answer (ticks). */
     private static final int ANSWER_TICKS = 20;
-    /** Things of these types are never cut. */
     public static final TagKey<EntityType<?>> UNCUTTABLE = TagKey.create(Registries.ENTITY_TYPE,
             ResourceLocation.fromNamespaceAndPath(MeshCut.MODID, "uncuttable"));
 
-    /** The quads the blade swept, in the world. */
     public record Swept(Vec3[] quad) {}
 
-    /** An entity waiting for a client to say what its limbs are. */
     private static final class Pending {
         final ServerLevel level;
         final Entity entity;
@@ -120,24 +92,14 @@ public final class EntityCutting {
     }
 
     private static final Map<Integer, Pending> PENDING = new HashMap<>();
-    /** The entities held still while a client is asked about them; see {@link #freeze}. */
     private static final Map<Entity, Pending> FROZEN = Collections.synchronizedMap(new IdentityHashMap<>());
     private static int nextId;
 
-    /**
-     * Cuts down every entity one of the swept quads passes through. Those whose limbs are known at once (no client to
-     * ask) are in place when this returns, so the rest of the swing cuts them; the others are asked about and cut by
-     * {@code cutLater} once their body has been built.
-     *
-     * @param wielder  who swung the blade (never cut), or null
-     * @param cutLater cuts the bodies built later with the same swing
-     */
     public static void cut(ServerLevel level, List<Swept> sweeps, @Nullable Entity wielder, Consumer<List<ServerSubLevel>> cutLater) {
         Set<Entity> hit = new LinkedHashSet<>();
         for (Swept sweep : sweeps) {
             AABB reach = bounds(sweep.quad()).inflate(0.5);
             for (Entity e : level.getEntities(wielder, reach, e -> true)) {
-                // a part of a bigger entity (the ender dragon's wings, say) is hit: the whole entity is cut
                 Entity whole = e instanceof PartEntity<?> part ? part.getParent() : e;
                 if (whole != wielder && !hit.contains(whole) && cuttable(whole) && crosses(sweep.quad(), e.getBoundingBox())) {
                     hit.add(whole);
@@ -151,11 +113,10 @@ public final class EntityCutting {
 
     public static boolean accepts(Entity entity) { return cuttable(entity); }
 
-    /** Shares the blade's death, model capture, limb assembly and joints with hitscan weapons. */
     public static void cutEntity(ServerLevel level, Entity entity, @Nullable Entity wielder, Consumer<List<ServerSubLevel>> cutLater) {
         if (!cuttable(entity) || entity == wielder) return;
         if (PENDING.values().stream().anyMatch(p -> p.entity == entity)) {
-            return; // already waiting for its limbs
+            return;
         }
         try {
             EntityAppearance.Look look = lookOf(entity);
@@ -174,7 +135,6 @@ public final class EntityCutting {
         }
     }
 
-    /** A client's answer: the limbs of the entity it was asked about. */
     public static void onReply(ServerPlayer player, int id, List<BodySpec> bodies) {
         Pending pending = PENDING.get(id);
         if (pending == null || !pending.asked.equals(player.getUUID())) {
@@ -182,7 +142,7 @@ public final class EntityCutting {
         }
         PENDING.remove(id);
         if (bodies.isEmpty()) {
-            complete(pending, List.of()); // nothing of it can be seen (a marker, say): it is cut down and leaves nothing
+            complete(pending, List.of());
             return;
         }
         String problem = problemWith(bodies);
@@ -214,7 +174,7 @@ public final class EntityCutting {
     private static void complete(Pending pending, @Nullable List<BodySpec> bodies) {
         freeze(pending.entity, false, pending);
         if (pending.entity.isRemoved()) {
-            return; // gone meanwhile (it despawned, or something else killed it)
+            return;
         }
         Entity wielder = pending.wielder == null ? null : pending.level.getEntity(pending.wielder);
         try {
@@ -227,11 +187,6 @@ public final class EntityCutting {
         }
     }
 
-    /**
-     * Holds the entity still while a client is asked about it. None of it is saved with the entity: saved meanwhile
-     * (its chunk unloads, a player leaves, the server stops), it is saved as it was (see {@link #saved}), or it would
-     * stand frozen and unkillable for good.
-     */
     private static void freeze(Entity entity, boolean on, Pending pending) {
         if (on) {
             FROZEN.put(entity, pending);
@@ -254,7 +209,6 @@ public final class EntityCutting {
         }
     }
 
-    /** What a frozen entity was just saved as is put back to how it was before it was frozen. */
     public static void saved(Entity entity, CompoundTag tag) {
         Pending pending = FROZEN.isEmpty() ? null : FROZEN.get(entity);
         if (pending != null && entity instanceof Mob) {
@@ -266,7 +220,6 @@ public final class EntityCutting {
         }
     }
 
-    /** The server is stopping: what is frozen is let go before the world is saved, and nothing waits any more. */
     public static void onServerStopping(ServerStoppingEvent event) {
         for (Pending pending : new ArrayList<>(PENDING.values())) {
             freeze(pending.entity, false, pending);
@@ -275,12 +228,6 @@ public final class EntityCutting {
         FROZEN.clear();
     }
 
-    /**
-     * Cuts the entity down and builds its body in its place.
-     *
-     * @param bodies its limbs, or null for one piece the size of its box
-     * @return the limbs built
-     */
     private static List<ServerSubLevel> finish(ServerLevel level, Entity entity, EntityAppearance.Look look, @Nullable Entity wielder,
                                                Vec3 velocity, @Nullable List<BodySpec> bodies) {
         AABB box = entity.getBoundingBox();
@@ -288,7 +235,6 @@ public final class EntityCutting {
         if (!cutDown(level, entity, wielder)) {
             return List.of();
         }
-        // no client said what it looks like: one piece the size of its box
         List<BodySpec> asBox = List.of(new BodySpec(null, EntityAppearance.NO_ROTATION.clone(), new double[3],
                 List.of(new double[]{box.minX - feet.x, box.minY - feet.y, box.minZ - feet.z,
                         box.maxX - feet.x, box.maxY - feet.y, box.maxZ - feet.z}), -1, new double[3]));
@@ -297,7 +243,6 @@ public final class EntityCutting {
         }
         List<ServerSubLevel> built = build(level, look, bodies, feet, velocity);
         if (!bodies.isEmpty() && built.stream().allMatch(java.util.Objects::isNull) && bodies != asBox) {
-            // it is dead already; whatever went wrong, it must not just vanish
             MeshCut.LOGGER.warn("None of the limbs of a {} could be built; it falls as one piece", look.type());
             bodies = asBox;
             built = build(level, look, bodies, feet, velocity);
@@ -310,14 +255,13 @@ public final class EntityCutting {
             }
         }
         List<ServerSubLevel> made = built.stream().filter(java.util.Objects::nonNull).toList();
-        RagdollJoints.ghostOverlapping(level, made); // limbs that overlap do not throw each other apart
+        RagdollJoints.ghostOverlapping(level, made);
         int limbs = made.size();
         MeshCut.LOGGER.info("Cut down a {}: {} limb(s){}", look.type(), limbs, bodies == asBox ? " (one piece the size of its box)" : "");
         built.removeIf(java.util.Objects::isNull);
         return built;
     }
 
-    /** Builds each limb on its own: one that fails (null in its place) does not take the others with it. */
     private static List<ServerSubLevel> build(ServerLevel level, EntityAppearance.Look look, List<BodySpec> bodies, Vec3 feet,
                                               Vec3 velocity) {
         List<ServerSubLevel> built = new ArrayList<>(bodies.size());
@@ -398,7 +342,6 @@ public final class EntityCutting {
         return best;
     }
 
-    /** @return whether it is gone (a creature dead, a thing broken into its item) */
     private static boolean cutDown(ServerLevel level, Entity entity, @Nullable Entity wielder) {
         DamageSource source = wielder instanceof Player player ? level.damageSources().playerAttack(player)
                 : wielder instanceof LivingEntity mob ? level.damageSources().mobAttack(mob) : level.damageSources().generic();
@@ -468,7 +411,6 @@ public final class EntityCutting {
             }
             for (double[] box : b.boxes()) {
                 boxes++;
-                // a model may reach far past its collision box, so only numbers and the total size (MAX_CELLS) are limited
                 if (box.length != 6 || !finite(box) || box[3] < box[0] || box[4] < box[1] || box[5] < box[2]) {
                     return "limb " + i + " has a box inside out or not a number";
                 }
@@ -479,7 +421,7 @@ public final class EntityCutting {
         if (boxes > BodySpec.MAX_BOXES || cells > MAX_CELLS) {
             return boxes + " boxes over " + cells + " blocks";
         }
-        for (int i = 0; i < bodies.size(); i++) { // no loops
+        for (int i = 0; i < bodies.size(); i++) {
             int steps = 0;
             for (int p = bodies.get(i).parent(); p >= 0; p = bodies.get(p).parent()) {
                 if (++steps > bodies.size()) {
@@ -490,10 +432,9 @@ public final class EntityCutting {
         return null;
     }
 
-    /** Finite, and no further than {@link #MAX_REACH}: a box in a limb's frame, or a limb's place relative to the feet. */
     private static boolean within(double[] values) {
         for (double v : values) {
-            if (!(Math.abs(v) <= MAX_REACH)) { // also false for NaN
+            if (!(Math.abs(v) <= MAX_REACH)) {
                 return false;
             }
         }
@@ -509,17 +450,12 @@ public final class EntityCutting {
         return true;
     }
 
-    /**
-     * One limb as a sub-level, standing where it stood: blocks only where the limb has boxes, each holding the
-     * boxes' part inside it, laid out in the limb's frame and turned with it.
-     */
     @Nullable
     private static ServerSubLevel makeLimb(ServerLevel level, EntityAppearance.Look look, BodySpec spec, Vec3 feet, Vec3 velocity) {
         var container = SubLevelContainer.getContainer(level);
         if (container == null) {
             return null;
         }
-        // the cells (in the limb's frame) its boxes cover, and what of the boxes each holds
         Map<BlockPos, List<double[]>> cells = new java.util.LinkedHashMap<>();
         for (double[] b : spec.boxes()) {
             for (int x = (int) Math.floor(b[0]); x <= (int) Math.floor(b[3] - 1e-9); x++) {
@@ -528,10 +464,9 @@ public final class EntityCutting {
                         double[] in = {Math.max(b[0] - x, 0), Math.max(b[1] - y, 0), Math.max(b[2] - z, 0),
                                 Math.min(b[3] - x, 1), Math.min(b[4] - y, 1), Math.min(b[5] - z, 1)};
                         for (int a = 0; a < 3; a++) {
-                            // on the grid of a model pixel: blocks of the same shape share one collider
                             in[a] = Math.floor(in[a] * GRID + 1e-6) / GRID;
                             in[a + 3] = Math.ceil(in[a + 3] * GRID - 1e-6) / GRID;
-                            if (in[a + 3] - in[a] < 1.0 / GRID) { // a sliver is thickened into the block, never cut off
+                            if (in[a + 3] - in[a] < 1.0 / GRID) {
                                 if (in[a] + 1.0 / GRID <= 1) {
                                     in[a + 3] = in[a] + 1.0 / GRID;
                                 } else {
@@ -547,7 +482,6 @@ public final class EntityCutting {
         if (cells.isEmpty()) {
             return null;
         }
-        // every box of a block is a collider the physics engine tests on its own: a few per block are plenty
         cells.replaceAll((c, boxes) -> ml.mypals.meshcut.geom.VoxelBoxes.join(boxes, MAX_BOXES_PER_BLOCK));
         int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
         int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
@@ -559,13 +493,11 @@ public final class EntityCutting {
             maxY = Math.max(maxY, c.getY());
             maxZ = Math.max(maxZ, c.getZ());
         }
-        // cell c goes to plotAnchor + c - shift, which keeps the limb around the middle of the plot's first chunk
         BlockPos shift = new BlockPos((minX + maxX) >> 1, (minY + maxY) >> 1, (minZ + maxZ) >> 1);
 
         Quaterniond rotation = new Quaterniond(spec.rotation()[0], spec.rotation()[1], spec.rotation()[2], spec.rotation()[3]);
         Quaterniond inverse = new Quaterniond(rotation).conjugate();
         Vector3d frameOrigin = new Vector3d(spec.origin()[0], spec.origin()[1], spec.origin()[2]);
-        // a point p of the entity (relative to its feet) is at inverse·(p − frameOrigin) in the limb's frame
         Vector3d toFrame = inverse.transform(new Vector3d(frameOrigin)).negate();
 
         Pose3d pose = new Pose3d();
@@ -575,13 +507,11 @@ public final class EntityCutting {
             var plot = limb.getPlot();
             plot.newEmptyChunk(plot.getCenterChunk());
             BlockPos plotAnchor = plot.getCenterBlock();
-            // a big limb (the dragon's) reaches into more chunks of the plot than the first
             Set<net.minecraft.world.level.ChunkPos> chunks = new java.util.HashSet<>();
             for (BlockPos c : cells.keySet()) {
                 chunks.add(new net.minecraft.world.level.ChunkPos(plotAnchor.offset(c.subtract(shift))));
             }
             for (var chunk : chunks) {
-                // the plot keeps its chunks by local position; newEmptyChunk takes the global one
                 if (plot.getChunkHolder(plot.toLocal(chunk)) == null) {
                     plot.newEmptyChunk(chunk);
                 }
@@ -596,7 +526,6 @@ public final class EntityCutting {
             if (limb.isRemoved()) {
                 return null;
             }
-            // plot point P is the limb-frame point L = P − plotAnchor + shift, which is at feet + origin + rotation·L
             Vector3dc center = limb.getMassTracker().getCenterOfMass();
             Vector3d rotationPoint;
             if (center != null) {
@@ -615,7 +544,6 @@ public final class EntityCutting {
             CutService.push(limb, velocity);
             return limb;
         } catch (RuntimeException e) {
-            // half built, it would be left standing nowhere
             if (!limb.isRemoved()) {
                 container.removeSubLevel(limb, dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason.REMOVED);
             }
@@ -637,7 +565,6 @@ public final class EntityCutting {
         return new AABB(minX, minY, minZ, maxX, maxY, maxZ);
     }
 
-    /** Whether the (flat, convex) quad passes through the box: what is left of it after clipping by the box's faces. */
     private static boolean crosses(Vec3[] quad, AABB box) {
         List<double[]> poly = new ArrayList<>();
         for (Vec3 p : quad) {

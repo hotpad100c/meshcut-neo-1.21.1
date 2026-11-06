@@ -43,14 +43,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
-/** Stands in for any block; its block model draws the imitated block, clipped by the cuts in the block entity. */
 public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssemblyListener, SimpleWaterloggedBlock {
     public static final MapCodec<MimicBlock> CODEC = simpleCodec(MimicBlock::new);
 
-    /**
-     * Flipped to make Sable's physics engine re-read this block's collider once the block entity holds its final
-     * data (colliders are read on block changes, and a state change is the only reliable trigger).
-     */
     public static final BooleanProperty REFRESH = BooleanProperty.create("refresh");
     public static final BooleanProperty WATERLOGGED = net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED;
 
@@ -60,7 +55,6 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
      */
     private static final int QUIET = Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE;
 
-    /** Set while a blade is cutting (server thread): only then do the faces a change opens up glow. */
     private static boolean glowingCuts;
 
     public static void setGlowingCuts(boolean on) {
@@ -81,25 +75,18 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         builder.add(REFRESH, WATERLOGGED);
     }
 
-    /** A block holding less of a body than this (in cubic blocks) holds nothing. */
     private static final double EMPTY_BODY_VOLUME = 1e-5;
 
-    /** Places a mimic of {@code target} cut by {@code planes} (block-local half-spaces). */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes, CapMode mode,
                              @Nullable CompoundTag beTag) {
         place(level, pos, target, planes, List.of(), List.of(), mode, beTag);
     }
 
-    /**
-     * @param excluded convex parts of the block that were cut out and went elsewhere
-     * @param patches  cuts that took nothing out of the block; see {@link MimicBlockEntity#getPatches()}
-     */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag) {
         place(level, pos, target, planes, excluded, patches, mode, beTag, null);
     }
 
-    /** @param entity for a part of a cut-up entity, what it looked like; null for a block */
     public static void place(ServerLevel level, BlockPos pos, BlockState target, List<CutPlane> planes,
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
                              @Nullable EntityAppearance entity) {
@@ -110,17 +97,13 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
                              List<List<CutPlane>> excluded, List<Patch> patches, CapMode mode, @Nullable CompoundTag beTag,
                              @Nullable EntityAppearance entity, @Nullable MimicBlockEntity.GlowHistory inherited) {
         if (entity != null && ml.mypals.meshcut.geom.VoxelBoxes.remainingVolume(entity.boxes(), planes, excluded) < EMPTY_BODY_VOLUME) {
-            // nothing of the body is left in this block (it was all cut away, or only ever passed by): it goes, or
-            // it would hold together what is no longer touching
             if (level.getBlockState(pos).getBlock() instanceof MimicBlock) {
                 level.setBlock(pos, level.getFluidState(pos).createLegacyBlock(), UPDATE_ALL);
             }
             return;
         }
-        // A block Sable saw being placed had no block entity yet, so it weighed what a default mimic weighs.
         boolean fresh = !(level.getBlockState(pos).getBlock() instanceof MimicBlock);
         if (fresh) {
-            // a block standing in water (a waterlogged stair, say) stays in water when it is cut
             boolean wet = level.getFluidState(pos).getType() == Fluids.WATER;
             level.setBlock(pos, MeshCut.MIMIC_BLOCK.get().defaultBlockState().setValue(WATERLOGGED, wet), QUIET);
         }
@@ -128,15 +111,11 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
             boolean slot = level.getBlockState(pos).getValue(REFRESH);
             be.beginMassTransition(fresh, slot);
             be.configure(target, planes, excluded, patches, mode, beTag, entity, inherited);
-            refreshPhysics(level, pos); // flips REFRESH: Sable re-reads collider and mass, old slot -> new slot
+            refreshPhysics(level, pos);
             be.endMassTransition();
         }
     }
 
-    /**
-     * Blocks are placed into the new sub-level first and their block entity data is loaded afterwards, so Sable has
-     * counted them with default mass. Now that the data is there, announce the difference.
-     */
     @Override
     public void afterMove(ServerLevel from, ServerLevel to, BlockState state, BlockPos oldPos, BlockPos newPos) {
         if (!(to.getBlockEntity(newPos) instanceof MimicBlockEntity be)
@@ -157,7 +136,6 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         }
     }
 
-    /** Makes the physics engine pick up the block entity's current shape. */
     public static void refreshPhysics(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.getBlock() instanceof MimicBlock) {
@@ -173,7 +151,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
     @Override
     protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.passable()) {
-            return Shapes.empty(); // a piece of a torch is walked through like a torch, in the world and in a sub-level
+            return Shapes.empty();
         }
         return getShape(state, level, pos, context);
     }
@@ -183,10 +161,6 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         return CODEC;
     }
 
-    /**
-     * A cut block may be held up only by what is around it. When a neighbour changes, check whether it still holds.
-     * (The structure graph also asks for a check when an edit splits a group; this catches neighbours across sections.)
-     */
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos,
                                    boolean movedByPiston) {
@@ -196,41 +170,32 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         }
     }
 
-    /**
-     * A block cut into several pieces is broken one piece at a time: only the piece being pointed at goes. (If it
-     * cannot be taken out on its own, the whole block is broken as usual.)
-     */
     @Override
     public boolean onDestroyedByPlayer(BlockState state, Level level, BlockPos pos, Player player, boolean willHarvest,
                                        FluidState fluid) {
         if (level.getBlockEntity(pos) instanceof MimicBlockEntity be && be.grid().componentCount() >= 2) {
             if (level instanceof ServerLevel server) {
                 if (FragmentBreaking.breakPointed(server, pos, be, player)) {
-                    return false; // the block stays, with one piece fewer
+                    return false;
                 }
             } else {
-                return false; // the server decides what goes; the block's new shape arrives from it
+                return false;
             }
         }
         return super.onDestroyedByPlayer(state, level, pos, player, willHarvest, fluid);
     }
 
-    // ---------------------------------------------------------------- behaving like the imitated block
-
-    /** The block imitated at the position, or {@code null} if it is not known (no block entity yet). */
     @Nullable
     private static BlockState targetAt(BlockGetter level, BlockPos pos) {
         return level.getBlockEntity(pos) instanceof MimicBlockEntity be ? be.getTargetState() : null;
     }
 
-    /** Picking the block (middle click) gives the block it imitates. */
     @Override
     public ItemStack getCloneItemStack(BlockState state, HitResult target, LevelReader level, BlockPos pos, Player player) {
         BlockState imitated = targetAt(level, pos);
         return imitated != null ? imitated.getCloneItemStack(target, level, pos, player) : ItemStack.EMPTY;
     }
 
-    /** It is as hard to break as what it imitates, and needs the same tool. */
     @Override
     protected float getDestroyProgress(BlockState state, Player player, BlockGetter level, BlockPos pos) {
         BlockState imitated = targetAt(level, pos);
@@ -283,8 +248,6 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
         return 1.0F;
     }
 
-    // ---------------------------------------------------------------- water
-
     @Override
     protected FluidState getFluidState(BlockState state) {
         return state.getValue(WATERLOGGED) ? Fluids.WATER.getSource(false) : super.getFluidState(state);
@@ -301,7 +264,7 @@ public class MimicBlock extends BaseEntityBlock implements BlockSubLevelAssembly
 
     @Override
     protected RenderShape getRenderShape(BlockState state) {
-        return RenderShape.MODEL; // BaseEntityBlock defaults to INVISIBLE; our model draws the cut block
+        return RenderShape.MODEL;
     }
 
     @Override

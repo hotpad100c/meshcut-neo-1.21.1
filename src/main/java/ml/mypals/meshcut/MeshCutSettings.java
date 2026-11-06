@@ -1,6 +1,5 @@
 package ml.mypals.meshcut;
 
-/** Runtime defaults usable by headless geometry tests before NeoForge loads configuration. */
 public final class MeshCutSettings {
     public static volatile int preciseEntries = 64;
     public static volatile boolean regionAllOrders;

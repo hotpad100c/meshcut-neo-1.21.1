@@ -13,10 +13,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.lang.reflect.Field;
 
-/**
- * Citadel's model parts (Alex's Mobs and others) are not vanilla model parts, but they have names: a recording of an
- * entity gets told which part pushed the pose it is drawing at, and what it is called.
- */
 @Pseudo
 @Mixin(targets = "com.github.alexthe666.citadel.client.model.AdvancedModelBox", remap = false)
 public abstract class CitadelModelBoxMixin {

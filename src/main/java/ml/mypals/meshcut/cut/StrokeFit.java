@@ -10,25 +10,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Turns what the blade swept inside each block into the cuts ({@link Patch}es) that block remembers. Pure geometry,
- * no world access.
- */
 public final class StrokeFit {
-    /** Cuts remembered per block; beyond this the oldest is forgotten. */
     private static final int MAX_PATCHES = 16;
 
-    /** The part of one swept quad inside one block, in that block's frame; {@code motion} is how the blade travelled. */
     public record Fragment(Vector3d n, Vector3d motion, float[] polygon) {}
 
-    /** How far a stroke's pieces inside a block may stray from one plane for them to count as one straight cut. */
     private static final double STRAIGHT_TOLERANCE = 0.2;
-    /** The sharpest bend (as the cosine of the angle between normals) a stroke may take and still be one cut. */
     private static final double STRAIGHT_COS = 0.87;
-    /** How far a stroke is stretched at its ends, so one that reaches a block's edge really reaches it. */
     private static final double STROKE_PAD = 0.06;
 
-    /** One straight approximation of what was swept inside a block. */
     private static final class Stroke {
         final Vector3d normalSum = new Vector3d();
         final Vector3d motionSum = new Vector3d();
@@ -75,17 +65,9 @@ public final class StrokeFit {
         }
     }
 
-    /** A stroke that covers less than this along its path (in blocks) has no entry or exit to speak of. */
     private static final double MIN_RUN = 0.05;
-    /** Points this close (along the path) to where the stroke enters or leaves the block count as that entry or exit. */
     private static final double END_BAND = 0.04;
 
-    /**
-     * The cut a stroke makes in one block. Where the swept surface crosses the faces of the block it enters and
-     * leaves by, it has two end points each: the entry points and the exit points. The cut is the plane through those
-     * four points. The next block along the stroke has the same points on the face the two share, so the cuts of
-     * neighbouring blocks meet there instead of each being fitted on its own.
-     */
     @Nullable
     static Patch patchOf(Stroke s) {
         Vector3d n = s.normal();
@@ -101,7 +83,7 @@ public final class StrokeFit {
                 hi = Math.max(hi, along);
             }
             if (hi - lo >= MIN_RUN) {
-                float[][] corners = new float[4][]; // entry low, entry high, exit high, exit low (across the blade)
+                float[][] corners = new float[4][];
                 double[] best = {Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, Double.MAX_VALUE};
                 for (float[] p : s.points) {
                     double along = d.x * p[0] + d.y * p[1] + d.z * p[2];
@@ -127,7 +109,6 @@ public final class StrokeFit {
                         }
                     }
                 }
-                // the normal of the quad through the four points, and its position
                 Vector3d q = new Vector3d();
                 for (int i = 0; i < 4; i++) {
                     float[] a = corners[i], c = corners[(i + 1) % 4];
@@ -150,16 +131,10 @@ public final class StrokeFit {
                 }
             }
         }
-        // too short to have an entry and an exit: the plane that fits what was swept
         CutPlane plane = new CutPlane(n.x, n.y, n.z, s.offset(n));
         return Patch.fromPoints(plane, s.points, STROKE_PAD);
     }
 
-    /**
-     * Turns what the blade swept inside each block into patches. A stroke that bends within a block is replaced by
-     * the straight cut that is its best fit, so a wavy path still cuts; one that bends too much, or crosses itself,
-     * becomes several cuts.
-     */
     public static <K> Map<K, List<Patch>> fitPatches(Map<K, List<Fragment>> fragments) {
         Map<K, List<Patch>> out = new LinkedHashMap<>();
         for (var entry : fragments.entrySet()) {
@@ -188,15 +163,10 @@ public final class StrokeFit {
         return out;
     }
 
-    /** Adds a patch to a block's list, joining it to one it continues. */
     public static void mergeInto(List<Patch> list, Patch patch) {
         mergeInto(list, patch, List.of(), List.of(), null);
     }
 
-    /**
-     * As {@link #mergeInto(List, Patch)}, for a block whose real cuts, cut-out parts and shape are known: which patch
-     * may be forgotten is judged on the block as it is.
-     */
     public static void mergeInto(List<Patch> list, Patch patch, List<CutPlane> real, List<List<CutPlane>> excluded,
                                  @Nullable List<double[]> shape) {
         for (int i = 0; i < list.size(); i++) {
@@ -212,10 +182,6 @@ public final class StrokeFit {
     }
 
 
-    /**
-     * Which cut to forget when there are too many: one that divides nothing (the pieces are the same without it), or
-     * else the oldest.
-     */
     private static int forgettable(List<Patch> list, List<CutPlane> real, List<List<CutPlane>> excluded,
                                    @Nullable List<double[]> shape) {
         int all = CellGrid.of(real, excluded, list, shape).componentCount();

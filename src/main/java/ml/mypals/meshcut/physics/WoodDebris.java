@@ -12,7 +12,6 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Small detached wooden cut fragments smoulder for three seconds, then burn away. */
 public final class WoodDebris {
     private record Burning(ServerLevel level, ServerSubLevel sub, long born) {}
     private static final List<Burning> BURNING = new ArrayList<>();

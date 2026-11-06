@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-/** Exact unions of grid cells. Stored as disjoint excluded boxes using the existing save format. */
 public final class VoxelFragments {
     public static List<List<CutPlane>> excluded(CellGrid grid, Set<Integer> groups) {
         boolean[] removed = new boolean[CellGrid.CELLS];
@@ -20,7 +19,6 @@ public final class VoxelFragments {
         return boxes(mask).stream().map(VoxelFragments::planes).toList();
     }
 
-    /** Thin layers are removed only within the actual swept polygon, preserving a smooth burn boundary. */
     public static List<List<CutPlane>> edgeBurns(List<Patch> patches) {
         List<List<CutPlane>> burnt=new ArrayList<>();
         for(Patch patch:patches) {
@@ -50,7 +48,6 @@ public final class VoxelFragments {
         return burnt;
     }
 
-    /** Greedy disjoint boxes; merging never fills an empty cell. */
     public static List<double[]> boxes(boolean[] occupied) {
         boolean[] left = occupied.clone();
         List<double[]> out = new ArrayList<>();
@@ -80,10 +77,6 @@ public final class VoxelFragments {
                 new CutPlane(0,0,-1,-b[2]),new CutPlane(0,0,1,b[5]));
     }
 
-    /**
-     * The box {minX, minY, minZ, maxX, maxY, maxZ} a region is, if it is six axis-aligned planes on the 1/8 lattice (what
-     * a cut-out group of cells is); null for anything else. Allocates only what it returns.
-     */
     private static double[] latticeBox(List<CutPlane> region) {
         if (region.size() != 6) return null;
         double[] bounds = {0, 0, 0, 1, 1, 1};
@@ -106,13 +99,12 @@ public final class VoxelFragments {
         return bounds;
     }
 
-    /** Returns a compact occupancy mask when exclusions describe lattice boxes, or null for legacy geometry. */
     public static boolean[] mask(List<List<CutPlane>> excluded) {
         if (excluded.isEmpty()) return null;
         List<double[]> boxes = new ArrayList<>(excluded.size());
         for (List<CutPlane> region : excluded) {
             double[] bounds = latticeBox(region);
-            if (bounds == null) return null; // nothing is allocated for a region that is not a box
+            if (bounds == null) return null;
             boxes.add(bounds);
         }
         boolean[] occupied = new boolean[CellGrid.CELLS];
@@ -127,7 +119,6 @@ public final class VoxelFragments {
         return occupied;
     }
 
-    /** Existing polygon holes must not be replaced by boxes when a remaining fragment is moved. */
     public static List<List<CutPlane>> excluded(CellGrid grid, Set<Integer> groups, List<List<CutPlane>> existing) {
         if (smoothHoles(existing).isEmpty()) return excluded(grid, groups);
         boolean[] removed = new boolean[CellGrid.CELLS];
@@ -136,7 +127,6 @@ public final class VoxelFragments {
         return boxes(removed).stream().map(VoxelFragments::planes).toList();
     }
 
-    /** Visual fragment labels, excluding smooth legacy holes and bounded burn prisms. */
     public static boolean[] latticeMask(List<List<CutPlane>> excluded) {
         List<List<CutPlane>> lattice=new ArrayList<>();
         for(List<CutPlane> region:excluded) if(latticeBox(region)!=null) lattice.add(region);

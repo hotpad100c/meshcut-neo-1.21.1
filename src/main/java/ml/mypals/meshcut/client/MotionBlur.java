@@ -83,7 +83,7 @@ public final class MotionBlur {
         for (Iterator<Map.Entry<UUID, ArrayDeque<Pose>>> it = HISTORY.entrySet().iterator(); it.hasNext(); ) {
             ArrayDeque<Pose> history = it.next().getValue();
             Pose newest = history.peekLast();
-            if (newest == null || now - newest.time() > 1.0) { // the blade is out
+            if (newest == null || now - newest.time() > 1.0) {
                 it.remove();
                 continue;
             }
@@ -95,7 +95,7 @@ public final class MotionBlur {
                 Pose pose = at(history, now - age);
                 Vector4f base = clip(toClip, pose.base(), camera), tip = clip(toClip, pose.tip(), camera);
                 if (base == null || tip == null) {
-                    continue; // behind the camera
+                    continue;
                 }
                 a[k] = new float[]{base.x, base.y, tip.x, tip.y};
                 b[k] = new float[]{base.z * 0.5f + 0.5f, tip.z * 0.5f + 0.5f, (float) k / (POSES - 1), 1};
